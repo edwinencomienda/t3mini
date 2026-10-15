@@ -757,7 +757,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setShowPrompt(false)
   }
   useEffect(() => {
-    // ⌘⇧O / Ctrl+Shift+O starts a new thread, matching t3code. ⌘S / Ctrl+S toggles the
+    // ⇧⌘O / Ctrl+Shift+O starts a new thread, matching t3code. ⌘S / Ctrl+S toggles the
     // sidebar (in place of the browser's Save Page, which has no use here).
     const onKey = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey
@@ -1365,7 +1365,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               onClick={() => openNewThread()}
               disabled={!bootstrap}
               aria-label="New thread"
-              title={`New thread (${isMac ? '⌘⇧O' : 'Ctrl+Shift+O'})`}
+              title={`New thread (${isMac ? '⇧⌘O' : 'Ctrl+Shift+O'})`}
             >
               <SquarePen size={15} />
             </button>
@@ -1777,7 +1777,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           >
                             <SquarePen size={15} />
                             New thread
-                            <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
+                            <kbd>{isMac ? '⇧⌘O' : 'Ctrl+Shift+O'}</kbd>
                           </button>
                           <button
                             className="secondary"
