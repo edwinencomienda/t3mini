@@ -99,7 +99,7 @@ Anyone who reaches the app can make agents run commands on the Mac (threads defa
 
 ## Testing
 
-Automated (`npm test`):
+Automated (`bun run test`):
 
 - `src/server/remote.test.ts` runs the real gateway against a stand-in upstream on loopback (`addresses: () => ['127.0.0.1']`): off by default, unpaired 401, wrong Host 403, foreign Origin 403, single-use and expiring codes, header rewriting (`x-t3-remote`, Host, Origin, cookie stripping), hashed storage, expired devices dropped on load, revocation, port closed when off, and the private address ranges.
 - `src/server/api.test.ts` checks that remote requests can't manage phone access, browse folders, or open VS Code, and that bootstrap reports `remote: true`.
@@ -132,7 +132,7 @@ On a real phone: Settings → Phone access → on → Connect a phone → scan. 
 | Forbidden (403)                                          | The URL uses an address that isn't one of this Mac's current LAN addresses (e.g. the Mac changed networks), or a non-private source address. Use the address shown under the QR code. |
 | Something works on the Mac but silently not on the phone | A secure-context-only API (see Pitfalls).                                                                                                                                             |
 | "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                              |
-| Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `npm run dev` (this also turns phone access off).                                 |
+| Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `bun run dev` (this also turns phone access off).                                 |
 
 ## Future: HTTPS with Tailscale (not built yet)
 

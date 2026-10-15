@@ -5,11 +5,11 @@ A small local web app for running Codex and Claude Code threads on project folde
 ## Commands
 
 ```sh
-npm run dev        # Vite dev server on http://127.0.0.1:4310
-npm test           # vitest (no paid provider calls; providers use fixtures/mocks)
-npm run typecheck  # tsc --noEmit
-npm run build
-npx prettier --write .
+bun run dev        # Vite dev server on http://127.0.0.1:4310
+bun run test       # vitest (no paid provider calls; providers use fixtures/mocks)
+bun run typecheck  # tsc --noEmit
+bun run build
+bunx prettier --write .
 ```
 
 Run typecheck, tests, and build before committing. Keep the README (and `docs/`) in sync with behavior changes.
@@ -27,7 +27,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 
 ## Things to know
 
-- **Restart the dev server after server changes.** The service and the phone-access gateway live on `globalThis` so running agents survive hot reloads; new server code only takes effect after restarting `npm run dev`. Check that no thread is running first (`/api/bootstrap`, status `starting`/`working`/`waiting`), since a restart interrupts running turns.
+- **Restart the dev server after server changes.** The service and the phone-access gateway live on `globalThis` so running agents survive hot reloads; new server code only takes effect after restarting `bun run dev`. Check that no thread is running first (`/api/bootstrap`, status `starting`/`working`/`waiting`), since a restart interrupts running turns.
 - **Keep the thread view fast.** Typing must not re-render the page: the composer textarea is uncontrolled (`draftText` ref + `hasDraft` flag in `Workspace.tsx`), so don't turn it back into `value={…}` state. Messages render through memoized `MessageView` / `MessageMarkdown` (Markdown parsing is the expensive part, ~100 ms for 80 replies), and `DiffPanel` is memoized with stable props (`closeDiff`). Keep new props to these stable, or they'll re-render on every live update.
 - **Don't use `instanceof` on server error classes across modules.** After a hot reload the long-lived service throws errors from an older copy of `service.ts`, so `instanceof HttpError` fails and real 404s/409s turn into 500s. `api.ts` uses `isHttpError()` (checks by name and `status`); follow that pattern for new error types.
 - **Security posture.** The app listens on loopback only and rejects foreign hosts and cross-origin requests (`checkRequest`). Agents can run arbitrary commands, so any new way in must authenticate. Phone access is the only remote entry point; read `docs/phone-access.md` before touching it.

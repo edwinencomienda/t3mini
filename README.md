@@ -4,11 +4,11 @@ A small, local coding-agent workspace built with **TanStack Start**, React, and 
 
 ## Run
 
-Requires Node.js **22.12+** (or a newer supported Node release) and npm.
+Requires Node.js **22.12+** (or a newer supported Node release) and [Bun](https://bun.sh) as the package manager. The app itself still runs on Node; Bun installs dependencies and runs the scripts.
 
 ```sh
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 Open **http://localhost:4310**. Click **Add project** (folder-plus icon in the sidebar header) and choose a folder with **Browse…** (the native macOS folder chooser) or enter an absolute or `~/` path. Then click **New thread** (pencil icon), pick the project, and send a message. The new-thread dialog starts on the project you were last active in: the open thread's project, otherwise the most recently active one. Enter sends; Shift + Enter inserts a line break. The composer is deliberately simple: **+** attaches images or files, the **model pill** (e.g. “Opus 5.5 Medium”) opens one menu with **Claude | Codex** tabs for browsing each agent's models, plus the effort level and Codex **Service Tier** (Standard or Fast, as reported by Codex). Picking a model in the other agent's tab switches the thread to that agent (only before the first message), and the **lock** button sets the permission mode. Send is the round button on the right; it becomes Stop while the agent works. New threads start with your last choices. Model, effort, and permissions can change between any two messages; the agent can change only until the first message, because a provider session can't move to another agent. Selections are saved per thread and apply to the next message; the settings controls are disabled while an agent is working.
@@ -120,16 +120,16 @@ Conversations are atomically saved to `.data/threads.json`, projects to `.data/p
 | `DEEPGRAM_API_KEY`   | Deepgram key for dictation; overrides the one saved in Settings.    |
 | `DEEPGRAM_MODEL`     | Deepgram model for dictation; defaults to `nova-3`.                 |
 
-`npm run dev` and `npm start` load a `.env` file if present. Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
+`bun run dev` and `bun run start` load a `.env` file if present. Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
 
 ## Production and checks
 
 ```sh
-npm run build
-npm start
+bun run build
+bun run start
 
-npm run typecheck
-npm test
+bun run typecheck
+bun run test
 ```
 
 The production Node server serves the built client, SSR, API routes, and event streams on localhost. This app needs a long-running local Node process with filesystem and CLI access; static-only and edge hosting cannot run these adapters.
