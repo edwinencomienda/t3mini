@@ -27,6 +27,7 @@ function context(prompt: string): ProviderContext {
   return {
     thread,
     prompt,
+    images: [],
     signal: new AbortController().signal,
     session: vi.fn((id) => {
       thread.sessionId = id

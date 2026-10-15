@@ -50,6 +50,7 @@ it.each(['', 'low'] as const)(
         approvals: [],
       },
       prompt: 'Continue the conversation',
+      images: [],
       signal: new AbortController().signal,
       session: vi.fn(),
       text: vi.fn(),

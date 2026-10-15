@@ -3,7 +3,15 @@ import type { PermissionMode } from './agent-settings'
 export type Provider = 'codex' | 'claude'
 export type Status =
   'idle' | 'starting' | 'working' | 'waiting' | 'completed' | 'interrupted' | 'failed'
-export type Message = { id: string; role: 'user' | 'assistant'; text: string; createdAt: string }
+// An image sent with a message; served back for previews at /api/uploads/<id>.
+export type Attachment = { id: string; name: string; mimeType: string }
+export type Message = {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  createdAt: string
+  attachments?: Attachment[]
+}
 export type Activity = {
   id: string
   label: string
@@ -33,7 +41,11 @@ export type Thread = {
 export type ThreadSummary = Pick<
   Thread,
   'id' | 'title' | 'provider' | 'cwd' | 'status' | 'updatedAt'
->
+> & {
+  // When you last sent a message (or created the thread). The sidebar sorts by this, so
+  // streaming agents don't keep reshuffling the list.
+  lastMessageAt: string
+}
 // A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
 export type Project = { path: string; addedAt: string }
 export type ProjectSummary = { path: string; lastActiveAt: string; threadCount: number }

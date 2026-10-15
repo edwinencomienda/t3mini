@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { z } from 'zod'
@@ -13,9 +13,10 @@ import {
   type ThreadSummary,
 } from '../types'
 import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
+import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
-import type { Runner } from './providers/types'
+import type { PromptImage, Runner } from './providers/types'
 import { defaultPermission } from '../agent-settings'
 import { settingsSchema } from './provider-settings'
 import { validateEffort } from './models'
@@ -36,15 +37,29 @@ const createSchema = z.object({
   permissionMode: settingsSchema.shape.permissionMode.optional(),
 })
 const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
-const promptSchema = z.object({ text: z.string().trim().min(1).max(100_000) })
+const promptSchema = z
+  .object({
+    text: z.string().trim().max(100_000),
+    attachments: z.array(attachmentSchema).max(10).default([]),
+  })
+  .refine(
+    (prompt) => prompt.text || prompt.attachments.length,
+    'Write a message or attach an image.',
+  )
 const exec = promisify(execFile)
-const summary = ({ id, title, provider, cwd, status, updatedAt }: Thread): ThreadSummary => ({
-  id,
-  title,
-  provider,
-  cwd,
-  status,
-  updatedAt,
+function lastMessageAt(thread: Thread) {
+  for (let index = thread.messages.length - 1; index >= 0; index--)
+    if (thread.messages[index]!.role === 'user') return thread.messages[index]!.createdAt
+  return thread.createdAt
+}
+const summary = (thread: Thread): ThreadSummary => ({
+  id: thread.id,
+  title: thread.title,
+  provider: thread.provider,
+  cwd: thread.cwd,
+  status: thread.status,
+  updatedAt: thread.updatedAt,
+  lastMessageAt: lastMessageAt(thread),
 })
 // Expands ~, requires an absolute path, and resolves symlinks to the real directory.
 async function resolveFolder(input: string) {
@@ -76,13 +91,23 @@ export class AgentService {
     readonly store: ThreadStore,
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
     readonly projectStore = new ProjectStore(projectStorePath(store.path)),
+    readonly uploads = new Uploads(join(dirname(store.path), 'attachments')),
   ) {}
+  async upload(input: unknown) {
+    try {
+      return await this.uploads.save(input)
+    } catch (error) {
+      if (error instanceof UploadError) throw new HttpError(400, error.message)
+      throw error
+    }
+  }
   list() {
     return [...this.store.threads.values()]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(summary)
+      .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
   }
-  // Saved projects plus any folder that has threads, most recently active first.
+  // Saved projects plus any folder that has threads, ordered by your most recent message
+  // (or when the project was added), not by agent activity.
   projects(): ProjectSummary[] {
     const projects = new Map<string, ProjectSummary>()
     for (const project of this.projectStore.projects.values())
@@ -92,13 +117,14 @@ export class AgentService {
         threadCount: 0,
       })
     for (const thread of this.store.threads.values()) {
+      const sentAt = lastMessageAt(thread)
       const project = projects.get(thread.cwd) ?? {
         path: thread.cwd,
-        lastActiveAt: thread.updatedAt,
+        lastActiveAt: sentAt,
         threadCount: 0,
       }
       project.threadCount++
-      if (thread.updatedAt > project.lastActiveAt) project.lastActiveAt = thread.updatedAt
+      if (sentAt > project.lastActiveAt) project.lastActiveAt = sentAt
       projects.set(thread.cwd, project)
     }
     return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
@@ -270,16 +296,30 @@ export class AgentService {
     }
   }
   async send(id: string, input: unknown) {
-    const { text } = promptSchema.parse(input)
+    const { text, attachments: requested } = promptSchema.parse(input)
     const thread = this.get(id)
+    let attachments
+    try {
+      attachments = await this.uploads.resolve(requested)
+    } catch (error) {
+      if (error instanceof UploadError) throw new HttpError(400, error.message)
+      throw error
+    }
     if (this.persistenceError) throw new HttpError(500, this.persistenceError)
     if (this.settingsUpdates.has(id))
       throw new HttpError(409, 'Agent settings are still saving. Try sending again.')
     if (this.runs.has(id)) throw new HttpError(409, 'This thread is already working.')
     const previous = structuredClone(thread)
     const now = new Date().toISOString()
-    thread.messages.push({ id: crypto.randomUUID(), role: 'user', text, createdAt: now })
-    if (thread.title === 'New thread') thread.title = text.slice(0, 60)
+    thread.messages.push({
+      id: crypto.randomUUID(),
+      role: 'user',
+      text,
+      createdAt: now,
+      ...(attachments.length ? { attachments } : {}),
+    })
+    if (thread.title === 'New thread')
+      thread.title = text.slice(0, 60) || attachments[0]?.name.slice(0, 60) || 'Image'
     thread.status = 'starting'
     thread.updatedAt = now
     thread.startedAt = now
@@ -300,10 +340,14 @@ export class AgentService {
       throw new HttpError(500, 'Could not save the message.')
     }
     this.notify()
-    run.done = this.execute(thread, text, run)
+    const images = attachments.map((item) => ({
+      path: this.uploads.imagePath(item.id),
+      mimeType: item.mimeType,
+    }))
+    run.done = this.execute(thread, text, images, run)
     return { accepted: true }
   }
-  private async execute(thread: Thread, prompt: string, run: Run) {
+  private async execute(thread: Thread, prompt: string, images: PromptImage[], run: Run) {
     const touch = () => {
       thread.updatedAt = new Date().toISOString()
       this.changed()
@@ -315,6 +359,7 @@ export class AgentService {
       await this.runners[thread.provider]({
         thread,
         prompt,
+        images,
         signal: run.controller.signal,
         session: (id) => {
           thread.sessionId = id

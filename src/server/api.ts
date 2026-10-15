@@ -45,6 +45,30 @@ export async function handleApi(request: Request) {
         })
       }
     }
+    if (parts[0] === 'uploads') {
+      if (!parts[1] && request.method === 'POST') {
+        // Reject oversized bodies before reading them (25 MB file as base64, plus JSON).
+        const length = Number(request.headers.get('content-length') || 0)
+        if (length > 36 * 1024 * 1024) throw new HttpError(413, 'Files can be up to 25 MB.')
+        return Response.json(await service.upload(await request.json()), { status: 201 })
+      }
+      // Only saved images are served (by generated id), with no sniffing and no scripts.
+      if (parts[1] && !parts[2] && request.method === 'GET') {
+        try {
+          const { bytes, mimeType } = await service.uploads.read(parts[1])
+          return new Response(new Uint8Array(bytes), {
+            headers: {
+              'Content-Type': mimeType,
+              'Cache-Control': 'private, max-age=31536000, immutable',
+              'X-Content-Type-Options': 'nosniff',
+              'Content-Security-Policy': "default-src 'none'",
+            },
+          })
+        } catch {
+          throw new HttpError(404, 'Image not found.')
+        }
+      }
+    }
     if (parts[0] === 'projects' && !parts[1]) {
       if (request.method === 'POST')
         return Response.json(await service.addProject(await request.json()), { status: 201 })

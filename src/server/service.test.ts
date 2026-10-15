@@ -239,3 +239,60 @@ it('reports the git branch of a thread project, or none outside a repository', a
   await git('git', ['-C', created.cwd, 'init', '-q', '-b', 'feature/test-branch'])
   expect(await service.gitInfo(created.id)).toEqual({ branch: 'feature/test-branch' })
 })
+it('saves image uploads by content type, rejects disguised files, and passes images to the agent', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  const image = await service.upload({
+    kind: 'image',
+    name: 'shot.png',
+    mimeType: 'image/png',
+    data: png.toString('base64'),
+  })
+  expect(image).toMatchObject({ kind: 'image', mimeType: 'image/png' })
+  if (image.kind !== 'image') throw new Error('expected an image')
+  await expect(
+    service.upload({
+      kind: 'image',
+      name: 'evil.png',
+      mimeType: 'image/png',
+      data: Buffer.from('<svg onload=alert(1)>').toString('base64'),
+    }),
+  ).rejects.toThrow('Only PNG')
+  const file = await service.upload({
+    kind: 'file',
+    name: '../../notes report.txt',
+    data: Buffer.from('hello').toString('base64'),
+  })
+  if (file.kind !== 'file') throw new Error('expected a file')
+  expect(file.path.startsWith(join(directory, 'attachments', 'files'))).toBe(true)
+  expect(file.path.endsWith('notes_report.txt')).toBe(true)
+  expect(await readFile(file.path, 'utf8')).toBe('hello')
+
+  const created = await thread()
+  await service.send(created.id, { text: '', attachments: [{ id: image.id, name: 'shot.png' }] })
+  await started
+  expect(context.images).toEqual([
+    { path: join(directory, 'attachments', image.id), mimeType: 'image/png' },
+  ])
+  expect(service.get(created.id).messages[0]?.attachments?.[0]?.id).toBe(image.id)
+  await expect(
+    service.send(created.id, { text: 'hi', attachments: [{ id: '../threads.json', name: 'x' }] }),
+  ).rejects.toThrow()
+})
+it('orders threads by your last message, not by streaming agent activity', async () => {
+  const first = await thread()
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const second = await thread()
+  expect(service.list().map((item) => item.id)).toEqual([second.id, first.id])
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await service.send(first.id, { text: 'Work on this' })
+  await started
+  expect(service.list().map((item) => item.id)).toEqual([first.id, second.id])
+  // The other thread getting newer activity must not move it above the one you messaged.
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  service.get(second.id).updatedAt = new Date().toISOString()
+  context.text('reply', 'streaming text')
+  expect(service.list().map((item) => item.id)).toEqual([first.id, second.id])
+})

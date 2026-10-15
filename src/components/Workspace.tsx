@@ -7,6 +7,7 @@ import {
   Copy,
   Folder,
   FolderPlus,
+  FileUp,
   GitBranch,
   FolderOpen,
   LoaderCircle,
@@ -15,6 +16,7 @@ import {
   PanelLeftOpen,
   Monitor,
   Moon,
+  Paperclip,
   Pencil,
   Plus,
   Search,
@@ -48,6 +50,15 @@ import {
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
+import {
+  basename,
+  droppedPaths,
+  formatPath,
+  hasFiles,
+  isAttachableImage,
+  uploadFile,
+  type PendingAttachment,
+} from '../attachments'
 import {
   isSidebarHidden,
   saveSidebarHidden,
@@ -201,6 +212,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [workLogOpen, setWorkLogOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const content = useRef<HTMLDivElement>(null)
+  // Images waiting to be sent, per thread so switching threads keeps them.
+  const [pending, setPending] = useState<Record<string, PendingAttachment[]>>({})
+  const [dragging, setDragging] = useState(false)
+  const filePicker = useRef<HTMLInputElement>(null)
   const [git, setGit] = useState<{ branch: string | null; detached?: boolean } | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -461,27 +476,159 @@ export function Workspace({ threadId }: { threadId?: string }) {
       composer.current!.focus()
     }
     const onPaste = (event: ClipboardEvent) => {
+      const files = [...(event.clipboardData?.files || [])]
+      const inComposer = event.target === composer.current
+      // Pasted files (screenshots, copied images) attach from anywhere, including the composer.
+      if (files.length && (inComposer || canRedirect(event.target))) {
+        event.preventDefault()
+        void handleFilesRef.current(files, [])
+        return
+      }
       if (!canRedirect(event.target)) return
       const text = event.clipboardData?.getData('text/plain')
       if (!text) return
       event.preventDefault()
-      const element = composer.current!
-      element.focus()
-      element.setSelectionRange(element.value.length, element.value.length)
-      // insertText keeps native undo and fires the input event React listens for.
-      if (!document.execCommand('insertText', false, text)) {
-        const next = element.value + text
-        setDraft(next)
-        if (activeId) drafts.current.set(activeId, next)
-      }
+      insertTextRef.current(text, true)
+    }
+    // Files can be dropped anywhere in the window, not just on the composer.
+    let depth = 0
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event.dataTransfer)) return
+      event.preventDefault()
+      depth++
+      if (canAttach()) setDragging(true)
+    }
+    const onDragOver = (event: DragEvent) => {
+      if (!hasFiles(event.dataTransfer)) return
+      // Always claim file drags so a missed drop never navigates the tab to the file.
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = canAttach() ? 'copy' : 'none'
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event.dataTransfer)) return
+      depth = Math.max(0, depth - 1)
+      if (!depth) setDragging(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event.dataTransfer)) return
+      event.preventDefault()
+      depth = 0
+      setDragging(false)
+      if (!canAttach()) return
+      void handleFilesRef.current(
+        [...(event.dataTransfer?.files || [])],
+        droppedPaths(event.dataTransfer),
+      )
+    }
+    const canAttach = () => {
+      const element = composer.current
+      return Boolean(element && !element.disabled && newThreadProject === null && !addProject)
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('paste', onPaste)
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('paste', onPaste)
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
     }
   }, [newThreadProject, addProject, activeId])
+  // Inserts text at the cursor (or the end, when typing from elsewhere) in the composer.
+  function insertText(text: string, atEnd = false) {
+    const element = composer.current
+    if (!element || !activeId) return
+    element.focus()
+    if (atEnd) element.setSelectionRange(element.value.length, element.value.length)
+    // insertText keeps native undo and fires the input event React listens for.
+    if (!document.execCommand('insertText', false, text)) {
+      const next = element.value + text
+      setDraft(next)
+      drafts.current.set(activeId, next)
+    }
+  }
+  const insertTextRef = useRef(insertText)
+  insertTextRef.current = insertText
+  // Images become attachments. Other files insert their path: the original path when the drag
+  // carries one, otherwise the path of a saved copy (browsers hide Finder paths).
+  async function handleFiles(files: File[], paths: string[]) {
+    const threadId = activeId
+    if (!threadId) return
+    setError('')
+    const images = files.filter(isAttachableImage)
+    const others = files.filter((file) => !isAttachableImage(file))
+    const added = images.map((file) => ({
+      key: crypto.randomUUID(),
+      name: file.name || 'image',
+      previewUrl: URL.createObjectURL(file),
+      status: 'uploading' as const,
+    }))
+    if (added.length)
+      setPending((current) => ({
+        ...current,
+        [threadId]: [...(current[threadId] || []), ...added],
+      }))
+    const update = (key: string, change: Partial<PendingAttachment> | null) =>
+      setPending((current) => ({
+        ...current,
+        [threadId]: (current[threadId] || []).flatMap((item) =>
+          item.key !== key ? [item] : change ? [{ ...item, ...change }] : [],
+        ),
+      }))
+    const uploads = images.map(async (file, index) => {
+      const item = added[index]!
+      try {
+        const uploaded = await uploadFile(file, 'image')
+        if (uploaded.kind === 'image') update(item.key, { status: 'ready', id: uploaded.id })
+      } catch (error) {
+        URL.revokeObjectURL(item.previewUrl)
+        update(item.key, null)
+        setError((error as Error).message)
+      }
+    })
+    const unmatched = [...paths]
+    const inserted: string[] = []
+    for (const file of others) {
+      const match = unmatched.findIndex((path) => basename(path) === file.name)
+      if (match >= 0) {
+        inserted.push(unmatched.splice(match, 1)[0]!)
+        continue
+      }
+      try {
+        const uploaded = await uploadFile(file, 'file')
+        if (uploaded.kind === 'file') inserted.push(uploaded.path)
+      } catch (error) {
+        setError((error as Error).message)
+      }
+    }
+    // Paths without a file (e.g. folders dragged from an editor) are inserted as-is.
+    if (!files.length) inserted.push(...unmatched)
+    if (inserted.length && selectedId.current === threadId) {
+      const element = composer.current
+      const before = element?.value.slice(0, element.selectionStart ?? 0) ?? ''
+      insertText(
+        (before && !/\s$/.test(before) ? ' ' : '') + inserted.map(formatPath).join(' ') + ' ',
+      )
+    }
+    await Promise.all(uploads)
+  }
+  const handleFilesRef = useRef(handleFiles)
+  handleFilesRef.current = handleFiles
+  function removePending(key: string) {
+    if (!activeId) return
+    setPending((current) => ({
+      ...current,
+      [activeId]: (current[activeId] || []).filter((item) => {
+        if (item.key === key) URL.revokeObjectURL(item.previewUrl)
+        return item.key !== key
+      }),
+    }))
+  }
   useLayoutEffect(() => {
     const element = composer.current
     if (!element) return
@@ -541,7 +688,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         cwd,
         ...settingsFor(provider, preferences),
       })
-      setThreads((current) => [created, ...current])
+      setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
       select(created.id)
     } catch (error) {
       setError((error as Error).message)
@@ -551,16 +698,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   async function send(event?: FormEvent) {
     event?.preventDefault()
-    if (!activeId || !draft.trim() || busy || !connected || !thread || isActive(thread.status))
+    const attached = activeId ? pending[activeId] || [] : []
+    if (
+      !activeId ||
+      (!draft.trim() && !attached.length) ||
+      attached.some((item) => item.status !== 'ready') ||
+      busy ||
+      !connected ||
+      !thread ||
+      isActive(thread.status)
+    )
       return
     const text = draft
     setBusy(true)
     setError('')
     stickToBottom.current = true
     try {
-      await api(`threads/${activeId}/send`, 'POST', { text })
+      await api(`threads/${activeId}/send`, 'POST', {
+        text,
+        attachments: attached.map((item) => ({ id: item.id, name: item.name })),
+      })
       if (selectedId.current === activeId) setDraft('')
       drafts.current.delete(activeId)
+      for (const item of attached) URL.revokeObjectURL(item.previewUrl)
+      setPending((current) => ({ ...current, [activeId]: [] }))
     } catch (error) {
       setError((error as Error).message)
     } finally {
@@ -1037,7 +1198,27 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <div className="turn" key={message.id}>
                     <article className={`message ${message.role}`}>
                       {message.role === 'user' ? (
-                        <div className="user-bubble">{message.text}</div>
+                        <>
+                          {message.attachments?.length ? (
+                            <div className="message-images">
+                              {message.attachments.map((item) => (
+                                <a
+                                  key={item.id}
+                                  href={`/api/uploads/${encodeURIComponent(item.id)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={item.name}
+                                >
+                                  <img
+                                    src={`/api/uploads/${encodeURIComponent(item.id)}`}
+                                    alt={item.name}
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                          {message.text ? <div className="user-bubble">{message.text}</div> : null}
+                        </>
                       ) : (
                         <div className="markdown">
                           <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
@@ -1082,7 +1263,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     </div>
                   </section>
                 ))}
-                {active && !thread.approvals.length ? (
+                {/* One working indicator: the work log shows it once the agent starts using tools. */}
+                {active && !thread.approvals.length && !thread.activities.length ? (
                   <div className="thinking" role="status">
                     <span />
                     <span />
@@ -1122,6 +1304,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
             ) : null}
             {thread ? (
               <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
+                {pending[thread.id]?.length ? (
+                  <div className="pending-attachments">
+                    {pending[thread.id]!.map((item) => (
+                      <div
+                        className={`pending-image ${item.status}`}
+                        key={item.key}
+                        title={item.name}
+                      >
+                        <img src={item.previewUrl} alt={item.name} />
+                        {item.status === 'uploading' ? (
+                          <LoaderCircle size={14} className="status-spinner" />
+                        ) : null}
+                        <button
+                          type="button"
+                          className="pending-remove"
+                          aria-label={`Remove ${item.name}`}
+                          onClick={() => removePending(item.key)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <textarea
                   ref={composer}
                   aria-label="Message your agent"
@@ -1142,7 +1348,18 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       void send()
                     }
                   }}
-                  rows={2}
+                  rows={1}
+                />
+                <input
+                  ref={filePicker}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    const files = [...(event.target.files || [])]
+                    event.target.value = ''
+                    if (files.length) void handleFiles(files, [])
+                  }}
                 />
                 <div className="composer-toolbar">
                   <AgentSettingsControls
@@ -1173,28 +1390,45 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         : undefined
                     }
                   />
-                  {active ? (
+                  <div className="composer-actions">
                     <button
-                      className="stop-button"
                       type="button"
-                      aria-label="Stop"
-                      title="Stop"
-                      onClick={() => action('stop')}
-                      disabled={busy || !connected}
+                      className="icon-button"
+                      aria-label="Attach images or files"
+                      title="Attach images or files (or paste / drop them)"
+                      disabled={active || busy}
+                      onClick={() => filePicker.current?.click()}
                     >
-                      <Square size={11} fill="currentColor" />
+                      <Paperclip size={15} />
                     </button>
-                  ) : (
-                    <button
-                      className="send-button"
-                      type="submit"
-                      aria-label="Send message"
-                      title="Send (Enter)"
-                      disabled={!draft.trim() || busy || !connected}
-                    >
-                      <ArrowUp size={17} />
-                    </button>
-                  )}
+                    {active ? (
+                      <button
+                        className="stop-button"
+                        type="button"
+                        aria-label="Stop"
+                        title="Stop"
+                        onClick={() => action('stop')}
+                        disabled={busy || !connected}
+                      >
+                        <Square size={11} fill="currentColor" />
+                      </button>
+                    ) : (
+                      <button
+                        className="send-button"
+                        type="submit"
+                        aria-label="Send message"
+                        title="Send (Enter)"
+                        disabled={
+                          (!draft.trim() && !pending[thread.id]?.length) ||
+                          Boolean(pending[thread.id]?.some((item) => item.status !== 'ready')) ||
+                          busy ||
+                          !connected
+                        }
+                      >
+                        <ArrowUp size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </form>
             ) : null}
@@ -1212,6 +1446,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
           </footer>
         ) : null}
       </main>
+      {dragging ? (
+        <div className="drop-overlay" aria-hidden>
+          <div>
+            <FileUp size={22} />
+            <strong>Drop to attach</strong>
+            <span>Images attach to your message · other files add their path</span>
+          </div>
+        </div>
+      ) : null}
       <div className="overlay-stack">
         {showPrompt ? (
           <NotificationPrompt
@@ -1316,7 +1559,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           onClose={() => setNewThreadProject(null)}
           onCreated={(created) => {
             setNewThreadProject(null)
-            setThreads((current) => [created, ...current])
+            setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
             select(created.id)
           }}
         />

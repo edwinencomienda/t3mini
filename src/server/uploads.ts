@@ -1,0 +1,107 @@
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { z } from 'zod'
+import type { Attachment } from '../types'
+
+// Images go to the agent as image input; other files are saved so the agent can read them by
+// path. Everything lives in the private data directory with server-generated names.
+export const imageTypes = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+} as const
+export type ImageType = keyof typeof imageTypes
+const extensionTypes: Record<string, ImageType> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+}
+export const maxImageBytes = 10 * 1024 * 1024
+export const maxFileBytes = 25 * 1024 * 1024
+// Image ids are a UUID plus an image extension; nothing else is ever served back.
+const imageId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/
+
+export class UploadError extends Error {}
+
+const uploadSchema = z.object({
+  kind: z.enum(['image', 'file']),
+  name: z.string().trim().min(1).max(255),
+  mimeType: z.string().max(255).default(''),
+  data: z.string().max(Math.ceil((maxFileBytes * 4) / 3) + 4),
+})
+export const attachmentSchema = z.object({
+  id: z.string().regex(imageId),
+  name: z.string().trim().min(1).max(255),
+})
+
+// Check the file's real format from its first bytes; never trust the declared type alone.
+function sniffImage(bytes: Buffer): ImageType | null {
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
+    return 'image/png'
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
+  if (bytes.subarray(0, 4).toString('ascii') === 'GIF8') return 'image/gif'
+  if (
+    bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('ascii') === 'WEBP'
+  )
+    return 'image/webp'
+  return null
+}
+// Keep a readable, filesystem-safe version of the original name for saved files.
+const safeName = (name: string) =>
+  name
+    .replace(/[/\\]/g, '_')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/^\.+/, '')
+    .slice(-80) || 'file'
+
+export class Uploads {
+  constructor(readonly directory: string) {}
+  async save(input: unknown) {
+    const { kind, name, data } = uploadSchema.parse(input)
+    const bytes = Buffer.from(data, 'base64')
+    if (!bytes.length) throw new UploadError('The file is empty.')
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    if (kind === 'image') {
+      if (bytes.length > maxImageBytes) throw new UploadError('Images can be up to 10 MB.')
+      const type = sniffImage(bytes)
+      if (!type) throw new UploadError('Only PNG, JPEG, GIF, and WebP images can be attached.')
+      const id = `${crypto.randomUUID()}.${imageTypes[type]}`
+      await writeFile(join(this.directory, id), bytes, { mode: 0o600, flag: 'wx' })
+      return { kind, id, name, mimeType: type, size: bytes.length }
+    }
+    if (bytes.length > maxFileBytes) throw new UploadError('Files can be up to 25 MB.')
+    // A UUID folder keeps the original file name readable for the agent without collisions.
+    const folder = join(this.directory, 'files', crypto.randomUUID())
+    await mkdir(folder, { recursive: true, mode: 0o700 })
+    const path = join(folder, safeName(name))
+    await writeFile(path, bytes, { mode: 0o600, flag: 'wx' })
+    return { kind, path, name, size: bytes.length }
+  }
+  // Resolves attachments sent with a message to saved images; unknown ids are rejected.
+  async resolve(attachments: z.infer<typeof attachmentSchema>[]): Promise<Attachment[]> {
+    return Promise.all(
+      attachments.map(async ({ id, name }) => {
+        const path = this.imagePath(id)
+        try {
+          if (!(await stat(path)).isFile()) throw new Error()
+        } catch {
+          throw new UploadError('An attached image is missing. Attach it again.')
+        }
+        return { id, name, mimeType: extensionTypes[id.split('.').pop()!]! }
+      }),
+    )
+  }
+  imagePath(id: string) {
+    if (!imageId.test(id)) throw new UploadError('Invalid image.')
+    return join(this.directory, id)
+  }
+  async read(id: string) {
+    return {
+      bytes: await readFile(this.imagePath(id)),
+      mimeType: extensionTypes[id.split('.').pop()!]!,
+    }
+  }
+}

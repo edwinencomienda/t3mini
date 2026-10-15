@@ -918,10 +918,10 @@ kbd {
   width: 100%;
   max-width: calc(var(--chat-width) + 2.5rem);
   margin: 0 auto;
-  padding: 0 1.25rem 1.1rem;
+  padding: 0 1.25rem 0.75rem;
 }
 .composer {
-  border-radius: 1.1rem;
+  border-radius: 0.9rem;
   border: 1px solid var(--border);
   background: var(--card);
   box-shadow: var(--shadow);
@@ -933,9 +933,9 @@ kbd {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 3.25rem;
+  min-height: 2.4rem;
   max-height: 15rem;
-  padding: 0.85rem 1rem 0.25rem;
+  padding: 0.65rem 0.85rem 0.1rem;
   resize: none;
   outline: 0;
   line-height: 1.5;
@@ -945,15 +945,21 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.35rem 0.5rem 0.5rem;
+  padding: 0.15rem 0.4rem 0.4rem;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
 }
 .send-button,
 .stop-button {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   border-radius: 999px;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -984,10 +990,10 @@ kbd {
   align-items: center;
   gap: 0.35rem;
   max-width: 14rem;
-  height: 1.75rem;
-  padding: 0 0.5rem;
+  height: 1.6rem;
+  padding: 0 0.45rem;
   border-radius: 0.45rem;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted-foreground);
 }
 .picker-trigger span {
@@ -1612,4 +1618,109 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Attachments */
+.pending-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.55rem 0.65rem 0;
+}
+.pending-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--muted);
+}
+.pending-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pending-image.uploading img {
+  opacity: 0.45;
+}
+.pending-image .status-spinner {
+  position: relative;
+}
+.pending-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 65%);
+  color: #fff;
+  opacity: 0;
+}
+.pending-image:hover .pending-remove,
+.pending-remove:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .pending-remove {
+    opacity: 1;
+  }
+}
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  max-width: 85%;
+  margin-bottom: 0.35rem;
+}
+.message-images a {
+  display: block;
+  border-radius: 0.6rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.message-images img {
+  display: block;
+  max-width: 14rem;
+  max-height: 10rem;
+  object-fit: cover;
+}
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.drop-overlay > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: min(30rem, 100%);
+  padding: 2.25rem 1.5rem;
+  border: 2px dashed var(--primary);
+  border-radius: 1rem;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.drop-overlay svg {
+  color: var(--primary);
+}
+.drop-overlay span {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
 }

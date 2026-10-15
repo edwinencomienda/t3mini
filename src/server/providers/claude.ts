@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Runner } from './types'
 import { claudeSettings, threadSettings } from '../provider-settings'
@@ -15,12 +16,28 @@ export const runClaude: Runner = async (ctx) => {
   }
   async function* prompt(): AsyncGenerator<SDKUserMessage> {
     await ready
-    if (!abortController.signal.aborted)
-      yield {
-        type: 'user',
-        message: { role: 'user', content: ctx.prompt },
-        parent_tool_use_id: null,
-      }
+    if (abortController.signal.aborted) return
+    // Images go first as base64 image blocks, followed by the text.
+    const images = await Promise.all(
+      ctx.images.map(async (image) => ({
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: image.mimeType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+          data: (await readFile(image.path)).toString('base64'),
+        },
+      })),
+    )
+    yield {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: images.length
+          ? [...images, ...(ctx.prompt ? [{ type: 'text' as const, text: ctx.prompt }] : [])]
+          : ctx.prompt,
+      },
+      parent_tool_use_id: null,
+    }
   }
   ctx.signal.addEventListener('abort', abort, { once: true })
   let gotResult = false

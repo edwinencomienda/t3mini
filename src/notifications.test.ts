@@ -9,6 +9,7 @@ const summary = (id: string, status: Status): ThreadSummary => ({
   cwd: '/tmp/project',
   status,
   updatedAt: '2026-10-15T00:00:00.000Z',
+  lastMessageAt: '2026-10-15T00:00:00.000Z',
 })
 const statuses = (entries: [string, Status][]) => new Map(entries)
 

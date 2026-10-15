@@ -149,7 +149,10 @@ export const runCodex: Runner = async (ctx) => {
     const resultTurn = object(
       await client.request('turn/start', {
         threadId,
-        input: [{ type: 'text', text: ctx.prompt }],
+        input: [
+          ...ctx.images.map((image) => ({ type: 'localImage', path: image.path })),
+          ...(ctx.prompt ? [{ type: 'text', text: ctx.prompt }] : []),
+        ],
         model,
         effort,
         approvalPolicy: policy.approvalPolicy,
