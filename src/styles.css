@@ -2434,3 +2434,47 @@ body.resizing {
 .setting-row > .key-actions {
   flex-direction: row;
 }
+
+/* ⋮ on sidebar threads: shown on hover/focus (always on touch screens) in place of the time. */
+.thread-row-wrap {
+  position: relative;
+}
+.thread-more {
+  position: absolute;
+  top: 50%;
+  right: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.35rem;
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  opacity: 0;
+}
+.thread-more:hover,
+.thread-more[aria-expanded='true'] {
+  background: var(--input);
+  color: var(--foreground);
+}
+.thread-row-wrap:hover .thread-more,
+.thread-row-wrap:focus-within .thread-more,
+.thread-more[aria-expanded='true'] {
+  opacity: 1;
+}
+.thread-row-wrap:hover .thread-time,
+.thread-row-wrap:focus-within .thread-time,
+.thread-row-wrap:has(.thread-more[aria-expanded='true']) .thread-time {
+  visibility: hidden;
+}
+@media (hover: none) {
+  .thread-more {
+    opacity: 1;
+  }
+  .thread-row-wrap .thread-time {
+    visibility: hidden;
+  }
+  .thread-row-wrap .thread-row {
+    padding-right: 2rem;
+  }
+}

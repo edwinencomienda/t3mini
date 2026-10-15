@@ -15,6 +15,7 @@ import {
   ChevronsUpDown,
   Circle,
   Copy,
+  EllipsisVertical,
   Folder,
   FolderPlus,
   FileUp,
@@ -1319,44 +1320,64 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         />
                       </div>
                     ) : (
-                      <Link
-                        key={item.id}
-                        to="/threads/$threadId"
-                        params={{ threadId: item.id }}
-                        className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''}`}
-                        onClick={(event) => {
-                          if (busy) {
+                      // The ⋮ button sits beside the link (a button can't live inside a link).
+                      <div className="thread-row-wrap" key={item.id}>
+                        <Link
+                          to="/threads/$threadId"
+                          params={{ threadId: item.id }}
+                          className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''}`}
+                          onClick={(event) => {
+                            if (busy) {
+                              event.preventDefault()
+                              return
+                            }
+                            if (
+                              !event.metaKey &&
+                              !event.ctrlKey &&
+                              !event.shiftKey &&
+                              !event.altKey &&
+                              event.button === 0
+                            )
+                              prepareSelection(item.id)
+                          }}
+                          onContextMenu={(event) => {
                             event.preventDefault()
-                            return
-                          }
-                          if (
-                            !event.metaKey &&
-                            !event.ctrlKey &&
-                            !event.shiftKey &&
-                            !event.altKey &&
-                            event.button === 0
-                          )
-                            prepareSelection(item.id)
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault()
-                          setMenu({ kind: 'thread', id: item.id, position: menuPosition(event) })
-                        }}
-                        onDoubleClick={(event) => {
-                          event.preventDefault()
-                          setRenaming({ id: item.id, title: item.title })
-                        }}
-                        aria-disabled={busy}
-                        aria-current={activeId === item.id ? 'page' : undefined}
-                      >
-                        <StatusDot status={item.status} unread={unread.has(item.id)} />
-                        <span className="thread-title">{item.title}</span>
-                        <span className="thread-time">
-                          {item.status === 'waiting'
-                            ? 'Approval'
-                            : relativeTime(item.updatedAt, now)}
-                        </span>
-                      </Link>
+                            setMenu({ kind: 'thread', id: item.id, position: menuPosition(event) })
+                          }}
+                          onDoubleClick={(event) => {
+                            event.preventDefault()
+                            setRenaming({ id: item.id, title: item.title })
+                          }}
+                          aria-disabled={busy}
+                          aria-current={activeId === item.id ? 'page' : undefined}
+                        >
+                          <StatusDot status={item.status} unread={unread.has(item.id)} />
+                          <span className="thread-title">{item.title}</span>
+                          <span className="thread-time">
+                            {item.status === 'waiting'
+                              ? 'Approval'
+                              : relativeTime(item.updatedAt, now)}
+                          </span>
+                        </Link>
+                        <button
+                          type="button"
+                          className="thread-more"
+                          aria-label={`More actions for ${item.title}`}
+                          title="More"
+                          aria-haspopup="menu"
+                          aria-expanded={menu?.kind === 'thread' && menu.id === item.id}
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect()
+                            setMenu({
+                              kind: 'thread',
+                              id: item.id,
+                              position: { x: rect.left, y: rect.bottom + 4 },
+                            })
+                          }}
+                        >
+                          <EllipsisVertical size={14} />
+                        </button>
+                      </div>
                     ),
                   )
                 : null}
