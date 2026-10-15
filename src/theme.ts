@@ -33,6 +33,22 @@ export function saveTheme(theme: Theme) {
 }
 export const nextTheme = (theme: Theme) => themes[(themes.indexOf(theme) + 1) % themes.length]!
 
-// Runs inline in <head> before first paint, so a saved Light/Dark choice never flashes.
-// Static string: it reads only this app's own storage key and writes a whitelisted value.
-export const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(key)});if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}`
+// Whether the sidebar is hidden on wide screens. Kept as an attribute on <html> so CSS can
+// lay out the page before React runs.
+const sidebarKey = 't3-mini:sidebar-hidden'
+export const isSidebarHidden = () =>
+  typeof document !== 'undefined' && document.documentElement.dataset.sidebar === 'hidden'
+export function saveSidebarHidden(hidden: boolean) {
+  if (hidden) document.documentElement.dataset.sidebar = 'hidden'
+  else delete document.documentElement.dataset.sidebar
+  try {
+    if (hidden) localStorage.setItem(sidebarKey, '1')
+    else localStorage.removeItem(sidebarKey)
+  } catch {
+    // Storage can be unavailable; the choice still applies for this page.
+  }
+}
+
+// Runs inline in <head> before first paint, so a saved theme or hidden sidebar never flashes.
+// Static string: it reads only this app's own storage keys and writes whitelisted values.
+export const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(key)});if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;if(localStorage.getItem(${JSON.stringify(sidebarKey)})==='1')document.documentElement.dataset.sidebar='hidden'}catch(e){}`

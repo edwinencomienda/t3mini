@@ -187,6 +187,7 @@ kbd {
   grid-template-columns: 16.5rem minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
+  transition: grid-template-columns 0.18s ease;
 }
 .sidebar {
   display: flex;
@@ -515,7 +516,13 @@ kbd {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 1.5rem 1.25rem 1rem;
+  overflow-anchor: none;
+  padding: 1.5rem 1.25rem 2rem;
+}
+.chat-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
 /* Empty states */
@@ -525,7 +532,7 @@ kbd {
   align-items: center;
   justify-content: center;
   gap: 0.6rem;
-  min-height: 100%;
+  flex: 1;
   max-width: var(--chat-width);
   margin: 0 auto;
   text-align: center;
@@ -610,7 +617,9 @@ kbd {
 }
 .markdown {
   line-height: 1.65;
-  overflow-wrap: anywhere;
+  /* break-word only breaks a word that can't fit on its own line; unlike 'anywhere' it
+     doesn't let tables squeeze columns down to one character. */
+  overflow-wrap: break-word;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -684,17 +693,35 @@ kbd {
   color: var(--muted-foreground);
 }
 .markdown table {
+  /* Wide tables scroll sideways instead of crushing their columns. */
   display: block;
+  max-width: 100%;
+  width: max-content;
   overflow-x: auto;
   border-collapse: collapse;
   margin: 0.75rem 0;
   font-size: 13px;
+  line-height: 1.45;
 }
 .markdown th,
 .markdown td {
-  padding: 0.35rem 0.7rem;
+  padding: 0.4rem 0.7rem;
   border: 1px solid var(--border);
   text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+/* Headers and short values stay on one line; long text wraps at a readable width. */
+.markdown th {
+  white-space: nowrap;
+}
+.markdown td {
+  min-width: 4rem;
+  max-width: 28rem;
+}
+.markdown td code {
+  white-space: nowrap;
 }
 .markdown th {
   background: var(--muted);
@@ -1161,6 +1188,32 @@ kbd {
   color: var(--primary);
 }
 
+/* Hidden sidebar (wide screens). Phones keep the drawer below. */
+@media (min-width: 761px) {
+  :root[data-sidebar='hidden'] .workspace {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+  :root[data-sidebar='hidden'] .sidebar {
+    visibility: hidden;
+    overflow: hidden;
+    border-right: 0;
+  }
+  .show-sidebar {
+    margin-left: -0.35rem;
+  }
+}
+@media (max-width: 760px) {
+  .show-sidebar,
+  .sidebar-header-actions button[aria-label='Hide sidebar'] {
+    display: none;
+  }
+}
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
 /* Mobile */
 .sidebar-scrim {
   display: none;
@@ -1479,32 +1532,6 @@ kbd {
 }
 
 /* Sidebar actions + projects */
-.sidebar-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem;
-  margin: 0 0.6rem 0.5rem;
-}
-.sidebar-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  height: 2rem;
-  padding: 0 0.5rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--card);
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.sidebar-action:hover:not(:disabled) {
-  background: var(--accent);
-}
-.sidebar-action svg {
-  color: var(--muted-foreground);
-}
 .thread-row.empty-project {
   width: 100%;
   font-size: 12px;
@@ -1558,4 +1585,31 @@ kbd {
 }
 .picker-menu > .picker-footer-action svg {
   color: inherit;
+}
+
+/* Git branch under the composer */
+.composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 1rem;
+  margin-top: -0.15rem;
+  padding: 0 0.75rem;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  font-family: var(--font-mono);
+}
+.git-branch svg {
+  flex-shrink: 0;
+}
+.git-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

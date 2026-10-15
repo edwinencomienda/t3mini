@@ -14,7 +14,7 @@ export const Route = createRootRoute({
     ],
   }),
   component: () => (
-    // The theme script sets data-theme before React hydrates, so allow that attribute to differ.
+    // The head script sets data-theme/data-sidebar before React hydrates, so allow them to differ.
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />

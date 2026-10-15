@@ -419,6 +419,31 @@ export class AgentService {
     }
     await this.store.save()
   }
+  // The current git branch of a thread's project folder, or null when it isn't a git repo.
+  // Runs git directly (no shell) and only in the thread's own folder.
+  async gitInfo(id: string): Promise<{ branch: string | null; detached?: boolean }> {
+    const { cwd } = this.get(id)
+    try {
+      const { stdout } = await exec(
+        'git',
+        ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        {
+          timeout: 3_000,
+        },
+      )
+      return { branch: stdout.trim() || null }
+    } catch {
+      // Not on a branch: either a detached HEAD or not a repository at all.
+      try {
+        const { stdout } = await exec('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'], {
+          timeout: 3_000,
+        })
+        return { branch: stdout.trim() || null, detached: true }
+      } catch {
+        return { branch: null }
+      }
+    }
+  }
   async rename(id: string, input: unknown) {
     const { title } = z.object({ title: z.string().trim().min(1).max(120) }).parse(input)
     const thread = this.get(id)

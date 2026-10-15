@@ -7,9 +7,12 @@ import {
   Copy,
   Folder,
   FolderPlus,
+  GitBranch,
   FolderOpen,
   LoaderCircle,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   Monitor,
   Moon,
   Pencil,
@@ -45,7 +48,15 @@ import {
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
-import { loadTheme, nextTheme, saveTheme, themeLabels, type Theme } from '../theme'
+import {
+  isSidebarHidden,
+  saveSidebarHidden,
+  loadTheme,
+  nextTheme,
+  saveTheme,
+  themeLabels,
+  type Theme,
+} from '../theme'
 import remarkGfm from 'remark-gfm'
 import {
   isActive,
@@ -173,12 +184,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [connected, setConnected] = useState(false)
   const [search, setSearch] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Wide screens hide the sidebar in place; phones use the slide-out drawer instead.
+  const [sidebarHidden, setSidebarHidden] = useState(false)
+  useEffect(() => setSidebarHidden(isSidebarHidden()), [])
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 760px)').matches) return setSidebarOpen((open) => !open)
+    const hidden = !isSidebarHidden()
+    saveSidebarHidden(hidden)
+    setSidebarHidden(hidden)
+  }
+  const toggleSidebarRef = useRef(toggleSidebar)
+  toggleSidebarRef.current = toggleSidebar
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [workLogOpen, setWorkLogOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  const end = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+  const [git, setGit] = useState<{ branch: string | null; detached?: boolean } | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -272,9 +295,44 @@ export function Workspace({ threadId }: { threadId?: string }) {
       events.close()
     }
   }, [activeId])
+  // The thread's git branch. Refreshed when the thread opens, after each turn (the agent may
+  // switch branches), and when you come back to the window.
+  const turnActive = thread ? isActive(thread.status) : false
   useEffect(() => {
-    if (stickToBottom.current) end.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
-  }, [thread?.messages, thread?.activities, thread?.approvals, activeId])
+    setGit(null)
+    if (!activeId) return
+    const controller = new AbortController()
+    const load = () =>
+      api<{ branch: string | null; detached?: boolean }>(
+        `threads/${activeId}/git`,
+        'GET',
+        undefined,
+        controller.signal,
+      )
+        .then(setGit)
+        .catch(() => {})
+    if (!turnActive) void load()
+    window.addEventListener('focus', load)
+    return () => {
+      controller.abort()
+      window.removeEventListener('focus', load)
+    }
+  }, [activeId, turnActive])
+  useLayoutEffect(() => {
+    // Keep the chat pinned to the bottom while it grows (streamed text, work log, status
+    // lines) or while the chat area shrinks (a taller composer), unless the user scrolled up.
+    // Only the chat container scrolls; scrollIntoView would also shift the outer layout.
+    const element = scrollArea.current
+    if (!element) return
+    const pin = () => {
+      if (stickToBottom.current) element.scrollTop = element.scrollHeight
+    }
+    pin()
+    const observer = new ResizeObserver(pin)
+    observer.observe(element)
+    if (content.current) observer.observe(content.current)
+    return () => observer.disconnect()
+  }, [activeId])
   useEffect(() => {
     const saved = loadNotificationPreferences()
     const permission = desktopPermission()
@@ -369,11 +427,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setShowPrompt(false)
   }
   useEffect(() => {
-    // ⌘⇧O / Ctrl+Shift+O starts a new thread, matching t3code.
+    // ⌘⇧O / Ctrl+Shift+O starts a new thread, matching t3code. ⌘S / Ctrl+S toggles the
+    // sidebar (in place of the browser's Save Page, which has no use here).
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'o') {
+      const mod = event.metaKey || event.ctrlKey
+      if (mod && event.shiftKey && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         if (bootstrap) openNewThreadRef.current()
+      } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        toggleSidebarRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -660,26 +723,34 @@ export function Workspace({ threadId }: { threadId?: string }) {
             <span className="brand-mark">t3</span>
             <span>mini</span>
           </Link>
-        </div>
-        <div className="sidebar-actions">
-          <button
-            className="sidebar-action"
-            onClick={() => openNewThread()}
-            disabled={!bootstrap}
-            title={`New thread (${isMac ? '⌘⇧O' : 'Ctrl+Shift+O'})`}
-          >
-            <SquarePen size={14} />
-            New thread
-          </button>
-          <button
-            className="sidebar-action"
-            onClick={() => setAddProject('sidebar')}
-            disabled={!bootstrap}
-            title="Add a project folder"
-          >
-            <FolderPlus size={14} />
-            Add project
-          </button>
+          <div className="sidebar-header-actions">
+            <button
+              className="icon-button"
+              onClick={() => openNewThread()}
+              disabled={!bootstrap}
+              aria-label="New thread"
+              title={`New thread (${isMac ? '⌘⇧O' : 'Ctrl+Shift+O'})`}
+            >
+              <SquarePen size={15} />
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => setAddProject('sidebar')}
+              disabled={!bootstrap}
+              aria-label="Add project"
+              title="Add project"
+            >
+              <FolderPlus size={15} />
+            </button>
+            <button
+              className="icon-button"
+              onClick={toggleSidebar}
+              aria-label="Hide sidebar"
+              title={`Hide sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
+            >
+              <PanelLeftClose size={15} />
+            </button>
+          </div>
         </div>
         <label className="search">
           <Search size={14} />
@@ -862,18 +933,22 @@ export function Workspace({ threadId }: { threadId?: string }) {
           >
             <Menu size={18} />
           </button>
+          {sidebarHidden ? (
+            <button
+              className="icon-button show-sidebar"
+              aria-label="Show sidebar"
+              title={`Show sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
+              onClick={toggleSidebar}
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          ) : null}
           <div className="topbar-title">
             <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
             {thread ? (
               <span className="chip" title={thread.cwd}>
                 <FolderOpen size={12} />
                 {folder}
-              </span>
-            ) : null}
-            {thread ? (
-              <span className="chip">
-                <ProviderMark provider={thread.provider} size={12} />
-                {names[thread.provider]}
               </span>
             ) : null}
           </div>
@@ -904,131 +979,132 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 element.scrollHeight - element.scrollTop - element.clientHeight < 120
           }}
         >
-          {!thread?.messages.length ? (
-            <section className="empty-state">
-              {thread ? (
-                <>
-                  <ProviderMark provider={thread.provider} size={28} />
-                  <h1>What should we build in {folder}?</h1>
-                  <p>
-                    {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
-                  </p>
-                  <div className="starters">
-                    {starters.map((starter) => (
+          <div className="chat-content" ref={content}>
+            {!thread?.messages.length ? (
+              <section className="empty-state">
+                {thread ? (
+                  <>
+                    <ProviderMark provider={thread.provider} size={28} />
+                    <h1>What should we build in {folder}?</h1>
+                    <p>
+                      {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
+                    </p>
+                    <div className="starters">
+                      {starters.map((starter) => (
+                        <button
+                          key={starter.title}
+                          onClick={() => {
+                            setDraft(starter.text)
+                            drafts.current.set(thread.id, starter.text)
+                            composer.current?.focus()
+                          }}
+                        >
+                          {starter.title}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : activeId ? null : (
+                  <>
+                    <span className="brand-mark large">t3</span>
+                    <h1>Your coding agents, one quiet place.</h1>
+                    <p>Pick a project folder and start a thread with Claude or Codex.</p>
+                    <div className="empty-actions">
                       <button
-                        key={starter.title}
-                        onClick={() => {
-                          setDraft(starter.text)
-                          drafts.current.set(thread.id, starter.text)
-                          composer.current?.focus()
-                        }}
+                        className="primary"
+                        disabled={!bootstrap}
+                        onClick={() => openNewThread()}
                       >
-                        {starter.title}
+                        <SquarePen size={15} />
+                        New thread
+                        <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
                       </button>
-                    ))}
+                      <button
+                        className="secondary"
+                        disabled={!bootstrap}
+                        onClick={() => setAddProject('sidebar')}
+                      >
+                        <FolderPlus size={15} />
+                        Add project
+                      </button>
+                    </div>
+                  </>
+                )}
+              </section>
+            ) : (
+              <div className="conversation">
+                {thread.messages.map((message, index) => (
+                  <div className="turn" key={message.id}>
+                    <article className={`message ${message.role}`}>
+                      {message.role === 'user' ? (
+                        <div className="user-bubble">{message.text}</div>
+                      ) : (
+                        <div className="markdown">
+                          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                            {message.text}
+                          </Markdown>
+                        </div>
+                      )}
+                      <time dateTime={message.createdAt}>
+                        {new Date(message.createdAt).toLocaleTimeString([], {
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </time>
+                    </article>
+                    {/* The work log belongs to the latest turn, right after its prompt. */}
+                    {index === lastUser ? workLog : null}
                   </div>
-                </>
-              ) : activeId ? null : (
-                <>
-                  <span className="brand-mark large">t3</span>
-                  <h1>Your coding agents, one quiet place.</h1>
-                  <p>Pick a project folder and start a thread with Claude or Codex.</p>
-                  <div className="empty-actions">
-                    <button
-                      className="primary"
-                      disabled={!bootstrap}
-                      onClick={() => openNewThread()}
-                    >
-                      <SquarePen size={15} />
-                      New thread
-                      <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
-                    </button>
-                    <button
-                      className="secondary"
-                      disabled={!bootstrap}
-                      onClick={() => setAddProject('sidebar')}
-                    >
-                      <FolderPlus size={15} />
-                      Add project
-                    </button>
+                ))}
+                {lastUser === -1 ? workLog : null}
+                {thread.approvals.map((approval) => (
+                  <section className="approval" key={approval.id}>
+                    <div className="approval-title">
+                      <ShieldAlert size={16} />
+                      <strong>{approval.title}</strong>
+                    </div>
+                    <pre>{approval.detail}</pre>
+                    <div className="approval-actions">
+                      <button
+                        className="secondary"
+                        disabled={busy || !connected}
+                        onClick={() => action('approve', { approvalId: approval.id, allow: false })}
+                      >
+                        Decline
+                      </button>
+                      <button
+                        className="primary"
+                        disabled={busy || !connected}
+                        onClick={() => action('approve', { approvalId: approval.id, allow: true })}
+                      >
+                        Allow once
+                      </button>
+                    </div>
+                  </section>
+                ))}
+                {active && !thread.approvals.length ? (
+                  <div className="thinking" role="status">
+                    <span />
+                    <span />
+                    <span />
+                    {labels[thread.status]}…
                   </div>
-                </>
-              )}
-            </section>
-          ) : (
-            <div className="conversation">
-              {thread.messages.map((message, index) => (
-                <div className="turn" key={message.id}>
-                  <article className={`message ${message.role}`}>
-                    {message.role === 'user' ? (
-                      <div className="user-bubble">{message.text}</div>
-                    ) : (
-                      <div className="markdown">
-                        <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                          {message.text}
-                        </Markdown>
-                      </div>
-                    )}
-                    <time dateTime={message.createdAt}>
-                      {new Date(message.createdAt).toLocaleTimeString([], {
-                        hour: 'numeric',
-                        minute: '2-digit',
-                      })}
-                    </time>
-                  </article>
-                  {/* The work log belongs to the latest turn, right after its prompt. */}
-                  {index === lastUser ? workLog : null}
-                </div>
-              ))}
-              {lastUser === -1 ? workLog : null}
-              {thread.approvals.map((approval) => (
-                <section className="approval" key={approval.id}>
-                  <div className="approval-title">
-                    <ShieldAlert size={16} />
-                    <strong>{approval.title}</strong>
+                ) : thread.completedAt && thread.startedAt ? (
+                  <div className="turn-divider" role="status">
+                    <span>
+                      {thread.status === 'completed' ? 'Worked' : labels[thread.status]} for{' '}
+                      {duration(thread.startedAt, thread.completedAt)}
+                    </span>
                   </div>
-                  <pre>{approval.detail}</pre>
-                  <div className="approval-actions">
-                    <button
-                      className="secondary"
-                      disabled={busy || !connected}
-                      onClick={() => action('approve', { approvalId: approval.id, allow: false })}
-                    >
-                      Decline
-                    </button>
-                    <button
-                      className="primary"
-                      disabled={busy || !connected}
-                      onClick={() => action('approve', { approvalId: approval.id, allow: true })}
-                    >
-                      Allow once
-                    </button>
+                ) : null}
+                {thread.error ? (
+                  <div className="error-banner" role="alert">
+                    {thread.error}
                   </div>
-                </section>
-              ))}
-              {active && !thread.approvals.length ? (
-                <div className="thinking" role="status">
-                  <span />
-                  <span />
-                  <span />
-                  {labels[thread.status]}…
-                </div>
-              ) : thread.completedAt && thread.startedAt ? (
-                <div className="turn-divider" role="status">
-                  <span>
-                    {thread.status === 'completed' ? 'Worked' : labels[thread.status]} for{' '}
-                    {duration(thread.startedAt, thread.completedAt)}
-                  </span>
-                </div>
-              ) : null}
-              {thread.error ? (
-                <div className="error-banner" role="alert">
-                  {thread.error}
-                </div>
-              ) : null}
-            </div>
-          )}
-          <div ref={end} />
+                ) : null}
+              </div>
+            )}
+          </div>
         </div>
         {thread || !activeId ? (
           <footer className="composer-area">
@@ -1121,6 +1197,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   )}
                 </div>
               </form>
+            ) : null}
+            {thread && git?.branch ? (
+              <div className="composer-meta">
+                <span
+                  className="git-branch"
+                  title={git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`}
+                >
+                  <GitBranch size={12} />
+                  <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
+                </span>
+              </div>
             ) : null}
           </footer>
         ) : null}

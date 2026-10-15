@@ -230,3 +230,12 @@ it('switches agents only before the first message', async () => {
   ).rejects.toThrow('new thread')
   expect(service.get(created.id).provider).toBe('claude')
 })
+it('reports the git branch of a thread project, or none outside a repository', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const created = await thread()
+  expect(await service.gitInfo(created.id)).toEqual({ branch: null })
+  const git = promisify(execFile)
+  await git('git', ['-C', created.cwd, 'init', '-q', '-b', 'feature/test-branch'])
+  expect(await service.gitInfo(created.id)).toEqual({ branch: 'feature/test-branch' })
+})
