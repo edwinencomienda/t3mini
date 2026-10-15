@@ -1766,7 +1766,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             permissionMode: thread.permissionMode || defaultPermission,
                           }}
                           onChange={(settings) => void updateSettings(settings)}
-                          disabled={active || busy || !connected}
+                          disabled={active || !connected}
+                          busy={busy}
                           agent={
                             bootstrap
                               ? {

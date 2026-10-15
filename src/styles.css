@@ -2015,12 +2015,7 @@ body.resizing {
   height: 1.5rem;
 }
 
-/* Picker sections and badges (e.g. Codex service tier) */
-.picker-separator {
-  height: 1px;
-  margin: 0.3rem 0.3rem 0.1rem;
-  background: var(--border);
-}
+/* Picker option badges (e.g. Codex service tier) */
 .picker-badge {
   margin-left: 0.4rem;
   padding: 0 0.3rem;
@@ -2241,6 +2236,67 @@ body.resizing {
   .picker-trigger.pill {
     max-width: 11rem;
   }
+}
+
+/* Model menu: setting rows (Model, Effort, Service tier) that open a submenu on hover or click */
+.picker-menu.settings {
+  min-width: 15rem;
+}
+.picker-submenu {
+  z-index: 31;
+  min-width: 13rem;
+}
+.picker-row,
+.picker-back {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border-radius: 0.4rem;
+  text-align: left;
+}
+.picker-row {
+  gap: 0.5rem;
+  padding: 0.5rem 0.55rem;
+  font-size: 13px;
+}
+.picker-row-label {
+  flex: 1;
+}
+.picker-row-value {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.picker-row svg {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+.picker-back {
+  gap: 0.3rem;
+  margin-bottom: 0.15rem;
+  padding: 0.35rem 0.45rem;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.picker-row:hover,
+.picker-row:focus-visible,
+.picker-row[aria-expanded='true'],
+.picker-back:hover,
+.picker-back:focus-visible {
+  background: var(--accent);
+  color: var(--foreground);
+  outline: 0;
+}
+.picker-menu [role='menuitemradio']:disabled {
+  opacity: 0.6;
+}
+.picker-note {
+  padding: 0.35rem 0.55rem 0.2rem;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
 }
 
 /* Claude / Codex tabs at the top of the model menu */
