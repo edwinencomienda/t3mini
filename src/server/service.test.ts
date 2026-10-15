@@ -337,3 +337,27 @@ it('changes the diff fingerprint when files change, and only then', async () => 
   await writeFile(join(directory, 'b.txt'), 'new\n')
   expect((await service.diffVersion(created.id)).version).not.toBe(second)
 })
+it('caps the changes panel at 200 files and hides the lines of huge files', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const { writeFile, mkdir } = await import('node:fs/promises')
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: directory })
+  const created = await thread()
+  await git('init', '-q')
+  await mkdir(join(directory, 'many'))
+  await Promise.all(
+    Array.from({ length: 230 }, (_, index) =>
+      writeFile(join(directory, 'many', `f${index}.txt`), `${index}\n`),
+    ),
+  )
+  await writeFile(join(directory, 'huge.txt'), 'line\n'.repeat(3500))
+  const diff = await service.diff(created.id)
+  expect(diff.files).toHaveLength(200)
+  expect(diff.totalFiles).toBeGreaterThanOrEqual(231)
+  expect(diff.truncated).toBe(true)
+  await git('add', 'huge.txt')
+  await git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'init')
+  await writeFile(join(directory, 'huge.txt'), 'changed\n'.repeat(3500))
+  const huge = (await service.diff(created.id)).files.find((file) => file.path === 'huge.txt')
+  expect(huge).toMatchObject({ tooLarge: true, additions: 3500, deletions: 3500, hunks: [] })
+})

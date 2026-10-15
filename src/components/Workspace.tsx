@@ -3,6 +3,8 @@ import {
   ArrowUp,
   Check,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Circle,
   Copy,
   Folder,
@@ -208,7 +210,36 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   const toggleSidebarRef = useRef(toggleSidebar)
   toggleSidebarRef.current = toggleSidebar
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  // Collapsed projects in the sidebar, remembered across reloads.
+  const [collapsed, setCollapsedState] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem('t3-mini:collapsed-projects') || '[]')
+      if (Array.isArray(saved))
+        setCollapsedState(
+          Object.fromEntries(
+            saved.filter((path) => typeof path === 'string').map((path) => [path, true]),
+          ),
+        )
+    } catch {
+      // Everything expanded by default.
+    }
+  }, [])
+  function setCollapsed(
+    update:
+      Record<string, boolean> | ((current: Record<string, boolean>) => Record<string, boolean>),
+  ) {
+    setCollapsedState((current) => {
+      const next = typeof update === 'function' ? update(current) : update
+      try {
+        const paths = Object.keys(next).filter((path) => next[path])
+        localStorage.setItem('t3-mini:collapsed-projects', JSON.stringify(paths))
+      } catch {
+        // Still applies for this session.
+      }
+      return next
+    })
+  }
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [workLogOpen, setWorkLogOpen] = useState(false)
@@ -700,6 +731,27 @@ export function Workspace({ threadId }: { threadId?: string }) {
     element.style.height = 'auto'
     element.style.height = `${Math.min(element.scrollHeight, 240)}px`
   }, [draft, activeId])
+  // Opening a thread puts the cursor in the composer, once per thread, as soon as it renders.
+  // Skipped on touch screens (it would pop up the keyboard) and while a dialog, menu, or
+  // rename field has focus.
+  const focusedThread = useRef<string | null>(null)
+  const composerReady = Boolean(thread && thread.id === activeId && !isActive(thread.status))
+  useEffect(() => {
+    if (!activeId || !composerReady || focusedThread.current === activeId) return
+    focusedThread.current = activeId
+    if (window.matchMedia('(pointer: coarse)').matches) return
+    const focused = document.activeElement
+    if (
+      focused instanceof HTMLElement &&
+      focused !== document.body &&
+      focused.closest('dialog, [role="menu"], .thread-rename')
+    )
+      return
+    const element = composer.current
+    if (!element) return
+    element.focus()
+    element.setSelectionRange(element.value.length, element.value.length)
+  }, [activeId, composerReady])
 
   function prepareSelection(id: string) {
     if (id === activeId) {
@@ -989,6 +1041,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
+        {groups.length ? (
+          <div className="sidebar-section">
+            <span>Projects</span>
+            {(() => {
+              const anyExpanded = groups.some((group) => !collapsed[group.path])
+              return (
+                <button
+                  className="icon-button"
+                  aria-label={anyExpanded ? 'Collapse all projects' : 'Expand all projects'}
+                  title={anyExpanded ? 'Collapse all' : 'Expand all'}
+                  onClick={() =>
+                    setCollapsed(
+                      anyExpanded
+                        ? Object.fromEntries(projectPaths.map((path) => [path, true]))
+                        : {},
+                    )
+                  }
+                >
+                  {anyExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                </button>
+              )
+            })()}
+          </div>
+        ) : null}
         <nav className="thread-list" aria-label="Threads">
           {groups.map(({ path: cwd, items }) => (
             <section className="project" key={cwd}>
@@ -1018,7 +1094,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <Plus size={14} />
                 </button>
               </div>
-              {!collapsed[cwd]
+              {!collapsed[cwd] || query
                 ? items.map((item) =>
                     renaming?.id === item.id ? (
                       <div className="thread-row selected renaming" key={item.id}>

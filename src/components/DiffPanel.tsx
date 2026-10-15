@@ -102,7 +102,12 @@ function FileDiff({
         </span>
       </button>
       {open ? (
-        file.binary ? (
+        file.tooLarge ? (
+          <p className="diff-note">
+            Too large to show here ({(file.additions + file.deletions).toLocaleString()} changed
+            lines). Open it in your editor.
+          </p>
+        ) : file.binary ? (
           <p className="diff-note">Binary or large file, not shown.</p>
         ) : !file.hunks.length ? (
           <p className="diff-note">No content changes.</p>
@@ -313,7 +318,9 @@ export function DiffPanel({
         <strong>Changes</strong>
         {diff?.files.length ? (
           <span className="diff-summary">
-            {diff.files.length} {diff.files.length === 1 ? 'file' : 'files'}
+            {diff.totalFiles > diff.files.length
+              ? `${diff.files.length} of ${diff.totalFiles.toLocaleString()} files`
+              : `${diff.files.length} ${diff.files.length === 1 ? 'file' : 'files'}`}
             <span className="add">+{additions}</span>
             <span className="del">−{deletions}</span>
           </span>
@@ -385,7 +392,11 @@ export function DiffPanel({
           />
         ))}
         {diff?.truncated ? (
-          <p className="diff-note">Some changes are too large to show here.</p>
+          <p className="diff-note">
+            {diff.totalFiles > diff.files.length
+              ? `Showing the first ${diff.files.length} of ${diff.totalFiles.toLocaleString()} changed files. Use your editor or git for the rest.`
+              : 'Some changes are too large to show here.'}
+          </p>
         ) : null}
       </div>
     </aside>

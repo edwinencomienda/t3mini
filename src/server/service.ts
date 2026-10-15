@@ -1,4 +1,4 @@
-import { realpath, stat } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -49,6 +49,9 @@ const promptSchema = z
     'Write a message or attach an image.',
   )
 const exec = promisify(execFile)
+// Caps for the Changes panel.
+const maxDiffFiles = 200
+const maxDiffLines = 3000
 function lastMessageAt(thread: Thread) {
   for (let index = thread.messages.length - 1; index >= 0; index--)
     if (thread.messages[index]!.role === 'user') return thread.messages[index]!.createdAt
@@ -500,44 +503,98 @@ export class AgentService {
     try {
       await git(['rev-parse', '--is-inside-work-tree'])
     } catch {
-      return { repo: false, files: [], truncated: false }
+      return { repo: false, files: [], truncated: false, totalFiles: 0 }
     }
     // A repository with no commits yet diffs against the empty tree.
     const base = await git(['rev-parse', '--verify', '--quiet', 'HEAD'])
       .then(() => 'HEAD')
       .catch(() => '4b825dc642cb6eb9a060e54bf8d69288fbee4904')
-    let truncated = false
     const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv', '--find-renames']
-    let output = ''
-    try {
-      output = (await git(['diff', ...diffArgs, base, '--'])).stdout
-    } catch (error) {
-      // Over the buffer cap: show what fit and say the rest was cut.
-      const partial = (error as { stdout?: string }).stdout
-      if (!partial) throw new HttpError(500, 'Could not read changes from git.')
-      output = partial
-      truncated = true
+    // List changed files first (cheap), then diff only the first maxDiffFiles of them, so a huge
+    // refactor never sends thousands of file diffs to the browser.
+    const { stdout: numstat } = await git(['diff', '--numstat', '-z', '--find-renames', base, '--'])
+    const tracked: string[][] = []
+    const entries = numstat.split('\0')
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index]!
+      if (!entry) continue
+      const path = entry.split('\t')[2]
+      // Renames are "adds\tdels\t" followed by the old and new paths as separate entries.
+      if (path) tracked.push([path])
+      else tracked.push([entries[++index]!, entries[++index]!].filter(Boolean))
     }
-    const files: DiffFile[] = parseDiff(output)
-    const { stdout: untracked } = await git(['ls-files', '--others', '--exclude-standard', '-z'])
-    const paths = untracked.split('\0').filter(Boolean)
-    if (paths.length > 100) truncated = true
-    for (const path of paths.slice(0, 100)) {
-      const size = await stat(join(cwd, path)).then(
-        (info) => info.size,
-        () => 0,
-      )
-      if (size > 512 * 1024) {
-        files.push({ path, status: 'added', additions: 0, deletions: 0, binary: true, hunks: [] })
-        continue
+    const { stdout: untrackedOutput } = await git([
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '-z',
+    ])
+    const untracked = untrackedOutput.split('\0').filter(Boolean)
+    const totalFiles = tracked.length + untracked.length
+    const shownTracked = tracked.slice(0, maxDiffFiles)
+    const shownUntracked = untracked.slice(0, Math.max(0, maxDiffFiles - shownTracked.length))
+    let truncated = shownTracked.length + shownUntracked.length < totalFiles
+    const files: DiffFile[] = []
+    if (shownTracked.length) {
+      let output = ''
+      try {
+        output = (await git(['diff', ...diffArgs, base, '--', ...shownTracked.flat()])).stdout
+      } catch (error) {
+        // Over the buffer cap: show what fit and say the rest was cut.
+        const partial = (error as { stdout?: string }).stdout
+        if (!partial) throw new HttpError(500, 'Could not read changes from git.')
+        output = partial
+        truncated = true
       }
-      // --no-index exits with 1 when the files differ; the diff is still on stdout.
-      const result = await git(['diff', ...diffArgs, '--no-index', '--', '/dev/null', path]).catch(
-        (error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }),
-      )
-      files.push(...parseDiff(result.stdout))
+      files.push(...parseDiff(output))
     }
-    return { repo: true, files, truncated }
+    // A new file's diff is every line added, so build it from the file itself (in parallel,
+    // no git process per file).
+    files.push(
+      ...(await Promise.all(
+        shownUntracked.map(async (path): Promise<DiffFile> => {
+          const added = { path, status: 'added' as const, deletions: 0 }
+          try {
+            const info = await stat(join(cwd, path))
+            if (!info.isFile() || info.size > 512 * 1024)
+              return { ...added, additions: 0, binary: true, hunks: [] }
+            const bytes = await readFile(join(cwd, path))
+            // A NUL byte early on means binary, the same check git uses.
+            if (bytes.subarray(0, 8000).includes(0))
+              return { ...added, additions: 0, binary: true, hunks: [] }
+            const lines = bytes.toString('utf8').split('\n')
+            if (lines.at(-1) === '') lines.pop()
+            return {
+              ...added,
+              additions: lines.length,
+              binary: false,
+              hunks: lines.length
+                ? [
+                    {
+                      header: `@@ -0,0 +1,${lines.length} @@`,
+                      lines: lines.map((text, index) => ({
+                        type: 'add' as const,
+                        new: index + 1,
+                        text: text.replace(/\r$/, ''),
+                      })),
+                    },
+                  ]
+                : [],
+            }
+          } catch {
+            return { ...added, additions: 0, binary: true, hunks: [] }
+          }
+        }),
+      )),
+    )
+    // One huge file (a lockfile, generated code) shouldn't freeze the panel: keep its counts,
+    // drop its lines.
+    for (const file of files)
+      if (file.hunks.reduce((sum, hunk) => sum + hunk.lines.length, 0) > maxDiffLines) {
+        file.hunks = []
+        file.tooLarge = true
+      }
+    return { repo: true, files, truncated, totalFiles }
   }
   // A cheap fingerprint of the project's uncommitted state, so the client can poll often and
   // fetch the full diff only when something changed. Covers edits to already-modified files

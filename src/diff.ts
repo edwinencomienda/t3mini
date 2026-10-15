@@ -9,9 +9,17 @@ export type DiffFile = {
   additions: number
   deletions: number
   binary: boolean
+  // Too many changed lines to show; counts are still accurate.
+  tooLarge?: boolean
   hunks: DiffHunk[]
 }
-export type DiffResult = { repo: boolean; files: DiffFile[]; truncated: boolean }
+export type DiffResult = {
+  repo: boolean
+  files: DiffFile[]
+  truncated: boolean
+  // All changed files, including those beyond the cap that aren't in `files`.
+  totalFiles: number
+}
 
 // git quotes unusual paths ("a/na\303\257ve.txt"); unquote and drop the a/ or b/ prefix.
 function cleanPath(raw: string) {
