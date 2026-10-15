@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useRef, useState } from 'react'
 import {
   ChevronRight,
   ChevronsDownUp,
@@ -149,7 +149,8 @@ function FileDiff({
 
 // Uncommitted changes in the thread's project. Refreshes when the agent finishes a step
 // (refreshKey changes), when you return to the window, and on demand.
-export function DiffPanel({
+// Memoized: it only re-renders when its own props change, not on every composer keystroke.
+export const DiffPanel = memo(function DiffPanel({
   threadId,
   project,
   refreshKey,
@@ -401,4 +402,4 @@ export function DiffPanel({
       </div>
     </aside>
   )
-}
+})

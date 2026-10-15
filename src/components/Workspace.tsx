@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 import {
   ArrowUp,
   Check,
@@ -80,6 +88,7 @@ import remarkGfm from 'remark-gfm'
 import {
   isActive,
   type Bootstrap,
+  type Message,
   type ProjectSummary,
   type Provider,
   type Status,
@@ -126,6 +135,73 @@ const markdownComponents: Components = {
       </a>
     ),
 }
+// Markdown is the costliest part of a render. Each message re-parses only when its own text
+// changes, so typing in the composer (which re-renders the page) stays instant in long threads.
+const markdownPlugins = [remarkGfm]
+const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
+  return (
+    <Markdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+      {text}
+    </Markdown>
+  )
+})
+// One message. Live updates parse a fresh copy of the thread every time, so rows compare by
+// content rather than identity; unchanged messages skip rendering entirely.
+const MessageView = memo(
+  function MessageView({ message }: { message: Message }) {
+    return (
+      <article className={`message ${message.role}`}>
+        {message.role === 'user' ? (
+          <>
+            {message.attachments?.length ? (
+              <div className="message-images">
+                {message.attachments.map((item) => (
+                  <a
+                    key={item.id}
+                    href={`/api/uploads/${encodeURIComponent(item.id)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={item.name}
+                  >
+                    <img
+                      src={`/api/uploads/${encodeURIComponent(item.id)}`}
+                      alt={item.name}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+            {message.text ? <div className="user-bubble">{message.text}</div> : null}
+            {message.queued ? (
+              <span className="message-note">Queued · sends when the current turn ends</span>
+            ) : message.unsent ? (
+              <span className="message-note">Not sent · the turn was stopped</span>
+            ) : null}
+          </>
+        ) : (
+          <div className="markdown">
+            <MessageMarkdown text={message.text} />
+          </div>
+        )}
+        <time dateTime={message.createdAt}>
+          {new Date(message.createdAt).toLocaleTimeString([], {
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+        </time>
+      </article>
+    )
+  },
+  (before, after) =>
+    before.message.id === after.message.id &&
+    before.message.text === after.message.text &&
+    before.message.queued === after.message.queued &&
+    before.message.unsent === after.message.unsent &&
+    before.message.createdAt === after.message.createdAt &&
+    (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0),
+)
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
@@ -249,7 +325,31 @@ export function Workspace({ threadId }: { threadId?: string }) {
       return next
     })
   }
-  const [draft, setDraft] = useState('')
+  // The composer's text lives in the textarea itself (uncontrolled), so typing doesn't
+  // re-render the page; the page only tracks whether there's anything to send.
+  const draftText = useRef('')
+  const [hasDraft, setHasDraft] = useState(false)
+  function resizeComposer() {
+    const element = composer.current
+    if (!element) return
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(element.scrollHeight, 240)}px`
+  }
+  // Called on every keystroke: only the "anything to send?" flag can trigger a render.
+  function draftChanged(text: string) {
+    draftText.current = text
+    if (activeId) drafts.current.set(activeId, text)
+    setHasDraft(Boolean(text.trim()))
+    resizeComposer()
+  }
+  // Replaces the composer's text from code (switching threads, starters, after sending).
+  function setDraft(text: string) {
+    draftText.current = text
+    const element = composer.current
+    if (element && element.value !== text) element.value = text
+    setHasDraft(Boolean(text.trim()))
+    resizeComposer()
+  }
   const [busy, setBusy] = useState(false)
   const [workLogOpen, setWorkLogOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
@@ -797,11 +897,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }))
   }
   useLayoutEffect(() => {
+    // The textarea may have just mounted (thread loaded): show this thread's draft in it.
     const element = composer.current
-    if (!element) return
-    element.style.height = 'auto'
-    element.style.height = `${Math.min(element.scrollHeight, 240)}px`
-  }, [draft, activeId])
+    if (element && element.value !== draftText.current) element.value = draftText.current
+    resizeComposer()
+  }, [activeId, thread?.id])
   // Opening a thread puts the cursor in the composer, once per thread, as soon as it renders.
   // Skipped on touch screens (it would pop up the keyboard) and while a dialog, menu, or
   // rename field has focus.
@@ -829,7 +929,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setSidebarOpen(false)
       return
     }
-    if (activeId) drafts.current.set(activeId, draft)
+    if (activeId) drafts.current.set(activeId, draftText.current)
     setThread(threadCache.current.get(id) ?? null)
     setDraft(drafts.current.get(id) || '')
     setSidebarOpen(false)
@@ -889,14 +989,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const attached = activeId ? pending[activeId] || [] : []
     if (
       !activeId ||
-      (!draft.trim() && !attached.length) ||
+      (!draftText.current.trim() && !attached.length) ||
       attached.some((item) => item.status !== 'ready') ||
       busy ||
       !connected ||
       !thread
     )
       return
-    const text = draft
+    const text = draftText.current
     setBusy(true)
     setError('')
     stickToBottom.current = true
@@ -1019,6 +1119,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .map((provider) => names[provider])
     : []
   const diffOpen = Boolean(activeCwd && diffOpenIn[activeCwd])
+  // Stable, so the (memoized) changes panel doesn't re-render on every keystroke.
+  const toggleDiffRef = useRef(toggleDiff)
+  toggleDiffRef.current = toggleDiff
+  const closeDiff = useCallback(() => toggleDiffRef.current(false), [])
   // ⌘D toggles the changes panel when the open thread's project is a git repository.
   const toggleChangesRef = useRef(() => {})
   toggleChangesRef.current = () => {
@@ -1470,54 +1574,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <div className="conversation">
                     {thread.messages.map((message, index) => (
                       <div className="turn" key={message.id}>
-                        <article className={`message ${message.role}`}>
-                          {message.role === 'user' ? (
-                            <>
-                              {message.attachments?.length ? (
-                                <div className="message-images">
-                                  {message.attachments.map((item) => (
-                                    <a
-                                      key={item.id}
-                                      href={`/api/uploads/${encodeURIComponent(item.id)}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title={item.name}
-                                    >
-                                      <img
-                                        src={`/api/uploads/${encodeURIComponent(item.id)}`}
-                                        alt={item.name}
-                                      />
-                                    </a>
-                                  ))}
-                                </div>
-                              ) : null}
-                              {message.text ? (
-                                <div className="user-bubble">{message.text}</div>
-                              ) : null}
-                              {message.queued ? (
-                                <span className="message-note">
-                                  Queued · sends when the current turn ends
-                                </span>
-                              ) : message.unsent ? (
-                                <span className="message-note">
-                                  Not sent · the turn was stopped
-                                </span>
-                              ) : null}
-                            </>
-                          ) : (
-                            <div className="markdown">
-                              <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                                {message.text}
-                              </Markdown>
-                            </div>
-                          )}
-                          <time dateTime={message.createdAt}>
-                            {new Date(message.createdAt).toLocaleTimeString([], {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })}
-                          </time>
-                        </article>
+                        <MessageView message={message} />
                         {/* The work log belongs to the latest turn, right after its prompt. */}
                         {index === lastUser ? workLog : null}
                       </div>
@@ -1625,11 +1682,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           ? `${names[thread.provider]} is working… send a message to steer it`
                           : `Chat with ${names[thread.provider]}`
                       }
-                      value={draft}
-                      onChange={(e) => {
-                        setDraft(e.target.value)
-                        drafts.current.set(thread.id, e.target.value)
-                      }}
+                      defaultValue={draftText.current}
+                      onChange={(e) => draftChanged(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                           e.preventDefault()
@@ -1711,14 +1765,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           </button>
                         ) : null}
                         {/* While the agent works, Send steers it (shown once there's something to send). */}
-                        {!active || draft.trim() || pending[thread.id]?.length ? (
+                        {!active || hasDraft || pending[thread.id]?.length ? (
                           <button
                             className="send-button"
                             type="submit"
                             aria-label="Send message"
                             title="Send (Enter)"
                             disabled={
-                              (!draft.trim() && !pending[thread.id]?.length) ||
+                              (!hasDraft && !pending[thread.id]?.length) ||
                               Boolean(
                                 pending[thread.id]?.some((item) => item.status !== 'ready'),
                               ) ||
@@ -1756,7 +1810,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             threadId={thread.id}
             project={thread.cwd}
             refreshKey={`${thread.status}:${thread.activities.filter((item) => item.status !== 'running').length}`}
-            onClose={() => toggleDiff(false)}
+            onClose={closeDiff}
           />
         ) : null}
       </main>
