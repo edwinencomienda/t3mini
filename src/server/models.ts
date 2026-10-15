@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { ModelOption } from '../agent-settings'
 import type { Provider } from '../types'
 import { openCodexClient } from './providers/codex-client'
+import { claudeExecutableOption } from './providers/claude'
 
 const codexPage = z.object({
   data: z.array(
@@ -78,7 +79,7 @@ async function claudeModels(cwd: string): Promise<ModelOption[]> {
       abortController,
       persistSession: false,
       settingSources: ['user', 'project', 'local'],
-      ...(process.env.CLAUDE_BIN ? { pathToClaudeCodeExecutable: process.env.CLAUDE_BIN } : {}),
+      ...claudeExecutableOption(),
     },
   })
   const timer = setTimeout(() => abortController.abort(), 20_000)

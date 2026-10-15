@@ -67,6 +67,7 @@ import {
   type ThreadEvent,
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
+import { ProviderUpdates } from './ProviderUpdates'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
 import { ProcessIndicator } from './Processes'
@@ -1200,6 +1201,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .filter((provider) => !bootstrap.providers[provider].installed)
         .map((provider) => names[provider])
     : []
+  // After an update, Settings → Agents shows the new version.
+  const updatedProvider = (provider: Provider, version: string | null) =>
+    setBootstrap((current) =>
+      current && version
+        ? {
+            ...current,
+            providers: { ...current.providers, [provider]: { installed: true, version } },
+          }
+        : current,
+    )
   const diffOpen = Boolean(activeCwd && diffOpenIn[activeCwd])
   // Stable, so the (memoized) changes panel doesn't re-render on every keystroke.
   const toggleDiffRef = useRef(toggleDiff)
@@ -1520,6 +1531,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
             </div>
           ) : null}
         </nav>
+        <ProviderUpdates
+          enabled={Boolean(bootstrap && !bootstrap.remote)}
+          onUpdated={updatedProvider}
+        />
         <div className="sidebar-footer">
           <div
             className="connection"

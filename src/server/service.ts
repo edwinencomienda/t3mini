@@ -24,6 +24,7 @@ import { githubBranchUrl, githubRepoUrl } from './github'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
+import { providerExecutable } from './cli-updates'
 import type { PromptImage, Runner, Steer } from './providers/types'
 import { defaultPermission } from '../agent-settings'
 import { settingsSchema } from './provider-settings'
@@ -272,11 +273,9 @@ export class AgentService {
   async bootstrap(): Promise<Bootstrap> {
     const check = async (provider: Provider) => {
       try {
-        const { stdout } = await exec(
-          process.env[provider === 'codex' ? 'CODEX_BIN' : 'CLAUDE_BIN'] || provider,
-          ['--version'],
-          { timeout: 5_000 },
-        )
+        const { stdout } = await exec(providerExecutable(provider), ['--version'], {
+          timeout: 5_000,
+        })
         return { installed: true, version: stdout.trim().split('\n')[0] }
       } catch {
         return { installed: false }

@@ -9,6 +9,14 @@ import { claudeToolName, mcpServerName, runTool, tools } from '../tools'
 import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { claudeSettings, threadSettings } from '../provider-settings'
+import { claudeExecutable } from '../cli-updates'
+
+// Run the installed Claude Code CLI, so updating it updates t3 mini too. Without one, the copy
+// bundled with the Agent SDK runs.
+export function claudeExecutableOption() {
+  const path = claudeExecutable()
+  return path ? { pathToClaudeCodeExecutable: path } : {}
+}
 
 export const runClaude: Runner = async (ctx) => {
   ctx.signal.throwIfAborted()
@@ -123,7 +131,7 @@ export const runClaude: Runner = async (ctx) => {
       settingSources: ['user', 'project', 'local'],
       mcpServers: { [mcpServerName]: t3Tools },
       allowedTools: safeTools,
-      ...(process.env.CLAUDE_BIN ? { pathToClaudeCodeExecutable: process.env.CLAUDE_BIN } : {}),
+      ...claudeExecutableOption(),
       ...(ctx.thread.sessionId ? { resume: ctx.thread.sessionId } : {}),
       canUseTool: async (toolName, input, options) => {
         if (safeTools.includes(toolName)) return { behavior: 'allow', updatedInput: input }

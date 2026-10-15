@@ -35,7 +35,11 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude
 ```
 
-Claude runs through the Claude Agent SDK, which includes its own Claude Code runtime and uses your local provider credentials. The **Settings → Agents** section (a warning icon appears in the sidebar footer when a CLI is missing) reports whether a standalone `claude` / `codex` command is available; it does not verify your login or account limits. Restart the server after installing a CLI or changing environment settings.
+Claude runs through the Claude Agent SDK using your installed `claude` CLI (`CLAUDE_BIN`, else `claude` on PATH or in `~/.local/bin`), so updating Claude Code updates t3 mini too; without a CLI, the SDK's bundled runtime is used. Both agents use your local provider credentials. The **Settings → Agents** section (a warning icon appears in the sidebar footer when a CLI is missing) reports whether a standalone `claude` / `codex` command is available; it does not verify your login or account limits. Restart the server after installing a CLI or changing environment settings.
+
+### Agent updates
+
+On the Mac, t3 mini checks npm for new Claude Code and Codex releases (at startup and every six hours). When one is out, a card at the bottom of the sidebar shows the version change with an **Update** button, which runs `claude update` or `codex update` in the background. The next turn uses the new version, and existing threads resume as before. Updating waits until no thread on that agent is running. Hiding the card skips that version in this browser. Phones never see it.
 
 ## What it does
 
@@ -110,16 +114,16 @@ Developer details (architecture, security invariants, pitfalls, tests): [docs/ph
 
 Conversations are atomically saved to `.data/threads.json`, projects to `.data/projects.json`, and attachments under `.data/attachments/` (all gitignored). Deleting a thread does not delete its attachments. Creating a thread also saves its folder as a project. Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
 
-| Environment variable | Purpose                                                             |
-| -------------------- | ------------------------------------------------------------------- |
-| `T3_MINI_DATA_DIR`   | Override the `.data` directory.                                     |
-| `CODEX_BIN`          | Codex executable path; defaults to `codex` on PATH.                 |
-| `CLAUDE_BIN`         | Optional Claude Code executable override for the SDK and CLI check. |
-| `PORT`               | Production server port; defaults to `4310`.                         |
-| `VSCODE_BIN`         | Optional `code` executable used by the Open in VS Code button.      |
-| `T3_MINI_PHONE_PORT` | Port for phone access on your local network; defaults to `4311`.    |
-| `DEEPGRAM_API_KEY`   | Deepgram key for dictation; overrides the one saved in Settings.    |
-| `DEEPGRAM_MODEL`     | Deepgram model for dictation; defaults to `nova-3`.                 |
+| Environment variable | Purpose                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `T3_MINI_DATA_DIR`   | Override the `.data` directory.                                                                                                                |
+| `CODEX_BIN`          | Codex executable path; defaults to `codex` on PATH.                                                                                            |
+| `CLAUDE_BIN`         | Claude Code executable for the SDK, CLI check, and updates; defaults to `claude` on PATH or in `~/.local/bin`, else the SDK's bundled runtime. |
+| `PORT`               | Production server port; defaults to `4310`.                                                                                                    |
+| `VSCODE_BIN`         | Optional `code` executable used by the Open in VS Code button.                                                                                 |
+| `T3_MINI_PHONE_PORT` | Port for phone access on your local network; defaults to `4311`.                                                                               |
+| `DEEPGRAM_API_KEY`   | Deepgram key for dictation; overrides the one saved in Settings.                                                                               |
+| `DEEPGRAM_MODEL`     | Deepgram model for dictation; defaults to `nova-3`.                                                                                            |
 
 `bun run dev` and `bun run start` load a `.env` file if present. Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isActive } from '../types'
 import { getService, HttpError } from './service'
 import { pickProjectFolder } from './folder-picker'
 import { getModels } from './models'
@@ -15,6 +16,7 @@ import {
   transcribe,
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
+import { providerUpdates, updateProvider } from './cli-updates'
 
 // Live dictation is a WebSocket, which the HTTP servers route to this module (see vite.config.ts
 // and server.mjs).
@@ -42,7 +44,7 @@ export function checkRequest(request: Request) {
 export function isHttpError(error: unknown): error is HttpError {
   return (
     error instanceof Error &&
-    ['HttpError', 'DictationError'].some(
+    ['HttpError', 'DictationError', 'UpdateError'].some(
       (name) => error.name === name || error.constructor.name === name,
     ) &&
     typeof (error as { status?: unknown }).status === 'number'
@@ -133,6 +135,21 @@ export async function handleApi(request: Request) {
         const { id } = z.object({ id: z.string().optional() }).parse(await request.json())
         await access.revoke(id)
         return Response.json(access.status())
+      }
+    }
+    // Provider CLI updates change software on the Mac, so they're never offered to a phone.
+    if (parts[0] === 'provider-updates') {
+      macOnly('Updating agents')
+      if (!parts[1] && request.method === 'GET')
+        return Response.json({
+          updates: await providerUpdates(url.searchParams.get('refresh') === '1'),
+        })
+      if (parts[1] && !parts[2] && request.method === 'POST') {
+        const provider = z.enum(['codex', 'claude']).parse(parts[1])
+        const busy = service
+          .list()
+          .some((thread) => thread.provider === provider && isActive(thread.status))
+        return Response.json(await updateProvider(provider, busy))
       }
     }
     if (parts[0] === 'folders' && parts[1] === 'pick' && request.method === 'POST') {
