@@ -30,7 +30,8 @@ function loadWidth() {
     return null
   }
 }
-// Last diff per thread, shown instantly when switching back while a fresh one loads.
+// Last diff per project (changes belong to the folder, not the thread), shown instantly on
+// switching while a fresh one loads. Every thread in a project shares it, so it is never stale.
 const diffs = new Map<string, DiffResult>()
 // Files you opened, per project, so switching projects (or reloading) keeps them open.
 const openedKey = 't3-mini:diff-opened'
@@ -154,7 +155,7 @@ export function DiffPanel({
   refreshKey: string
   onClose: () => void
 }) {
-  const [diff, setDiff] = useState<DiffResult | null>(() => diffs.get(threadId) ?? null)
+  const [diff, setDiff] = useState<DiffResult | null>(() => diffs.get(project) ?? null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [view, setView] = useState<DiffView>(loadDiffView)
@@ -215,7 +216,7 @@ export function DiffPanel({
     handle.addEventListener('pointerup', stop)
     handle.addEventListener('pointercancel', stop)
   }
-  useEffect(() => setDiff(diffs.get(threadId) ?? null), [threadId])
+  useEffect(() => setDiff(diffs.get(project) ?? null), [project])
   useEffect(() => setOpenedState(loadOpened(project)), [project])
   useEffect(() => {
     const controller = new AbortController()
@@ -226,7 +227,7 @@ export function DiffPanel({
         .then(async (response) => {
           const data = await response.json()
           if (!response.ok) throw new Error(data.error || 'Could not load changes.')
-          diffs.set(threadId, data as DiffResult)
+          diffs.set(project, data as DiffResult)
           setDiff(data as DiffResult)
           setError('')
         })
@@ -247,6 +248,34 @@ export function DiffPanel({
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
   }, [])
+  useEffect(() => {
+    // Catch changes made outside the agent too (your editor, a terminal, git): poll a cheap
+    // fingerprint every 2s while the tab is visible and reload the diff only when it changes.
+    const controller = new AbortController()
+    let last: string | null | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const response = await fetch(`/api/threads/${threadId}/diff/version`, {
+            signal: controller.signal,
+          })
+          const { version } = (await response.json()) as { version: string | null }
+          if (last !== undefined && version !== last) setReload((count) => count + 1)
+          last = version
+        } catch {
+          if (controller.signal.aborted) return
+        }
+      }
+      // Scheduled after each check finishes, so slow repos never stack up requests.
+      timer = setTimeout(tick, 2000)
+    }
+    void tick()
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [threadId])
   function changeView(next: DiffView) {
     setView(next)
     try {

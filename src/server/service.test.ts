@@ -314,3 +314,26 @@ it('reports uncommitted tracked and untracked changes in the thread project', as
   expect(summary).toContainEqual(['tracked.txt', 'modified', 1, 1])
   expect(summary).toContainEqual(['-new.txt', 'added', 1, 0])
 })
+it('changes the diff fingerprint when files change, and only then', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const { writeFile, utimes } = await import('node:fs/promises')
+  const git = (...args: string[]) => promisify(execFile)('git', args, { cwd: directory })
+  const created = await thread()
+  expect((await service.diffVersion(created.id)).version).toBeNull()
+  await git('init', '-q')
+  await writeFile(join(directory, 'a.txt'), 'one\n')
+  await git('add', 'a.txt')
+  await git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'init')
+  await writeFile(join(directory, 'a.txt'), 'two\n')
+  const first = (await service.diffVersion(created.id)).version
+  expect(first).toBeTruthy()
+  expect((await service.diffVersion(created.id)).version).toBe(first)
+  // Editing an already-modified file keeps the same git status, but must still be detected.
+  await writeFile(join(directory, 'a.txt'), 'three!\n')
+  await utimes(join(directory, 'a.txt'), new Date(), new Date(Date.now() + 5_000))
+  const second = (await service.diffVersion(created.id)).version
+  expect(second).not.toBe(first)
+  await writeFile(join(directory, 'b.txt'), 'new\n')
+  expect((await service.diffVersion(created.id)).version).not.toBe(second)
+})

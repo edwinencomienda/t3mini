@@ -135,8 +135,10 @@ export async function handleApi(request: Request) {
       if (id && !parts[2] && request.method === 'GET') return Response.json(service.get(id))
       if (id && parts[2] === 'git' && request.method === 'GET')
         return Response.json(await service.gitInfo(id))
-      if (id && parts[2] === 'diff' && request.method === 'GET')
+      if (id && parts[2] === 'diff' && !parts[3] && request.method === 'GET')
         return Response.json(await service.diff(id))
+      if (id && parts[2] === 'diff' && parts[3] === 'version' && request.method === 'GET')
+        return Response.json(await service.diffVersion(id))
       if (id && !parts[2] && request.method === 'DELETE')
         return Response.json(await service.remove(id))
       if (id && request.method === 'POST') {

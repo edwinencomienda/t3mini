@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import {
@@ -537,6 +538,42 @@ export class AgentService {
       files.push(...parseDiff(result.stdout))
     }
     return { repo: true, files, truncated }
+  }
+  // A cheap fingerprint of the project's uncommitted state, so the client can poll often and
+  // fetch the full diff only when something changed. Covers edits to already-modified files
+  // (mtime/size), new or deleted files (status), and commits (HEAD).
+  async diffVersion(id: string): Promise<{ version: string | null }> {
+    const { cwd } = this.get(id)
+    const git = (args: string[]) =>
+      exec('git', args, { cwd, timeout: 5_000, maxBuffer: 4 * 1024 * 1024 })
+    try {
+      const [{ stdout: status }, head] = await Promise.all([
+        git(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+        git(['rev-parse', '--verify', '--quiet', 'HEAD']).then(
+          (result) => result.stdout.trim(),
+          () => '',
+        ),
+      ])
+      const hash = createHash('sha1').update(head).update('\0').update(status)
+      // Entries are "XY path"; renames add the original path as a separate entry.
+      const paths = status
+        .split('\0')
+        .filter((entry) => entry.length > 3 && entry[2] === ' ')
+        .map((entry) => entry.slice(3))
+        .slice(0, 2000)
+      const stats = await Promise.all(
+        paths.map((path) =>
+          stat(join(cwd, path)).then(
+            (info) => `${path}:${info.mtimeMs}:${info.size}`,
+            () => `${path}:gone`,
+          ),
+        ),
+      )
+      for (const line of stats) hash.update(line).update('\0')
+      return { version: hash.digest('hex') }
+    } catch {
+      return { version: null }
+    }
   }
   async rename(id: string, input: unknown) {
     const { title } = z.object({ title: z.string().trim().min(1).max(120) }).parse(input)
