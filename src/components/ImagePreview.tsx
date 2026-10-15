@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useState, type MouseEvent } from 'react'
+import { Modal } from './Modal'
 import { ExternalLink, X } from 'lucide-react'
 
 // One preview dialog for every image in the chat. Images open it with openImagePreview(); a
@@ -21,29 +22,22 @@ export function previewOnClick(preview: Preview) {
 
 export function ImagePreview() {
   const [preview, setPreview] = useState<Preview | null>(null)
-  const dialog = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const open = (event: Event) => setPreview((event as CustomEvent<Preview>).detail)
     window.addEventListener(eventName, open)
     return () => window.removeEventListener(eventName, open)
   }, [])
-  useEffect(() => {
-    if (preview && !dialog.current?.open) dialog.current?.showModal()
-  }, [preview])
   if (!preview) return null
-  const close = () => {
-    dialog.current?.close()
-    setPreview(null)
-  }
+  const close = () => setPreview(null)
   return (
-    <dialog
-      ref={dialog}
+    <Modal
       className="image-preview"
-      aria-label={preview.caption || preview.alt}
-      onClose={() => setPreview(null)}
-      // Clicking the dimmed area around the image closes it.
+      backdropClassName="image-preview-backdrop"
+      label={preview.caption || preview.alt}
+      onClose={close}
+      // The image fills the screen, so clicks on the dimmed area around it land in the popup.
       onClick={(event) => {
-        if (event.target === dialog.current || event.target === event.currentTarget.firstChild)
+        if (event.target === event.currentTarget || event.target === event.currentTarget.firstChild)
           close()
       }}
     >
@@ -60,6 +54,6 @@ export function ImagePreview() {
           <X size={16} />
         </button>
       </div>
-    </dialog>
+    </Modal>
   )
 }

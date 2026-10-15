@@ -18,6 +18,9 @@ import { themeLabels, themes, type Theme } from '../theme'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
+import { Modal, ModalTitle } from './Modal'
+import { Segmented, Toggle } from './ui'
+import { Tabs } from '@base-ui/react/tabs'
 import { DictationSettings } from './DictationSettings'
 import {
   desktopPermission,
@@ -131,32 +134,6 @@ export function NotificationPrompt({
   )
 }
 
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  disabled?: boolean
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className="toggle"
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-    >
-      <span />
-    </button>
-  )
-}
-
 // Settings is split into tabs so each page stays short. The last tab is remembered while the
 // page is open; Mac-only tabs are hidden on a paired phone.
 type SettingsTab = 'appearance' | 'notifications' | 'dictation' | 'phone' | 'agents'
@@ -190,11 +167,7 @@ export function SettingsDialog({
   onChange: (preferences: NotificationPreferences) => void
   onClose: () => void
 }) {
-  const dialog = useRef<HTMLDialogElement>(null)
   const [permission, setPermission] = useState<DesktopPermission>(desktopPermission)
-  useEffect(() => {
-    dialog.current?.showModal()
-  }, [])
   async function setDesktop(enabled: boolean) {
     if (!enabled) return onChange({ ...preferences, desktop: false, prompted: true })
     const result = permission === 'granted' ? 'granted' : await requestDesktopPermission()
@@ -210,47 +183,31 @@ export function SettingsDialog({
     setTab(next)
   }
   return (
-    <dialog
-      ref={dialog}
-      className="new-dialog settings-dialog"
-      onCancel={(e) => {
-        e.preventDefault()
-        onClose()
-      }}
-      onClick={(e) => {
-        if (e.target === dialog.current) onClose()
-      }}
-    >
+    <Modal className="new-dialog settings-dialog" onClose={onClose}>
       <div className="settings-body">
         <div className="dialog-top">
-          <h2>Settings</h2>
+          <ModalTitle render={<h2 />}>Settings</ModalTitle>
           <button className="icon-button" aria-label="Close settings" onClick={onClose}>
             <X size={16} />
           </button>
         </div>
-        <div className="settings-layout">
-          <nav
-            className="settings-tabs"
-            role="tablist"
-            aria-label="Settings"
-            aria-orientation="vertical"
-          >
+        <Tabs.Root
+          className="settings-layout"
+          orientation="vertical"
+          value={tab}
+          onValueChange={(next: SettingsTab) => selectTab(next)}
+        >
+          <Tabs.List className="settings-tabs" aria-label="Settings" activateOnFocus>
             {settingsTabs
               .filter((item) => !(remote && item.macOnly))
               .map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === item.id}
-                  onClick={() => selectTab(item.id)}
-                >
+                <Tabs.Tab key={item.id} value={item.id}>
                   {item.icon}
                   {item.label}
-                </button>
+                </Tabs.Tab>
               ))}
-          </nav>
-          <div className="settings-panel" role="tabpanel">
+          </Tabs.List>
+          <Tabs.Panel className="settings-panel" value={tab}>
             {tab === 'appearance' ? (
               <section className="settings-section">
                 <h3>Appearance</h3>
@@ -259,26 +216,26 @@ export function SettingsDialog({
                     <strong>Theme</strong>
                     <small>System follows your computer’s light or dark setting.</small>
                   </div>
-                  <div className="segmented" role="radiogroup" aria-label="Theme">
-                    {themes.map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        role="radio"
-                        aria-checked={theme === item}
-                        onClick={() => onThemeChange(item)}
-                      >
-                        {item === 'light' ? (
-                          <Sun size={12} />
-                        ) : item === 'dark' ? (
-                          <Moon size={12} />
-                        ) : (
-                          <Monitor size={12} />
-                        )}
-                        {themeLabels[item]}
-                      </button>
-                    ))}
-                  </div>
+                  <Segmented
+                    label="Theme"
+                    value={theme}
+                    onChange={onThemeChange}
+                    options={themes.map((item) => ({
+                      value: item,
+                      label: (
+                        <>
+                          {item === 'light' ? (
+                            <Sun size={12} />
+                          ) : item === 'dark' ? (
+                            <Moon size={12} />
+                          ) : (
+                            <Monitor size={12} />
+                          )}
+                          {themeLabels[item]}
+                        </>
+                      ),
+                    }))}
+                  />
                 </div>
               </section>
             ) : null}
@@ -334,22 +291,13 @@ export function SettingsDialog({
                       <strong>Sound style</strong>
                       <small>Click one to hear it.</small>
                     </div>
-                    <div className="segmented" role="radiogroup" aria-label="Sound style">
-                      {sounds.map((sound) => (
-                        <button
-                          key={sound.value}
-                          type="button"
-                          role="radio"
-                          aria-checked={preferences.soundName === sound.value}
-                          onClick={() => {
-                            playSound(sound.value)
-                            onChange({ ...preferences, soundName: sound.value })
-                          }}
-                        >
-                          {sound.label}
-                        </button>
-                      ))}
-                    </div>
+                    <Segmented
+                      label="Sound style"
+                      value={preferences.soundName}
+                      options={sounds}
+                      onChange={(soundName) => onChange({ ...preferences, soundName })}
+                      onOptionClick={playSound}
+                    />
                   </div>
                 ) : null}
               </section>
@@ -388,9 +336,9 @@ export function SettingsDialog({
                 })}
               </section>
             ) : null}
-          </div>
-        </div>
+          </Tabs.Panel>
+        </Tabs.Root>
       </div>
-    </dialog>
+    </Modal>
   )
 }

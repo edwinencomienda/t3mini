@@ -1,13 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Lock,
-  LockOpen,
-  RefreshCw,
-} from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Menu } from '@base-ui/react/menu'
+import { Tabs } from '@base-ui/react/tabs'
+import { Check, ChevronDown, ChevronRight, Lock, LockOpen, RefreshCw } from 'lucide-react'
 import {
   effortLabel,
   permissionModes,
@@ -18,7 +12,7 @@ import type { Provider } from '../types'
 import { ProviderIcon } from './ProviderIcon'
 
 type Option = { value: string; label: string; description?: string; badge?: string }
-// One setting in a DrillMenu: a row on the main view that opens its own list of choices.
+// One setting in the model menu: a row that opens its choices in a submenu.
 type MenuRow = {
   key: string
   label: string
@@ -27,7 +21,7 @@ type MenuRow = {
   value: string
   options: Option[]
   onSelect: (value: string) => void
-  // Close the menu after a pick instead of going back to the main view.
+  // Close the whole menu after a pick instead of just the submenu.
   closeOnSelect?: boolean
   // Shown under the choices, e.g. loading or a retry button.
   footer?: ReactNode
@@ -50,6 +44,62 @@ export type AgentChoice = {
   onChange: (provider: Provider, model?: string) => void
 }
 
+// The menus open above the composer (or below a field) and stay inside the window; Base UI
+// handles focus, keyboard navigation, dismissal, and flipping when there's no room.
+const positioner = (placement: 'up' | 'down') =>
+  ({
+    side: placement === 'up' ? 'top' : 'bottom',
+    align: 'start',
+    sideOffset: 6,
+    collisionPadding: 8,
+  }) as const
+
+// A labelled list of choices with a check on the selected one.
+function OptionList({
+  label,
+  value,
+  options,
+  onSelect,
+  closeOnClick,
+  disabled,
+}: {
+  label: string
+  value: string
+  options: Option[]
+  onSelect: (value: string) => void
+  closeOnClick?: boolean
+  disabled?: boolean
+}) {
+  return (
+    <Menu.RadioGroup
+      value={value}
+      onValueChange={(next: string) => onSelect(next)}
+      disabled={disabled}
+    >
+      <Menu.GroupLabel className="picker-heading">{label}</Menu.GroupLabel>
+      {options.map((option) => (
+        <Menu.RadioItem
+          key={option.value}
+          value={option.value}
+          label={option.label}
+          closeOnClick={closeOnClick}
+        >
+          <span className="picker-option-text">
+            <span>
+              {option.label}
+              {option.badge ? <span className="picker-badge">{option.badge}</span> : null}
+            </span>
+            {option.description ? <small>{option.description}</small> : null}
+          </span>
+          <Menu.RadioItemIndicator className="picker-check">
+            <Check size={14} />
+          </Menu.RadioItemIndicator>
+        </Menu.RadioItem>
+      ))}
+    </Menu.RadioGroup>
+  )
+}
+
 export function Picker({
   label,
   icon,
@@ -60,11 +110,9 @@ export function Picker({
   disabled,
   placement,
   tone,
-  footer,
+  action,
   variant = 'default',
   trigger,
-  header,
-  onOpenChange,
 }: {
   label: string
   icon?: ReactNode
@@ -73,64 +121,21 @@ export function Picker({
   variant?: 'default' | 'pill' | 'round'
   // Custom button content instead of icon + text + chevron.
   trigger?: ReactNode
-  // Shown above the options (e.g. provider tabs).
-  header?: ReactNode
-  onOpenChange?: (open: boolean) => void
   value: string
   options: Option[]
   onSelect: (value: string) => void
   disabled?: boolean
   placement: 'up' | 'down'
   tone?: 'warning'
-  footer?: ReactNode
+  // An extra item under the choices, e.g. "Add project…".
+  action?: { label: string; icon: ReactNode; onSelect: () => void }
 }) {
-  const [open, setOpen] = useState(false)
-  const root = useRef<HTMLDivElement>(null)
-  const list = useRef<HTMLDivElement>(null)
-  const openChange = useRef(onOpenChange)
-  openChange.current = onOpenChange
-  useEffect(() => openChange.current?.(open), [open])
-  useEffect(() => {
-    if (!open) return
-    const close = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    // Focus the selected option, not header controls like the provider tabs.
-    ;(
-      list.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
-      list.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"], button')
-    )?.focus()
-    return () => document.removeEventListener('pointerdown', close)
-  }, [open])
-  useEffect(() => {
-    if (disabled) setOpen(false)
-  }, [disabled])
-  function move(event: React.KeyboardEvent) {
-    const items = [...(list.current?.querySelectorAll<HTMLButtonElement>('button') || [])]
-    const index = items.indexOf(document.activeElement as HTMLButtonElement)
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      setOpen(false)
-      root.current?.querySelector<HTMLButtonElement>('.picker-trigger')?.focus()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      items[(index + step + items.length) % items.length]?.focus()
-    } else if (event.key === 'Tab') setOpen(false)
-  }
   return (
-    <div className="picker" ref={root} onKeyDown={open ? move : undefined}>
-      <button
-        type="button"
+    <Menu.Root disabled={disabled}>
+      <Menu.Trigger
         className={`picker-trigger ${variant} ${tone || ''}`}
         aria-label={`${label}: ${text}`}
         title={variant === 'round' ? `${label}: ${text}` : undefined}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen(!open)}
       >
         {trigger ?? (
           <>
@@ -139,64 +144,33 @@ export function Picker({
             <ChevronDown size={12} className="picker-chevron" />
           </>
         )}
-      </button>
-      {open ? (
-        <div className={`picker-menu ${placement}`} role="menu" aria-label={label} ref={list}>
-          {header}
-          <div className="picker-heading">{label}</div>
-          {options.map((option) => (
-            <OptionButton
-              key={option.value}
-              option={option}
-              checked={option.value === value}
-              onClick={() => {
-                onSelect(option.value)
-                setOpen(false)
-              }}
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner className="picker-positioner" {...positioner(placement)}>
+          <Menu.Popup className="picker-menu" aria-label={label}>
+            <OptionList
+              label={label}
+              value={value}
+              options={options}
+              onSelect={onSelect}
+              closeOnClick
             />
-          ))}
-          {footer}
-        </div>
-      ) : null}
-    </div>
+            {action ? (
+              <Menu.Item className="picker-footer-action" onClick={action.onSelect}>
+                {action.icon}
+                {action.label}
+              </Menu.Item>
+            ) : null}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   )
 }
 
-function OptionButton({
-  option,
-  checked,
-  disabled,
-  onClick,
-}: {
-  option: Option
-  checked: boolean
-  disabled?: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <span className="picker-option-text">
-        <span>
-          {option.label}
-          {option.badge ? <span className="picker-badge">{option.badge}</span> : null}
-        </span>
-        {option.description ? <small>{option.description}</small> : null}
-      </span>
-      {checked ? <Check size={14} /> : null}
-    </button>
-  )
-}
-
-// A menu of settings rows (Model, Effort…). Hovering or clicking a row opens its choices in a
-// submenu beside the menu (on top of it, with a back button, when there's no room beside it).
-// Picking a choice closes the submenu but keeps the menu open, so the next setting is one hover
-// away.
+// The model menu: rows for Model, Effort… that open their choices in a submenu on hover or
+// click. Picking a choice closes the submenu but keeps the menu open, so the next setting is
+// one hover away.
 function SettingsMenu({
   label,
   text,
@@ -224,220 +198,69 @@ function SettingsMenu({
   onOpenChange?: (open: boolean) => void
 }) {
   const [open, setOpen] = useState(false)
-  // The row whose submenu is open; focus moves into it when opened by click or keyboard.
-  const [active, setActive] = useState<{ key: string; focus: boolean }>()
-  const [position, setPosition] = useState<{
-    key: string
-    top: number
-    left: number
-    // No room beside the menu (phones): the submenu covers it instead.
-    overlay?: { width: number }
-  }>()
-  const root = useRef<HTMLDivElement>(null)
-  const menu = useRef<HTMLDivElement>(null)
-  const submenu = useRef<HTMLDivElement>(null)
-  const hover = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const openChange = useRef(onOpenChange)
-  openChange.current = onOpenChange
-  const row = open ? rows.find((item) => item.key === active?.key) : undefined
-  const placed = position?.key === row?.key ? position : undefined
-  const rowButton = (key?: string) =>
-    menu.current?.querySelector<HTMLButtonElement>(`[data-row="${key}"]`)
+  const [submenu, setSubmenu] = useState<string | null>(null)
+  const change = (next: boolean) => {
+    setOpen(next)
+    if (!next) setSubmenu(null)
+    onOpenChange?.(next)
+  }
   useEffect(() => {
-    openChange.current?.(open)
-    if (!open) setActive(undefined)
-    else rowButton(rows[0]?.key)?.focus()
-    // Only on open/close; rows change while the menu is open.
+    // An agent started working: close, like the other controls.
+    if (disabled) change(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-  useEffect(() => {
-    if (!open) return
-    const close = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    return () => {
-      document.removeEventListener('pointerdown', close)
-      clearTimeout(hover.current)
-    }
-  }, [open])
-  useEffect(() => {
-    if (disabled) setOpen(false)
   }, [disabled])
-  // Place the submenu next to its row, kept inside the window.
-  useLayoutEffect(() => {
-    const item = rowButton(row?.key),
-      panel = menu.current,
-      sub = submenu.current,
-      box = root.current?.getBoundingClientRect()
-    if (!row || !item || !panel || !sub || !box) return
-    const margin = 8,
-      gap = 4
-    const bounds = panel.getBoundingClientRect(),
-      size = sub.getBoundingClientRect()
-    const left =
-      bounds.right + gap + size.width <= window.innerWidth - margin
-        ? bounds.right + gap
-        : bounds.left - gap - size.width >= margin
-          ? bounds.left - gap - size.width
-          : undefined
-    // Line the first choice up with the row (the submenu has a little padding on top).
-    const top = Math.max(
-      margin,
-      Math.min(
-        left === undefined ? bounds.top : item.getBoundingClientRect().top - 5,
-        window.innerHeight - margin - size.height,
-      ),
-    )
-    setPosition({
-      key: row.key,
-      top: top - box.top,
-      left: (left ?? bounds.left) - box.left,
-      ...(left === undefined ? { overlay: { width: bounds.width } } : {}),
-    })
-  }, [row?.key, row?.options.length, Boolean(row?.footer)])
-  useEffect(() => {
-    if (!placed || !active?.focus) return
-    ;(
-      submenu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
-      submenu.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"]')
-    )?.focus()
-  }, [placed, active])
-  const back = () => {
-    const key = row?.key
-    setActive(undefined)
-    rowButton(key)?.focus()
-  }
-  function keys(event: React.KeyboardEvent) {
-    const focused = document.activeElement as HTMLElement
-    const inSubmenu = Boolean(submenu.current?.contains(focused))
-    const items = [
-      ...((inSubmenu ? submenu : menu).current?.querySelectorAll<HTMLButtonElement>(
-        'button:not(:disabled)',
-      ) || []),
-    ]
-    const index = items.indexOf(focused as HTMLButtonElement)
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      if (row) back()
-      else {
-        setOpen(false)
-        root.current?.querySelector<HTMLButtonElement>('.picker-trigger')?.focus()
-      }
-    } else if (event.key === 'ArrowLeft' && inSubmenu) {
-      event.preventDefault()
-      back()
-    } else if (event.key === 'ArrowRight' && !inSubmenu && focused.dataset.row) {
-      event.preventDefault()
-      setActive({ key: focused.dataset.row, focus: true })
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      items[(index + step + items.length) % items.length]?.focus()
-    } else if (event.key === 'Tab') setOpen(false)
-  }
   return (
-    <div className="picker" ref={root} onKeyDown={open ? keys : undefined}>
-      <button
-        type="button"
-        className="picker-trigger pill"
-        aria-label={`${label}: ${text}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen(!open)}
-      >
+    <Menu.Root open={open} onOpenChange={change} disabled={disabled}>
+      <Menu.Trigger className="picker-trigger pill" aria-label={`${label}: ${text}`}>
         {trigger}
-      </button>
-      {open ? (
-        <div
-          className={`picker-menu settings ${placement}`}
-          role="menu"
-          aria-label={label}
-          ref={menu}
-        >
-          {header}
-          {rows.map((item) => (
-            <button
-              type="button"
-              role="menuitem"
-              aria-haspopup="menu"
-              aria-expanded={row?.key === item.key}
-              className="picker-row"
-              data-row={item.key}
-              key={item.key}
-              onPointerEnter={(event) => {
-                // Touch taps also fire pointerenter; those open on click instead.
-                if (event.pointerType !== 'mouse') return
-                event.currentTarget.focus({ preventScroll: true })
-                clearTimeout(hover.current)
-                if (row?.key === item.key) return
-                // Swapping an open submenu waits a moment, so heading diagonally into it
-                // across another row doesn't replace it.
-                hover.current = setTimeout(
-                  () => setActive({ key: item.key, focus: false }),
-                  row ? 150 : 0,
-                )
-              }}
-              onPointerLeave={() => clearTimeout(hover.current)}
-              onClick={() => {
-                clearTimeout(hover.current)
-                setActive({ key: item.key, focus: true })
-              }}
-            >
-              <span className="picker-row-label">{item.label}</span>
-              <span className="picker-row-value">{item.text}</span>
-              <ChevronRight size={14} />
-            </button>
-          ))}
-          {note}
-        </div>
-      ) : null}
-      {row ? (
-        <div
-          className="picker-menu picker-submenu"
-          role="menu"
-          aria-label={row.label}
-          ref={submenu}
-          style={{
-            top: placed?.top ?? 0,
-            left: placed?.left ?? 0,
-            minWidth: placed?.overlay?.width,
-            visibility: placed ? undefined : 'hidden',
-          }}
-          onPointerEnter={() => clearTimeout(hover.current)}
-        >
-          {placed?.overlay ? (
-            <button
-              type="button"
-              className="picker-back"
-              aria-label={`Back to ${label.toLowerCase()} settings`}
-              onClick={back}
-            >
-              <ChevronLeft size={14} />
-              {row.label}
-            </button>
-          ) : (
-            <div className="picker-heading">{row.label}</div>
-          )}
-          {row.options.map((option) => (
-            <OptionButton
-              key={option.value}
-              option={option}
-              checked={option.value === row.value}
-              disabled={busy}
-              onClick={() => {
-                row.onSelect(option.value)
-                if (row.closeOnSelect) setOpen(false)
-                else back()
-              }}
-            />
-          ))}
-          {row.footer}
-        </div>
-      ) : null}
-    </div>
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner className="picker-positioner" {...positioner(placement)}>
+          <Menu.Popup className="picker-menu settings" aria-label={label}>
+            {header}
+            {rows.map((row) => (
+              <Menu.SubmenuRoot
+                key={row.key}
+                open={submenu === row.key}
+                onOpenChange={(next) =>
+                  setSubmenu((current) => (next ? row.key : current === row.key ? null : current))
+                }
+              >
+                <Menu.SubmenuTrigger className="picker-row" label={row.label} openOnHover>
+                  <span className="picker-row-label">{row.label}</span>
+                  <span className="picker-row-value">{row.text}</span>
+                  <ChevronRight size={14} />
+                </Menu.SubmenuTrigger>
+                <Menu.Portal>
+                  <Menu.Positioner
+                    className="picker-positioner"
+                    sideOffset={4}
+                    alignOffset={-5}
+                    collisionPadding={8}
+                  >
+                    <Menu.Popup className="picker-menu picker-submenu" aria-label={row.label}>
+                      <OptionList
+                        label={row.label}
+                        value={row.value}
+                        options={row.options}
+                        disabled={busy}
+                        onSelect={(value) => {
+                          row.onSelect(value)
+                          if (row.closeOnSelect) change(false)
+                          else setSubmenu(null)
+                        }}
+                      />
+                      {row.footer}
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.SubmenuRoot>
+            ))}
+            {note}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   )
 }
 
@@ -617,7 +440,14 @@ export function AgentSettingsControls({
                 text: effortOptions.find((item) => item.value === value.effort)?.label ?? 'Default',
                 value: value.effort,
                 options: effortOptions,
-                onSelect: (effort: string) => onChange({ ...value, effort }),
+                // The server needs a model for an effort, so with Provider default this
+                // selects the default model whose levels are listed.
+                onSelect: (effort: string) =>
+                  onChange({
+                    ...value,
+                    model: value.model || (effort ? (effective?.id ?? '') : ''),
+                    effort,
+                  }),
               },
             ]
           : []),
@@ -664,31 +494,30 @@ export function AgentSettingsControls({
         }}
         header={
           agent ? (
-            <div className="picker-tabs" role="tablist" aria-label="Agent">
-              {(['claude', 'codex'] as const).map((item) => {
-                const blocked = item !== provider && !canSwitch
-                return (
-                  <button
-                    key={item}
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === item}
-                    disabled={blocked}
-                    title={
-                      blocked
-                        ? `Start a new thread to use ${providerNames[item]}.`
-                        : !agent.installed[item]
-                          ? `${providerNames[item]} CLI not found`
-                          : undefined
-                    }
-                    onClick={() => setTab(item)}
-                  >
-                    <ProviderMark provider={item} size={12} />
-                    {providerNames[item]}
-                  </button>
-                )
-              })}
-            </div>
+            <Tabs.Root value={tab} onValueChange={(next: Provider) => setTab(next)}>
+              <Tabs.List className="picker-tabs" aria-label="Agent">
+                {(['claude', 'codex'] as const).map((item) => {
+                  const blocked = item !== provider && !canSwitch
+                  return (
+                    <Tabs.Tab
+                      key={item}
+                      value={item}
+                      disabled={blocked}
+                      title={
+                        blocked
+                          ? `Start a new thread to use ${providerNames[item]}.`
+                          : !agent.installed[item]
+                            ? `${providerNames[item]} CLI not found`
+                            : undefined
+                      }
+                    >
+                      <ProviderMark provider={item} size={12} />
+                      {providerNames[item]}
+                    </Tabs.Tab>
+                  )
+                })}
+              </Tabs.List>
+            </Tabs.Root>
           ) : null
         }
         note={

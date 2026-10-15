@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, RotateCw, ScrollText, Square, Terminal, X } from 'lucide-react'
 import type { ProcessInfo } from '../server/processes'
+import { Popover } from '@base-ui/react/popover'
+import { Modal, ModalTitle } from './Modal'
 
 // The "● 2 running" indicator under the composer for the open project's processes, a list of
 // them with Logs / Restart / Stop, and a live log viewer.
@@ -36,12 +38,8 @@ const statusLabel = (info: ProcessInfo) =>
 function LogViewer({ process, onClose }: { process: ProcessInfo; onClose: () => void }) {
   const [logs, setLogs] = useState('')
   const [error, setError] = useState('')
-  const dialog = useRef<HTMLDialogElement>(null)
   const output = useRef<HTMLPreElement>(null)
   const follow = useRef(true)
-  useEffect(() => {
-    dialog.current?.showModal()
-  }, [])
   // Poll while open (only one process's output, every second).
   useEffect(() => {
     let cancelled = false
@@ -65,21 +63,11 @@ function LogViewer({ process, onClose }: { process: ProcessInfo; onClose: () => 
     if (element && follow.current) element.scrollTop = element.scrollHeight
   }, [logs])
   return (
-    <dialog
-      ref={dialog}
-      className="new-dialog process-logs"
-      onCancel={(event) => {
-        event.preventDefault()
-        onClose()
-      }}
-      onClick={(event) => {
-        if (event.target === dialog.current) onClose()
-      }}
-    >
+    <Modal className="new-dialog process-logs" onClose={onClose}>
       <div className="dialog-top">
-        <h2>
+        <ModalTitle render={<h2 />}>
           {process.name} <small>{statusLabel(process)}</small>
-        </h2>
+        </ModalTitle>
         <button type="button" className="icon-button" aria-label="Close logs" onClick={onClose}>
           <X size={16} />
         </button>
@@ -96,7 +84,7 @@ function LogViewer({ process, onClose }: { process: ProcessInfo; onClose: () => 
       >
         {logs || (error ? error : 'No output yet.')}
       </pre>
-    </dialog>
+    </Modal>
   )
 }
 
@@ -113,18 +101,10 @@ export function ProcessIndicator({
   const [viewing, setViewing] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [now, setNow] = useState(() => Date.now())
-  const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
-    const close = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    return () => {
-      clearInterval(timer)
-      document.removeEventListener('pointerdown', close)
-    }
+    return () => clearInterval(timer)
   }, [open])
   if (!mine.length) return null
   const act = (path: string, method?: string) =>
@@ -134,90 +114,97 @@ export function ProcessIndicator({
     )
   const viewed = mine.find((info) => info.id === viewing)
   return (
-    <div className="process-indicator" ref={root}>
-      <button
-        type="button"
-        className={`process-chip ${running.length ? 'running' : ''}`}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        title="Processes in this project"
-      >
-        <span className="process-dot" />
-        {running.length ? `${running.length} running` : `${mine.length} finished`}
-      </button>
-      {open ? (
-        <div className="process-menu" role="dialog" aria-label="Processes">
-          <div className="picker-heading">Processes in this project</div>
-          {mine.map((info) => {
-            const live = info.status === 'running' || info.status === 'stopping'
-            return (
-              <div className={`process-row ${info.status}`} key={info.id}>
-                <div className="process-main">
-                  <span className="process-name">
-                    <Terminal size={12} />
-                    {info.name}
-                  </span>
-                  <span className="process-meta">
-                    {statusLabel(info)}
-                    {live ? ` · ${since(info.startedAt, now)}` : ''}
-                  </span>
-                  <code title={info.command}>{info.command}</code>
-                  {info.url && live ? (
-                    <a href={info.url} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink size={11} />
-                      {info.url}
-                    </a>
-                  ) : null}
-                </div>
-                <div className="process-actions">
-                  <button
-                    type="button"
-                    className="icon-button"
-                    title="Logs"
-                    aria-label={`Logs for ${info.name}`}
-                    onClick={() => setViewing(info.id)}
-                  >
-                    <ScrollText size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    title="Restart"
-                    aria-label={`Restart ${info.name}`}
-                    disabled={info.status === 'stopping'}
-                    onClick={() => void act(`${info.id}/restart`)}
-                  >
-                    <RotateCw size={14} />
-                  </button>
-                  {live ? (
-                    <button
-                      type="button"
-                      className="icon-button"
-                      title="Stop"
-                      aria-label={`Stop ${info.name}`}
-                      disabled={info.status === 'stopping'}
-                      onClick={() => void act(`${info.id}/stop`)}
-                    >
-                      <Square size={12} fill="currentColor" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="icon-button"
-                      title="Remove from list"
-                      aria-label={`Remove ${info.name}`}
-                      onClick={() => void act(info.id, 'DELETE')}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-          {error ? <p className="phone-error">{error}</p> : null}
-        </div>
-      ) : null}
+    <div className="process-indicator">
+      <Popover.Root open={open} onOpenChange={setOpen}>
+        <Popover.Trigger
+          className={`process-chip ${running.length ? 'running' : ''}`}
+          title="Processes in this project"
+        >
+          <span className="process-dot" />
+          {running.length ? `${running.length} running` : `${mine.length} finished`}
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Positioner
+            className="picker-positioner"
+            side="top"
+            align="end"
+            sideOffset={6}
+            collisionPadding={8}
+          >
+            <Popover.Popup className="process-menu" aria-label="Processes">
+              <Popover.Title className="picker-heading">Processes in this project</Popover.Title>
+              {mine.map((info) => {
+                const live = info.status === 'running' || info.status === 'stopping'
+                return (
+                  <div className={`process-row ${info.status}`} key={info.id}>
+                    <div className="process-main">
+                      <span className="process-name">
+                        <Terminal size={12} />
+                        {info.name}
+                      </span>
+                      <span className="process-meta">
+                        {statusLabel(info)}
+                        {live ? ` · ${since(info.startedAt, now)}` : ''}
+                      </span>
+                      <code title={info.command}>{info.command}</code>
+                      {info.url && live ? (
+                        <a href={info.url} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink size={11} />
+                          {info.url}
+                        </a>
+                      ) : null}
+                    </div>
+                    <div className="process-actions">
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="Logs"
+                        aria-label={`Logs for ${info.name}`}
+                        onClick={() => setViewing(info.id)}
+                      >
+                        <ScrollText size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        title="Restart"
+                        aria-label={`Restart ${info.name}`}
+                        disabled={info.status === 'stopping'}
+                        onClick={() => void act(`${info.id}/restart`)}
+                      >
+                        <RotateCw size={14} />
+                      </button>
+                      {live ? (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title="Stop"
+                          aria-label={`Stop ${info.name}`}
+                          disabled={info.status === 'stopping'}
+                          onClick={() => void act(`${info.id}/stop`)}
+                        >
+                          <Square size={12} fill="currentColor" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title="Remove from list"
+                          aria-label={`Remove ${info.name}`}
+                          onClick={() => void act(info.id, 'DELETE')}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+              {error ? <p className="phone-error">{error}</p> : null}
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
       {viewed ? <LogViewer process={viewed} onClose={() => setViewing(null)} /> : null}
     </div>
   )

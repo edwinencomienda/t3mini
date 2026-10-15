@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
+import { Menu } from '@base-ui/react/menu'
 
 export type MenuPosition = { x: number; y: number }
 export type MenuItem =
@@ -12,7 +13,8 @@ export type MenuItem =
     }
   | 'separator'
 
-// Right-click menu, positioned at the pointer and kept inside the viewport.
+// Right-click (or ⋮) menu at the pointer. Base UI's Menu handles focus, keyboard navigation,
+// dismissal, and keeping it inside the window; it's anchored to a zero-size point.
 export function ContextMenu({
   position,
   label,
@@ -24,79 +26,51 @@ export function ContextMenu({
   items: MenuItem[]
   onClose: () => void
 }) {
-  const root = useRef<HTMLDivElement>(null)
-  const [style, setStyle] = useState({ left: position.x, top: position.y })
-  useLayoutEffect(() => {
-    const element = root.current
-    if (!element) return
-    const { width, height } = element.getBoundingClientRect()
-    setStyle({
-      left: Math.max(8, Math.min(position.x, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(position.y, window.innerHeight - height - 8)),
-    })
-    element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-  }, [position])
-  useEffect(() => {
-    const close = (event: Event) => {
-      if (!(event.target instanceof Node && root.current?.contains(event.target))) onClose()
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('pointerdown', close)
-    document.addEventListener('scroll', close, true)
-    window.addEventListener('blur', onClose)
-    window.addEventListener('resize', onClose)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', close)
-      document.removeEventListener('scroll', close, true)
-      window.removeEventListener('blur', onClose)
-      window.removeEventListener('resize', onClose)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
-  function move(event: React.KeyboardEvent) {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-    event.preventDefault()
-    const buttons = [
-      ...(root.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []),
-    ]
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-    const step = event.key === 'ArrowDown' ? 1 : -1
-    buttons[(index + step + buttons.length) % buttons.length]?.focus()
-  }
+  const anchor = useMemo(
+    () => ({ getBoundingClientRect: () => DOMRect.fromRect({ ...position, width: 0, height: 0 }) }),
+    [position],
+  )
   return (
-    <div
-      ref={root}
-      className="context-menu"
-      role="menu"
-      aria-label={label}
-      style={style}
-      onKeyDown={move}
-      onContextMenu={(event) => event.preventDefault()}
+    <Menu.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
     >
-      {items.map((item, index) =>
-        item === 'separator' ? (
-          <div className="context-menu-separator" role="separator" key={index} />
-        ) : (
-          <button
-            key={item.label}
-            role="menuitem"
-            className={item.danger ? 'danger' : undefined}
-            disabled={item.disabled}
-            title={item.title}
-            onClick={() => {
-              onClose()
-              item.onSelect()
-            }}
+      <Menu.Portal>
+        <Menu.Positioner
+          className="context-menu-positioner"
+          anchor={anchor}
+          side="bottom"
+          align="start"
+          collisionPadding={8}
+        >
+          <Menu.Popup
+            className="context-menu"
+            aria-label={label}
+            onContextMenu={(event) => event.preventDefault()}
           >
-            {item.icon}
-            {item.label}
-          </button>
-        ),
-      )}
-    </div>
+            {items.map((item, index) =>
+              item === 'separator' ? (
+                <Menu.Separator className="context-menu-separator" key={index} />
+              ) : (
+                <Menu.Item
+                  key={item.label}
+                  className={item.danger ? 'danger' : undefined}
+                  disabled={item.disabled}
+                  title={item.title}
+                  label={item.label}
+                  onClick={() => item.onSelect()}
+                >
+                  {item.icon}
+                  {item.label}
+                </Menu.Item>
+              ),
+            )}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   )
 }
 

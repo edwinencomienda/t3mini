@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Mic } from 'lucide-react'
+import { Check, ChevronsUpDown, Mic } from 'lucide-react'
+import { Select } from '@base-ui/react/select'
 import { dictationSupported, loadMicrophone, saveMicrophone } from './Dictation'
 
 // Which microphone dictation records from. Browsers only reveal device names after the page
@@ -63,23 +64,37 @@ function MicrophonePicker() {
           </small>
         </div>
         {named ? (
-          // A native select: its list is drawn by the browser, so the scrolling settings panel
-          // can't clip it.
-          <select
-            className="mic-select"
-            aria-label="Microphone"
+          // The list is portaled, so the scrolling settings panel can't clip it.
+          <Select.Root
+            items={options}
             value={selected}
-            onChange={(event) => {
-              saveMicrophone(event.target.value)
-              setSelected(event.target.value)
+            onValueChange={(value: string | null) => {
+              const next = value ?? ''
+              saveMicrophone(next)
+              setSelected(next)
             }}
           >
-            {options.map((option) => (
-              <option key={option.value || 'default'} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            <Select.Trigger className="mic-select" aria-label="Microphone">
+              <Select.Value className="mic-select-value" />
+              <Select.Icon className="mic-select-icon">
+                <ChevronsUpDown size={13} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner className="picker-positioner" sideOffset={4} collisionPadding={8}>
+                <Select.Popup className="picker-menu mic-select-menu">
+                  {options.map((option) => (
+                    <Select.Item key={option.value} value={option.value} className="mic-option">
+                      <Select.ItemText>{option.label}</Select.ItemText>
+                      <Select.ItemIndicator className="picker-check">
+                        <Check size={14} />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  ))}
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
         ) : (
           <button className="secondary" type="button" onClick={() => void allow()}>
             <Mic size={13} />

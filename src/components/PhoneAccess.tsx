@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, ShieldAlert, Smartphone, Trash2 } from 'lucide-react'
+import { Segmented, Toggle } from './ui'
 
 type Device = { id: string; name: string; createdAt: string; lastSeenAt: string; expiresAt: string }
 type Status = { enabled: boolean; port: number; addresses: string[]; devices: Device[] }
@@ -85,17 +86,12 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
             server restarts.
           </small>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={Boolean(status?.enabled)}
-          aria-label="Allow phones on this network"
-          className="toggle"
+        <Toggle
+          label="Allow phones on this network"
+          checked={Boolean(status?.enabled)}
           disabled={!status || busy}
-          onClick={() => void toggle(!status?.enabled)}
-        >
-          <span />
-        </button>
+          onChange={(enabled) => void toggle(enabled)}
+        />
       </div>
       {status?.enabled ? (
         <>
@@ -124,19 +120,15 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
                     : 'This code expired.'}
                 </small>
                 {pairing.links.length > 1 ? (
-                  <div className="segmented" role="radiogroup" aria-label="Network address">
-                    {pairing.links.map((item, index) => (
-                      <button
-                        key={item.url}
-                        type="button"
-                        role="radio"
-                        aria-checked={index === selected}
-                        onClick={() => setSelected(index)}
-                      >
-                        {new URL(item.url).hostname}
-                      </button>
-                    ))}
-                  </div>
+                  <Segmented
+                    label="Network address"
+                    value={String(selected)}
+                    onChange={(index) => setSelected(Number(index))}
+                    options={pairing.links.map((item, index) => ({
+                      value: String(index),
+                      label: new URL(item.url).hostname,
+                    }))}
+                  />
                 ) : null}
                 <code className="phone-url">{new URL(link.url).host}</code>
                 <button

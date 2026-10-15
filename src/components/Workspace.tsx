@@ -73,6 +73,7 @@ import { ProcessIndicator } from './Processes'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
+import { Modal, ModalTitle } from './Modal'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -766,7 +767,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
       const element = composer.current
       if (!element || element.disabled || newThreadProject !== null || addProject) return false
       if (!(target instanceof HTMLElement)) return true
-      return !target.closest('input, textarea, select, [contenteditable], dialog, [role="menu"]')
+      return !target.closest(
+        'input, textarea, select, [contenteditable], [role="dialog"], [role="menu"]',
+      )
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return
@@ -958,7 +961,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (
       focused instanceof HTMLElement &&
       focused !== document.body &&
-      focused.closest('dialog, [role="menu"], .thread-rename')
+      focused.closest('[role="dialog"], [role="menu"], .thread-rename')
     )
       return
     const element = composer.current
@@ -2143,10 +2146,6 @@ function NewThread({
   const [cwd, setCwd] = useState(initialProject)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const dialog = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    dialog.current?.showModal()
-  }, [])
   async function create(event: FormEvent) {
     event.preventDefault()
     if (busy) return
@@ -2172,20 +2171,15 @@ function NewThread({
     description: path,
   }))
   return (
-    <dialog
-      ref={dialog}
+    <Modal
       className="new-dialog"
-      onCancel={(e) => {
-        e.preventDefault()
+      onClose={() => {
         if (!busy) onClose()
-      }}
-      onClick={(e) => {
-        if (e.target === dialog.current && !busy) onClose()
       }}
     >
       <form onSubmit={create}>
         <div className="dialog-top">
-          <h2>New thread</h2>
+          <ModalTitle render={<h2 />}>New thread</ModalTitle>
           <button
             className="icon-button"
             type="button"
@@ -2207,12 +2201,11 @@ function NewThread({
             disabled={busy}
             placement="down"
             onSelect={setCwd}
-            footer={
-              <button type="button" className="picker-footer-action" onClick={onAddProject}>
-                <FolderPlus size={14} />
-                Add project…
-              </button>
-            }
+            action={{
+              label: 'Add project…',
+              icon: <FolderPlus size={14} />,
+              onSelect: onAddProject,
+            }}
           />
           <small className="field-hint" title={cwd}>
             {cwd}
@@ -2232,7 +2225,7 @@ function NewThread({
           </button>
         </div>
       </form>
-    </dialog>
+    </Modal>
   )
 }
 function AddProject({
@@ -2251,10 +2244,6 @@ function AddProject({
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [picking, setPicking] = useState(false)
-  const dialog = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    dialog.current?.showModal()
-  }, [])
   async function browse() {
     setPicking(true)
     setError('')
@@ -2280,20 +2269,15 @@ function AddProject({
     }
   }
   return (
-    <dialog
-      ref={dialog}
+    <Modal
       className="new-dialog"
-      onCancel={(e) => {
-        e.preventDefault()
+      onClose={() => {
         if (!busy && !picking) onClose()
-      }}
-      onClick={(e) => {
-        if (e.target === dialog.current && !busy && !picking) onClose()
       }}
     >
       <form onSubmit={add}>
         <div className="dialog-top">
-          <h2>Add project</h2>
+          <ModalTitle render={<h2 />}>Add project</ModalTitle>
           <button
             className="icon-button"
             type="button"
@@ -2350,6 +2334,6 @@ function AddProject({
           </button>
         </div>
       </form>
-    </dialog>
+    </Modal>
   )
 }

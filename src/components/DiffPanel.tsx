@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react'
 import { splitRows, type DiffFile, type DiffLine, type DiffResult } from '../diff'
+import { Segmented } from './ui'
 
 export type DiffView = 'inline' | 'split'
 const viewKey = 't3-mini:diff-view'
@@ -327,19 +328,15 @@ export const DiffPanel = memo(function DiffPanel({
           </span>
         ) : null}
         <div className="diff-header-actions">
-          <div className="segmented" role="radiogroup" aria-label="Diff view">
-            {(['inline', 'split'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="radio"
-                aria-checked={view === item}
-                onClick={() => changeView(item)}
-              >
-                {item === 'inline' ? 'Inline' : 'Split'}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            label="Diff view"
+            value={view}
+            onChange={changeView}
+            options={[
+              { value: 'inline', label: 'Inline' },
+              { value: 'split', label: 'Split' },
+            ]}
+          />
           <button
             className="icon-button"
             aria-label={anyOpen ? 'Collapse all files' : 'Expand all files'}
