@@ -216,6 +216,17 @@ export const runCodex: Runner = async (ctx) => {
     if (!threadId) throw new Error('Codex returned no thread ID.')
     ctx.session(threadId)
     ctx.signal.throwIfAborted()
+    // Editing a stopped turn: drop it (and anything after) from Codex's history first. If Codex
+    // can't, the edit still goes out, as a follow-up, and the service notes that.
+    if (ctx.rewind?.codexTurn && ctx.thread.sessionId) {
+      try {
+        await client.request('thread/revert', { threadId, beforeTurnId: ctx.rewind.codexTurn })
+        ctx.rewound?.(true)
+      } catch {
+        ctx.rewound?.(false)
+      }
+      ctx.signal.throwIfAborted()
+    }
     const resultTurn = object(
       await client.request('turn/start', {
         threadId,
@@ -233,6 +244,7 @@ export const runCodex: Runner = async (ctx) => {
       }),
     )
     turnId = string(object(resultTurn.turn).id)
+    if (turnId) ctx.turnStarted?.(turnId)
     // Messages sent while this turn runs go into it with turn/steer. If Codex refuses (the turn
     // just ended, or can't take steering right now), the service queues them as the next turn.
     ctx.onSteer?.(async ({ prompt, images }) => {

@@ -584,3 +584,163 @@ it("lets a thread's tools manage only its own project's processes", async () => 
     vi.unstubAllEnvs()
   }
 })
+
+describe('editing the last message after a stop', () => {
+  // A fake agent that hands each turn's context to the test and waits to be told how it ends.
+  let turns: { ctx: ProviderContext; end: (error?: Error) => void }[]
+  let nextTurn: () => Promise<{ ctx: ProviderContext; end: (error?: Error) => void }>
+  let editService: AgentService
+  const scripted =
+    (onRun?: (ctx: ProviderContext) => void): Runner =>
+    (ctx) =>
+      new Promise<void>((resolve, fail) => {
+        onRun?.(ctx)
+        ctx.session(ctx.thread.sessionId ?? 'session-1')
+        const turn = { ctx, end: (error?: Error) => (error ? fail(error) : resolve()) }
+        ctx.signal.addEventListener('abort', () => fail(new Error('Stopped')), { once: true })
+        turns.push(turn)
+      })
+  const setup = (runner: Runner) => {
+    turns = []
+    editService = new AgentService(new ThreadStore(join(directory, 'edit-threads.json')), {
+      codex: runner,
+      claude: runner,
+    })
+    // Turns are handed out in order, whether they started before or after the call.
+    let taken = 0
+    nextTurn = async () => {
+      while (turns.length <= taken) await new Promise((resolve) => setTimeout(resolve, 1))
+      return turns[taken++]
+    }
+  }
+  const finishTurn = async (id: string, end: () => void) => {
+    const done = new Promise<void>((resolve) => {
+      const unsubscribe = editService.subscribe(() => {
+        if (!['starting', 'working', 'waiting'].includes(editService.get(id).status)) {
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+    end()
+    await done
+  }
+  afterEach(() => editService?.close())
+
+  it('rewinds Claude to before the stopped turn and replaces the message', async () => {
+    setup(scripted())
+    const created = await editService.create({ provider: 'claude', cwd: directory })
+    // Turn 1 completes; its last conversation entry is where a rewind resumes.
+    await editService.send(created.id, { text: 'First' })
+    const first = await nextTurn()
+    first.ctx.entry?.('entry-1')
+    first.ctx.text('a1', 'Done')
+    await finishTurn(created.id, () => first.end())
+    // Turn 2 is stopped part-way.
+    await editService.send(created.id, { text: 'Second, wrong' })
+    const second = await nextTurn()
+    second.ctx.entry?.('entry-2')
+    second.ctx.text('a2', 'Half an answer')
+    await editService.stop(created.id)
+    const target = editService.get(created.id).messages.at(-2)!
+    expect(target.text).toBe('Second, wrong')
+    expect(target.turn).toEqual({ claudeResumeAt: 'entry-1', claudePrompt: second.ctx.promptId })
+
+    await editService.edit(created.id, { messageId: target.id, text: 'Second, fixed' })
+    const third = await nextTurn()
+    expect(third.ctx.rewind).toEqual(target.turn)
+    expect(third.ctx.prompt).toBe('Second, fixed')
+    // The stopped message and its partial reply are gone; the edit takes their place.
+    expect(editService.get(created.id).messages.map((message) => message.text)).toEqual([
+      'First',
+      'Done',
+      'Second, fixed',
+    ])
+    third.ctx.rewound?.(true)
+    expect(editService.get(created.id).rewind).toBeUndefined()
+    await finishTurn(created.id, () => third.end())
+  })
+
+  it('starts a new Claude session when the stopped turn was the first', async () => {
+    setup(scripted())
+    const created = await editService.create({ provider: 'claude', cwd: directory })
+    await editService.send(created.id, { text: 'Oops' })
+    await nextTurn()
+    await editService.stop(created.id)
+    const target = editService.get(created.id).messages.at(-1)!
+    expect(target.turn?.fresh).toBe(true)
+    let sessionAtStart: string | undefined = 'unset'
+    setup(scripted((ctx) => (sessionAtStart = ctx.thread.sessionId)))
+    // Same data file, so the new service sees the stopped thread (as after a restart).
+    await editService.store.load()
+    await editService.edit(created.id, { messageId: target.id, text: 'Better' })
+    const retry = await nextTurn()
+    expect(sessionAtStart).toBeUndefined()
+    expect(retry.ctx.rewind).toBeUndefined()
+    await finishTurn(created.id, () => retry.end())
+  })
+
+  it('reverts the Codex turn by id', async () => {
+    setup(scripted())
+    const created = await editService.create({ provider: 'codex', cwd: directory })
+    await editService.send(created.id, { text: 'Do it' })
+    const first = await nextTurn()
+    first.ctx.turnStarted?.('turn-9')
+    await editService.stop(created.id)
+    const target = editService.get(created.id).messages.at(-1)!
+    expect(target.turn).toEqual({ codexTurn: 'turn-9' })
+    await editService.edit(created.id, { messageId: target.id, text: 'Do it better' })
+    const second = await nextTurn()
+    expect(second.ctx.rewind).toEqual({ codexTurn: 'turn-9' })
+    second.ctx.rewound?.(false)
+    // Codex couldn't revert: the edit still ran, and the message says so.
+    expect(editService.get(created.id).messages.at(-1)?.rewindFailed).toBe(true)
+    await finishTurn(created.id, () => second.end())
+  })
+
+  it('falls back to a plain follow-up when Claude refuses the rewind', async () => {
+    let calls = 0
+    setup(
+      scripted(() => {
+        calls++
+      }),
+    )
+    const created = await editService.create({ provider: 'claude', cwd: directory })
+    await editService.send(created.id, { text: 'One' })
+    const first = await nextTurn()
+    first.ctx.entry?.('entry-1')
+    await finishTurn(created.id, () => first.end())
+    await editService.send(created.id, { text: 'Two' })
+    await nextTurn()
+    await editService.stop(created.id)
+    const target = editService.get(created.id).messages.at(-1)!
+    await editService.edit(created.id, { messageId: target.id, text: 'Two, again' })
+    const refused = await nextTurn()
+    refused.end(new Error('Resume rejected by --resume-drops-turn: queued message in range'))
+    const retry = await nextTurn()
+    expect(retry.ctx.rewind).toBeUndefined()
+    expect(calls).toBe(4)
+    const edited = editService.get(created.id).messages.at(-1)!
+    expect(edited.rewindFailed).toBe(true)
+    expect(edited.turn).toBeUndefined()
+    await finishTurn(created.id, () => retry.end())
+  })
+
+  it('refuses edits that are not the last message of a stopped or failed turn', async () => {
+    setup(scripted())
+    const created = await editService.create({ provider: 'claude', cwd: directory })
+    await editService.send(created.id, { text: 'Finish normally' })
+    const first = await nextTurn()
+    await finishTurn(created.id, () => first.end())
+    const sent = editService.get(created.id).messages[0]
+    await expect(
+      editService.edit(created.id, { messageId: sent.id, text: 'Rewrite history' }),
+    ).rejects.toThrow('Only your last message')
+    await editService.send(created.id, { text: 'Working' })
+    await nextTurn()
+    await expect(
+      editService.edit(created.id, { messageId: sent.id, text: 'Mid-turn' }),
+    ).rejects.toThrow('Stop the agent')
+    await editService.stop(created.id)
+  })
+})

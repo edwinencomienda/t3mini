@@ -18,6 +18,20 @@ export type Message = {
   queued?: boolean
   // Queued, but the turn was stopped before it could be sent.
   unsent?: boolean
+  // Set on a message that started a turn: how to take that turn back out of the agent's
+  // memory, so the message can be edited and resent after a stop or failure.
+  turn?: TurnCheckpoint
+  // An edit that couldn't rewind the agent, so it went out as a follow-up instead.
+  rewindFailed?: boolean
+}
+export type TurnCheckpoint = {
+  // Claude: the turn was the session's first (an edit starts a new session), or the last
+  // conversation entry before it (resumeSessionAt) and this prompt's id (resumeDropsTurn).
+  fresh?: boolean
+  claudeResumeAt?: string
+  claudePrompt?: string
+  // Codex: the turn's id (thread/revert drops it and everything after).
+  codexTurn?: string
 }
 export type Activity = {
   id: string
@@ -51,6 +65,10 @@ export type Thread = {
   activities: Activity[]
   approvals: Approval[]
   error?: string
+  // Claude: the session's latest conversation entry, where a later rewind can resume from.
+  claudeEntry?: string
+  // A turn to drop from the agent's memory before the next run (set by an edit).
+  rewind?: TurnCheckpoint
 }
 export type ThreadSummary = Pick<
   Thread,
@@ -86,4 +104,17 @@ export type Bootstrap = {
 // A thread project's git state for the composer. detached: branch is a short commit hash.
 // url: the branch (or repository) on GitHub, when the remote is there.
 export type GitInfo = { branch: string | null; detached?: boolean; url?: string }
+// The message that can be edited and resent: the last thing you sent, when its turn was stopped
+// or failed and the agent can take that turn back (see TurnCheckpoint).
+export function editableMessage(thread: Pick<Thread, 'status' | 'provider' | 'messages'>) {
+  if (thread.status !== 'interrupted' && thread.status !== 'failed') return undefined
+  const last = [...thread.messages].reverse().find((message) => message.role === 'user')
+  const turn = last?.turn
+  if (!turn) return undefined
+  const undoable =
+    thread.provider === 'claude'
+      ? turn.fresh || Boolean(turn.claudeResumeAt)
+      : Boolean(turn.codexTurn)
+  return undoable ? last : undefined
+}
 export const isActive = (status: Status) => ['starting', 'working', 'waiting'].includes(status)

@@ -60,6 +60,10 @@ export const runClaude: Runner = async (ctx) => {
       type: 'user',
       message: { role: 'user', content: await content(ctx.prompt, ctx.images) },
       parent_tool_use_id: null,
+      // A known id, so this turn can be dropped later (resumeDropsTurn).
+      ...(ctx.promptId
+        ? { uuid: ctx.promptId as `${string}-${string}-${string}-${string}-${string}` }
+        : {}),
     }
     for (;;) {
       while (inbox.length) yield inbox.shift()!
@@ -121,6 +125,8 @@ export const runClaude: Runner = async (ctx) => {
   const safeTools = tools
     .filter((definition) => definition.safety === 'safe')
     .map((definition) => claudeToolName(definition.name))
+  const rewinding = Boolean(ctx.thread.sessionId && ctx.rewind?.claudeResumeAt)
+  let reportedRewind = false
   const stream = query({
     prompt: prompt(),
     options: {
@@ -133,6 +139,14 @@ export const runClaude: Runner = async (ctx) => {
       allowedTools: safeTools,
       ...claudeExecutableOption(),
       ...(ctx.thread.sessionId ? { resume: ctx.thread.sessionId } : {}),
+      // Editing a stopped turn: resume from the last entry before it, dropping that turn. The
+      // CLI checks that only that turn is dropped and refuses otherwise (see rewindRefused).
+      ...(rewinding
+        ? {
+            resumeSessionAt: ctx.rewind!.claudeResumeAt,
+            ...(ctx.rewind!.claudePrompt ? { resumeDropsTurn: ctx.rewind!.claudePrompt } : {}),
+          }
+        : {}),
       canUseTool: async (toolName, input, options) => {
         if (safeTools.includes(toolName)) return { behavior: 'allow', updatedInput: input }
         const allow = await ctx.approve({
@@ -157,6 +171,13 @@ export const runClaude: Runner = async (ctx) => {
     for await (const message of stream) {
       ctx.signal.throwIfAborted()
       if (message.session_id) ctx.session(message.session_id)
+      // The session resumed past the rewind check once it produces anything but an error.
+      if (rewinding && !reportedRewind && message.type !== 'result' && message.type !== 'system') {
+        reportedRewind = true
+        ctx.rewound?.(true)
+      }
+      if ((message.type === 'assistant' || message.type === 'user') && message.uuid)
+        if (!('isReplay' in message && message.isReplay)) ctx.entry?.(message.uuid)
       if (message.type === 'stream_event') {
         const event = message.event
         if (event.type === 'message_start') {

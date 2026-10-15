@@ -285,6 +285,8 @@ export async function handleApi(request: Request) {
           return Response.json(await service.updateSettings(id, await request.json()))
         if (parts[2] === 'send')
           return Response.json(await service.send(id, await request.json()), { status: 202 })
+        if (parts[2] === 'edit')
+          return Response.json(await service.edit(id, await request.json()), { status: 202 })
         if (parts[2] === 'open-editor') {
           macOnly('Opening VS Code')
           return Response.json(await service.openInEditor(id))

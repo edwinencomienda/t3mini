@@ -1016,6 +1016,34 @@ kbd {
   box-shadow: var(--shadow);
   transition: border-color 0.15s;
 }
+/* Editing a recalled message (↑ after a stopped turn) */
+.composer-editing {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0.6rem 0;
+  padding: 0.3rem 0.35rem 0.3rem 0.6rem;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  font-size: 12px;
+  color: var(--foreground);
+}
+.composer-editing > svg {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.composer-editing span {
+  flex: 1;
+  min-width: 0;
+}
+.composer-editing small {
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.composer-editing .icon-button {
+  width: 1.4rem;
+  height: 1.4rem;
+}
 .composer:focus-within {
   border-color: var(--input);
 }

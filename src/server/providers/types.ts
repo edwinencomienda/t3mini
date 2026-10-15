@@ -1,4 +1,4 @@
-import type { Activity, Approval, Thread } from '../../types'
+import type { Activity, Approval, Thread, TurnCheckpoint } from '../../types'
 import type { ToolContext } from '../tools/types'
 // Images attached to this turn, saved on disk.
 export type PromptImage = { path: string; mimeType: string }
@@ -18,5 +18,18 @@ export type ProviderContext = {
   tools: ToolContext
   // Providers that support steering register a handler once the run can accept messages.
   onSteer?: (handler: Steer) => void
+  // The id to give this turn's prompt (Claude), so the turn can be dropped later.
+  promptId?: string
+  // A turn to drop from the agent's memory before this one runs (an edited message).
+  rewind?: TurnCheckpoint
+  // Whether the rewind happened; false means the agent kept the old turn.
+  rewound?: (ok: boolean) => void
+  // Claude: each new conversation entry, the latest being where a later rewind resumes.
+  entry?: (id: string) => void
+  // Codex: this turn's id.
+  turnStarted?: (turnId: string) => void
 }
+// Claude refuses a rewind when the dropped range holds something unexpected (e.g. a message
+// it absorbed mid-turn). That's deterministic, so the turn is retried without rewinding.
+export const rewindRefused = 'Resume rejected by --resume-drops-turn:'
 export type Runner = (context: ProviderContext) => Promise<void>

@@ -100,6 +100,7 @@ import {
 } from '../theme'
 import remarkGfm from 'remark-gfm'
 import {
+  editableMessage,
   isActive,
   type Bootstrap,
   type GitInfo,
@@ -198,6 +199,10 @@ const MessageView = memo(
               <span className="message-note">Queued · sends when the current turn ends</span>
             ) : message.unsent ? (
               <span className="message-note">Not sent · the turn was stopped</span>
+            ) : message.rewindFailed ? (
+              <span className="message-note">
+                Sent as a follow-up · the agent couldn’t drop the earlier attempt
+              </span>
             ) : null}
           </>
         ) : (
@@ -383,6 +388,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const content = useRef<HTMLDivElement>(null)
   // Images waiting to be sent, per thread so switching threads keeps them.
   const [pending, setPending] = useState<Record<string, PendingAttachment[]>>({})
+  // ↑ / ↓ in the composer walk through what you sent in this thread. `index` is the position
+  // in that list; `text` is what was filled in, so typing over it hands the arrows back.
+  const recalled = useRef<{ thread: string; index: number; text: string } | null>(null)
+  // The message being edited (recalled after a stopped or failed turn); sending replaces it.
+  const [editing, setEditing] = useState<string | null>(null)
+  // Recall and editing belong to one thread; switching threads ends them.
+  useEffect(() => {
+    recalled.current = null
+    setEditing(null)
+  }, [activeId])
   const [dragging, setDragging] = useState(false)
   // Whether the changes panel is open, remembered per project.
   const [diffOpenIn, setDiffOpenIn] = useState<Record<string, boolean>>({})
@@ -1031,6 +1046,51 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setBusy(false)
     }
   }
+  // ↑ in an empty composer brings back your previous messages (↓ goes forward, then back to an
+  // empty composer), like a shell or Claude Code. The arrows only do this on the first / last
+  // line and while the recalled text is untouched, so editing a draft is never hijacked. The
+  // most recent message after a stopped or failed turn opens in edit mode.
+  function recall(step: -1 | 1) {
+    const element = composer.current
+    if (!element || !thread || isActive(thread.status)) return false
+    const caret = element.selectionStart ?? 0
+    if (step < 0 && element.value.lastIndexOf('\n', caret - 1) !== -1) return false
+    if (step > 0 && element.value.indexOf('\n', element.selectionEnd ?? caret) !== -1) return false
+    const current = recalled.current?.thread === thread.id ? recalled.current : null
+    const fresh = !element.value && !pending[thread.id]?.length
+    if (current ? element.value !== current.text : !fresh || step > 0) return false
+    const sent = thread.messages.filter(
+      (message) => message.role === 'user' && (message.text || message.attachments?.length),
+    )
+    const index = (current?.index ?? sent.length) + step
+    if (index < 0) return true
+    const message = sent[index]
+    recalled.current = message ? { thread: thread.id, index, text: message.text } : null
+    setDraft(message?.text ?? '')
+    // Images go back as already-uploaded attachments.
+    setPending((list) => ({
+      ...list,
+      [thread.id]: (message?.attachments ?? []).map((item) => ({
+        key: `recalled:${item.id}`,
+        name: item.name,
+        previewUrl: `/api/uploads/${encodeURIComponent(item.id)}`,
+        status: 'ready' as const,
+        id: item.id,
+      })),
+    }))
+    setEditing(message && editableMessage(thread)?.id === message.id ? message.id : null)
+    requestAnimationFrame(() =>
+      element.setSelectionRange(element.value.length, element.value.length),
+    )
+    return true
+  }
+  function cancelEdit() {
+    recalled.current = null
+    setEditing(null)
+    setDraft('')
+    if (activeId) setPending((list) => ({ ...list, [activeId]: [] }))
+    composer.current?.focus()
+  }
   async function send(event?: FormEvent) {
     event?.preventDefault()
     const attached = activeId ? pending[activeId] || [] : []
@@ -1044,14 +1104,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
     )
       return
     const text = draftText.current
+    // Still the message that can be edited? (The thread may have moved on since.)
+    const replacing = editing && editableMessage(thread)?.id === editing ? editing : null
     setBusy(true)
     setError('')
     stickToBottom.current = true
     try {
-      await api(`threads/${activeId}/send`, 'POST', {
+      await api(`threads/${activeId}/${replacing ? 'edit' : 'send'}`, 'POST', {
+        ...(replacing ? { messageId: replacing } : {}),
         text,
         attachments: attached.map((item) => ({ id: item.id, name: item.name })),
       })
+      recalled.current = null
+      setEditing(null)
       if (selectedId.current === activeId) setDraft('')
       drafts.current.delete(activeId)
       for (const item of attached) URL.revokeObjectURL(item.previewUrl)
@@ -1189,6 +1254,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
         `${group.path} ${projectName(group.path)}`.toLowerCase().includes(query),
     )
   const active = thread ? isActive(thread.status) : false
+  // The edit bar shows only while the recalled message is still the one that can be edited.
+  const editingMessage = Boolean(thread && editing && editableMessage(thread)?.id === editing)
   const composerPlaceholder = !thread
     ? ''
     : active
@@ -1804,6 +1871,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 ) : null}
                 {thread ? (
                   <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
+                    {editingMessage ? (
+                      <div className="composer-editing">
+                        <Pencil size={12} />
+                        <span>
+                          Editing your last message · it replaces the stopped turn{' '}
+                          <small>(files it changed stay changed)</small>
+                        </span>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Cancel editing"
+                          title="Cancel (Esc)"
+                          onClick={cancelEdit}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ) : null}
                     {pending[thread.id]?.length ? (
                       <div className="pending-attachments">
                         {pending[thread.id]!.map((item) => (
@@ -1838,6 +1923,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                           e.preventDefault()
                           void send()
+                        } else if (
+                          (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+                          !e.shiftKey &&
+                          !e.altKey &&
+                          !e.metaKey &&
+                          !e.ctrlKey &&
+                          !e.nativeEvent.isComposing &&
+                          recall(e.key === 'ArrowUp' ? -1 : 1)
+                        )
+                          e.preventDefault()
+                        else if (e.key === 'Escape' && editingMessage) {
+                          e.preventDefault()
+                          cancelEdit()
                         }
                       }}
                       rows={1}

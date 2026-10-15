@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import {
   isActive,
+  editableMessage,
   type Bootstrap,
   type GitInfo,
   type Message,
@@ -25,7 +26,13 @@ import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import { providerExecutable } from './cli-updates'
-import type { PromptImage, Runner, Steer } from './providers/types'
+import {
+  rewindRefused,
+  type PromptImage,
+  type ProviderContext,
+  type Runner,
+  type Steer,
+} from './providers/types'
 import { defaultPermission } from '../agent-settings'
 import { settingsSchema } from './provider-settings'
 import { validateEffort } from './models'
@@ -126,6 +133,8 @@ type Run = {
   steer?: Steer
   // Messages sent mid-turn that the provider couldn't take; they run next.
   queued: { messageId: string; text: string; images: PromptImage[] }[]
+  // The message that started this turn (not a batch of queued ones), which gets a checkpoint.
+  messageId?: string
 }
 
 export class AgentService {
@@ -407,7 +416,63 @@ export class AgentService {
     if (thread.title === 'New thread')
       thread.title = text.slice(0, 60) || attachments[0]?.name.slice(0, 60) || 'Image'
     try {
-      await this.startTurn(thread, text, images)
+      await this.startTurn(thread, text, images, message.id)
+    } catch (error) {
+      this.store.threads.set(id, previous)
+      throw error
+    }
+    return { accepted: true }
+  }
+  // Replaces the last message of a stopped or failed turn and runs it again. The agent's memory
+  // is rewound to before that turn (see TurnCheckpoint); files it changed stay changed.
+  async edit(id: string, input: unknown) {
+    const { messageId } = z.object({ messageId: z.string().min(1).max(200) }).parse(input)
+    const { text, attachments: requested } = promptSchema.parse(input)
+    const thread = this.get(id)
+    if (this.runs.has(id)) throw new HttpError(409, 'Stop the agent before editing a message.')
+    const target = editableMessage(thread)
+    if (!target || target.id !== messageId)
+      throw new HttpError(409, 'Only your last message of a stopped or failed turn can be edited.')
+    let attachments
+    try {
+      attachments = await this.uploads.resolve(requested)
+    } catch (error) {
+      if (error instanceof UploadError) throw new HttpError(400, error.message)
+      throw error
+    }
+    if (this.persistenceError) throw new HttpError(500, this.persistenceError)
+    if (this.settingsUpdates.has(id))
+      throw new HttpError(409, 'Agent settings are still saving. Try sending again.')
+    const previous = structuredClone(thread)
+    const checkpoint = target.turn!
+    thread.messages = thread.messages.slice(0, thread.messages.indexOf(target))
+    const message: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text,
+      createdAt: new Date().toISOString(),
+      ...(attachments.length ? { attachments } : {}),
+    }
+    thread.messages.push(message)
+    if (checkpoint.fresh) {
+      // It was the session's first turn: start over with a new session.
+      thread.sessionId = undefined
+      thread.claudeEntry = undefined
+      thread.rewind = undefined
+    } else {
+      thread.rewind = checkpoint
+      if (checkpoint.claudeResumeAt) thread.claudeEntry = checkpoint.claudeResumeAt
+    }
+    try {
+      await this.startTurn(
+        thread,
+        text,
+        attachments.map((item) => ({
+          path: this.uploads.imagePath(item.id),
+          mimeType: item.mimeType,
+        })),
+        message.id,
+      )
     } catch (error) {
       this.store.threads.set(id, previous)
       throw error
@@ -442,13 +507,13 @@ export class AgentService {
       else if (current) {
         message.queued = true
         current.queued.push({ messageId: message.id, text: message.text, images })
-      } else await this.startTurn(thread, message.text, images)
+      } else await this.startTurn(thread, message.text, images, message.id)
     }
     this.changed()
     return { accepted: true, steered }
   }
   // Starts a turn for messages already in the thread.
-  private async startTurn(thread: Thread, text: string, images: PromptImage[]) {
+  private async startTurn(thread: Thread, text: string, images: PromptImage[], messageId?: string) {
     const id = thread.id
     if (this.runs.has(id)) throw new HttpError(409, 'This thread is already working.')
     const now = new Date().toISOString()
@@ -461,7 +526,7 @@ export class AgentService {
     thread.approvals = []
     const controller = new AbortController()
     const approvals = new Map<string, (allow: boolean) => void>()
-    const run: Run = { controller, approvals, done: Promise.resolve(), queued: [] }
+    const run: Run = { controller, approvals, done: Promise.resolve(), queued: [], messageId }
     // Reserve before any I/O; later messages steer this run instead of starting another.
     this.runs.set(id, run)
     try {
@@ -481,84 +546,129 @@ export class AgentService {
     const working = () => {
       if (!thread.approvals.length) thread.status = 'working'
     }
-    try {
-      await this.runners[thread.provider]({
-        thread,
-        prompt,
-        images,
-        signal: run.controller.signal,
-        session: (id) => {
-          thread.sessionId = id
-          working()
-          touch()
-        },
-        text: (id, text, replace) => {
-          const messageId = `${thread.provider}:${id}`
-          const existing = thread.messages.find((message) => message.id === messageId)
-          if (existing) existing.text = replace ? text : existing.text + text
+    // The message that started this turn records how to take the turn back (for editing it
+    // after a stop). Claude: resume from the conversation's latest entry and drop this prompt.
+    const started = run.messageId
+      ? thread.messages.find((message) => message.id === run.messageId)
+      : undefined
+    const promptId = crypto.randomUUID()
+    if (started)
+      started.turn =
+        thread.provider === 'codex'
+          ? undefined // Filled in once Codex reports the turn's id.
+          : !thread.sessionId
+            ? { fresh: true, claudePrompt: promptId }
+            : thread.claudeEntry
+              ? { claudeResumeAt: thread.claudeEntry, claudePrompt: promptId }
+              : undefined
+    const context: ProviderContext = {
+      thread,
+      prompt,
+      images,
+      promptId,
+      rewind: thread.rewind,
+      rewound: (ok) => {
+        thread.rewind = undefined
+        if (!ok && started) started.rewindFailed = true
+        touch()
+      },
+      entry: (id) => {
+        thread.claudeEntry = id
+      },
+      turnStarted: (turnId) => {
+        if (started) started.turn = { codexTurn: turnId }
+      },
+      signal: run.controller.signal,
+      session: (id) => {
+        thread.sessionId = id
+        working()
+        touch()
+      },
+      text: (id, text, replace) => {
+        const messageId = `${thread.provider}:${id}`
+        const existing = thread.messages.find((message) => message.id === messageId)
+        if (existing) existing.text = replace ? text : existing.text + text
+        else
+          thread.messages.push({
+            id: messageId,
+            role: 'assistant',
+            text,
+            createdAt: new Date().toISOString(),
+          })
+        working()
+        touch()
+      },
+      activity: (activity) => {
+        const index = thread.activities.findIndex((item) => item.id === activity.id)
+        if (index < 0) thread.activities.push(activity)
+        else {
+          const old = thread.activities[index]
+          thread.activities[index] = {
+            ...old,
+            ...activity,
+            label: activity.label === 'Tool' ? old.label : activity.label,
+            summary: activity.summary ?? old.summary,
+            detail: activity.detail ?? old.detail,
+            output: activity.output ?? old.output,
+          }
+        }
+        working()
+        touch()
+      },
+      tools: {
+        cwd: thread.cwd,
+        processes: projectProcesses(this.processes, thread),
+        saveImage: (bytes) => this.uploads.saveImage(bytes),
+        rename: async (title) => (await this.rename(thread.id, { title })).title,
+        // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
+        // written anything since the user's message, it gets a reply of its own.
+        attach: (block) => {
+          const last = thread.messages.at(-1)
+          if (last?.role === 'assistant') last.blocks = [...(last.blocks ?? []), block]
           else
             thread.messages.push({
-              id: messageId,
+              id: `tool:${crypto.randomUUID()}`,
               role: 'assistant',
-              text,
+              text: '',
               createdAt: new Date().toISOString(),
+              blocks: [block],
             })
-          working()
           touch()
         },
-        activity: (activity) => {
-          const index = thread.activities.findIndex((item) => item.id === activity.id)
-          if (index < 0) thread.activities.push(activity)
-          else {
-            const old = thread.activities[index]
-            thread.activities[index] = {
-              ...old,
-              ...activity,
-              label: activity.label === 'Tool' ? old.label : activity.label,
-              summary: activity.summary ?? old.summary,
-              detail: activity.detail ?? old.detail,
-              output: activity.output ?? old.output,
-            }
+      },
+      onSteer: (handler) => {
+        run.steer = handler
+      },
+      approve: (approval) =>
+        new Promise<boolean>((resolve, reject) => {
+          if (run.controller.signal.aborted) {
+            reject(new Error('Turn stopped.'))
+            return
           }
-          working()
+          thread.approvals.push(approval)
+          thread.status = 'waiting'
+          run.approvals.set(approval.id, resolve)
           touch()
-        },
-        tools: {
-          cwd: thread.cwd,
-          processes: projectProcesses(this.processes, thread),
-          saveImage: (bytes) => this.uploads.saveImage(bytes),
-          rename: async (title) => (await this.rename(thread.id, { title })).title,
-          // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
-          // written anything since the user's message, it gets a reply of its own.
-          attach: (block) => {
-            const last = thread.messages.at(-1)
-            if (last?.role === 'assistant') last.blocks = [...(last.blocks ?? []), block]
-            else
-              thread.messages.push({
-                id: `tool:${crypto.randomUUID()}`,
-                role: 'assistant',
-                text: '',
-                createdAt: new Date().toISOString(),
-                blocks: [block],
-              })
-            touch()
-          },
-        },
-        onSteer: (handler) => {
-          run.steer = handler
-        },
-        approve: (approval) =>
-          new Promise<boolean>((resolve, reject) => {
-            if (run.controller.signal.aborted) {
-              reject(new Error('Turn stopped.'))
-              return
-            }
-            thread.approvals.push(approval)
-            thread.status = 'waiting'
-            run.approvals.set(approval.id, resolve)
-            touch()
-          }),
-      })
+        }),
+    }
+    try {
+      try {
+        await this.runners[thread.provider](context)
+      } catch (error) {
+        // Claude refused the rewind (the dropped range held something unexpected): run the
+        // edit as a plain follow-up instead, keeping the old turn in its memory.
+        if (
+          !context.rewind ||
+          run.controller.signal.aborted ||
+          !(error instanceof Error && error.message.includes(rewindRefused))
+        )
+          throw error
+        context.rewound?.(false)
+        if (started) started.turn = undefined
+        await this.runners[thread.provider]({ ...context, rewind: undefined })
+      }
+      // A finished run has used up the rewind it was given, whether or not it said so.
+      if (context.rewind && thread.rewind === context.rewind) thread.rewind = undefined
       thread.status = run.controller.signal.aborted ? 'interrupted' : 'completed'
     } catch (error) {
       thread.status = run.controller.signal.aborted ? 'interrupted' : 'failed'
