@@ -235,6 +235,9 @@ const MessageView = memo(
     (before.message.blocks?.length ?? 0) === (after.message.blocks?.length ?? 0),
 )
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
+// A project's name: the one you gave it in the sidebar, else its folder name.
+const projectLabel = (projects: ProjectSummary[], path: string) =>
+  projects.find((project) => project.path === path)?.name || folderName(path)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 function relativeTime(iso: string, now: number) {
@@ -446,9 +449,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     | null
   >(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
-  // The sidebar name of a project: the name you gave it, else its folder name.
-  const projectName = (path: string) =>
-    projects.find((project) => project.path === path)?.name || folderName(path)
+  const projectName = (path: string) => projectLabel(projects, path)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
@@ -554,7 +555,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         }
         setProjects(data.projects ?? [])
         setProcesses(data.processes ?? [])
-        announce(threadEvents(statuses.current, data.threads))
+        announce(threadEvents(statuses.current, data.threads), data.projects ?? [])
         statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
         setThreads(data.threads)
         if (activeId && !data.thread && !data.threads.some((item) => item.id === activeId)) {
@@ -701,7 +702,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
       window.removeEventListener('pageshow', onShow)
     }
   }, [])
-  function announce(events: ThreadEvent[]) {
+  // `projects` comes with the same live update, so notifications use current project names.
+  function announce(events: ThreadEvent[], projects: ProjectSummary[]) {
     if (!events.length) return
     const visible = document.visibilityState === 'visible'
     // Phone browsers (iOS Safari especially) often report no focus while you're looking right
@@ -732,8 +734,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
         ])
       if (notifier && preferences.desktop && !focused && desktopPermission() === 'granted') {
         try {
+          // e.g. "t3-mini · Claude finished", with the thread's title underneath.
           const notification = new Notification(
-            `${names[event.thread.provider]} · ${eventText[event.kind]}`,
+            `${projectLabel(projects, event.thread.cwd)} · ${names[event.thread.provider]} ${eventText[event.kind].toLowerCase()}`,
             { body: event.thread.title, tag: event.thread.id },
           )
           notification.onclick = () => {
