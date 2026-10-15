@@ -20,6 +20,10 @@ import { ProviderIcon } from './ProviderIcon'
 
 type Option = { value: string; label: string; description?: string }
 
+// Model lists already loaded this session, so switching threads shows them instantly.
+// (The server also caches provider catalogs for five minutes; Retry forces a fresh load.)
+const catalogs = new Map<string, ModelCatalog>()
+
 export const providerNames: Record<Provider, string> = { codex: 'Codex', claude: 'Claude' }
 export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
   return <ProviderIcon provider={provider} size={size} />
@@ -144,10 +148,19 @@ export function AgentSettingsControls({
   disabled?: boolean
   placement?: 'up' | 'down'
 }) {
-  const [catalog, setCatalog] = useState<ModelCatalog>({ models: [] })
-  const [loading, setLoading] = useState(true)
+  const cacheKey = `${provider}|${cwd}`
+  const [catalog, setCatalog] = useState<ModelCatalog>(
+    () => catalogs.get(cacheKey) ?? { models: [] },
+  )
+  const [loading, setLoading] = useState(() => !catalogs.has(cacheKey))
   const [reload, setReload] = useState(0)
   useEffect(() => {
+    const cached = catalogs.get(cacheKey)
+    if (cached && !reload) {
+      setCatalog(cached)
+      setLoading(false)
+      return
+    }
     const controller = new AbortController()
     setLoading(true)
     setCatalog({ models: [] })
@@ -158,7 +171,10 @@ export function AgentSettingsControls({
           if (!response.ok) throw new Error('Could not load models.')
           return response.json() as Promise<ModelCatalog>
         })
-        .then(setCatalog)
+        .then((loaded) => {
+          if (!loaded.error) catalogs.set(cacheKey, loaded)
+          setCatalog(loaded)
+        })
         .catch(() => {
           if (!controller.signal.aborted)
             setCatalog({ models: [], error: 'Models unavailable. Use Provider default or retry.' })
@@ -171,7 +187,7 @@ export function AgentSettingsControls({
       clearTimeout(timer)
       controller.abort()
     }
-  }, [provider, cwd, reload])
+  }, [cacheKey, provider, cwd, reload])
   const model = catalog.models.find((item) => item.id === value.model)
   const mode = permissionModes.find((item) => item.value === value.permissionMode)!
   const efforts = model?.efforts || []

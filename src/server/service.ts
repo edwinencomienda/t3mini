@@ -14,6 +14,7 @@ import {
 } from '../types'
 import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
 import { UploadError, Uploads, attachmentSchema } from './uploads'
+import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import type { PromptImage, Runner } from './providers/types'
@@ -488,6 +489,54 @@ export class AgentService {
         return { branch: null }
       }
     }
+  }
+  // Uncommitted changes in a thread's project: tracked files against HEAD plus new untracked
+  // files. git runs without a shell, in the thread's own folder, with output caps.
+  async diff(id: string): Promise<DiffResult> {
+    const { cwd } = this.get(id)
+    const git = (args: string[], maxBuffer = 8 * 1024 * 1024) =>
+      exec('git', args, { cwd, timeout: 10_000, maxBuffer })
+    try {
+      await git(['rev-parse', '--is-inside-work-tree'])
+    } catch {
+      return { repo: false, files: [], truncated: false }
+    }
+    // A repository with no commits yet diffs against the empty tree.
+    const base = await git(['rev-parse', '--verify', '--quiet', 'HEAD'])
+      .then(() => 'HEAD')
+      .catch(() => '4b825dc642cb6eb9a060e54bf8d69288fbee4904')
+    let truncated = false
+    const diffArgs = ['--no-color', '--no-ext-diff', '--no-textconv', '--find-renames']
+    let output = ''
+    try {
+      output = (await git(['diff', ...diffArgs, base, '--'])).stdout
+    } catch (error) {
+      // Over the buffer cap: show what fit and say the rest was cut.
+      const partial = (error as { stdout?: string }).stdout
+      if (!partial) throw new HttpError(500, 'Could not read changes from git.')
+      output = partial
+      truncated = true
+    }
+    const files: DiffFile[] = parseDiff(output)
+    const { stdout: untracked } = await git(['ls-files', '--others', '--exclude-standard', '-z'])
+    const paths = untracked.split('\0').filter(Boolean)
+    if (paths.length > 100) truncated = true
+    for (const path of paths.slice(0, 100)) {
+      const size = await stat(join(cwd, path)).then(
+        (info) => info.size,
+        () => 0,
+      )
+      if (size > 512 * 1024) {
+        files.push({ path, status: 'added', additions: 0, deletions: 0, binary: true, hunks: [] })
+        continue
+      }
+      // --no-index exits with 1 when the files differ; the diff is still on stdout.
+      const result = await git(['diff', ...diffArgs, '--no-index', '--', '/dev/null', path]).catch(
+        (error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }),
+      )
+      files.push(...parseDiff(result.stdout))
+    }
+    return { repo: true, files, truncated }
   }
   async rename(id: string, input: unknown) {
     const { title } = z.object({ title: z.string().trim().min(1).max(120) }).parse(input)

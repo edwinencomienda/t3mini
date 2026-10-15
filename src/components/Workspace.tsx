@@ -8,6 +8,7 @@ import {
   Folder,
   FolderPlus,
   FileUp,
+  FileDiff,
   GitBranch,
   FolderOpen,
   LoaderCircle,
@@ -48,6 +49,7 @@ import {
   type ThreadEvent,
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
+import { DiffPanel } from './DiffPanel'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -215,7 +217,32 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Images waiting to be sent, per thread so switching threads keeps them.
   const [pending, setPending] = useState<Record<string, PendingAttachment[]>>({})
   const [dragging, setDragging] = useState(false)
+  // Whether the changes panel is open, remembered per project.
+  const [diffOpenIn, setDiffOpenIn] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem('t3-mini:diff-open-projects') || '{}')
+      if (saved && typeof saved === 'object') setDiffOpenIn(saved as Record<string, boolean>)
+    } catch {
+      // Closed by default.
+    }
+  }, [])
+  function toggleDiff(open: boolean) {
+    if (!activeCwd) return
+    const next = { ...diffOpenIn, [activeCwd]: open }
+    if (!open) delete next[activeCwd]
+    setDiffOpenIn(next)
+    try {
+      localStorage.setItem('t3-mini:diff-open-projects', JSON.stringify(next))
+    } catch {
+      // The panel still toggles for this session.
+    }
+  }
   const filePicker = useRef<HTMLInputElement>(null)
+  // Last known state of each visited thread and each project's git branch, shown instantly on
+  // switching so the layout doesn't blank out and pop back in while fresh data loads.
+  const threadCache = useRef(new Map<string, Thread>())
+  const gitCache = useRef(new Map<string, { branch: string | null; detached?: boolean }>())
   const [git, setGit] = useState<{ branch: string | null; detached?: boolean } | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -274,48 +301,83 @@ export function Workspace({ threadId }: { threadId?: string }) {
     return () => controller.abort()
   }, [])
   useEffect(() => {
-    setThread(null)
-    setConnected(false)
+    // Show the cached copy right away (connection status stays as is; the new stream takes over).
+    setThread(activeId ? (threadCache.current.get(activeId) ?? null) : null)
     setError('')
     const controller = new AbortController()
-    // Validate direct links before subscribing, so a deleted thread has a clear error.
+    // Load the thread directly too: a first visit shows up without waiting for the stream, and
+    // a deleted thread gets a clear error.
     if (activeId)
-      api<Thread>(`threads/${activeId}`, 'GET', undefined, controller.signal).catch(
-        (error: Error) => {
+      api<Thread>(`threads/${activeId}`, 'GET', undefined, controller.signal)
+        .then((loaded) => {
+          threadCache.current.set(loaded.id, loaded)
+          setThread((current) => (current?.id === loaded.id ? current : loaded))
+        })
+        .catch((error: Error) => {
           if (!controller.signal.aborted) setError(error.message)
-        },
+        })
+    // The browser retries a dropped stream by itself, but gives up for good if a retry gets an
+    // error response (for example while the server restarts). Reconnect ourselves with a
+    // growing delay so the page never sits on stale state.
+    let events: EventSource | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let attempts = 0
+    const connect = () => {
+      events = new EventSource(
+        `/api/events${activeId ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
       )
-    const events = new EventSource(
-      `/api/events${activeId ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
-    )
-    events.onopen = () => setConnected(true)
-    events.onerror = () => setConnected(false)
-    events.onmessage = (event) => {
-      const data = JSON.parse(event.data) as {
-        threads: ThreadSummary[]
-        // Optional: a server started before projects existed omits it until restarted.
-        projects?: ProjectSummary[]
-        thread: Thread | null
-        persistenceError?: string
+      events.onopen = () => {
+        attempts = 0
+        setConnected(true)
       }
-      setProjects(data.projects ?? [])
-      announce(threadEvents(statuses.current, data.threads))
-      statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
-      setThreads(data.threads)
-      setThread(data.thread)
-      if (data.persistenceError) setError(data.persistenceError)
+      events.onerror = () => {
+        setConnected(false)
+        if (events?.readyState !== EventSource.CLOSED) return
+        events.close()
+        retry = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10_000))
+      }
+      events.onmessage = (event) => {
+        const data = JSON.parse(event.data) as {
+          threads: ThreadSummary[]
+          // Optional: a server started before projects existed omits it until restarted.
+          projects?: ProjectSummary[]
+          thread: Thread | null
+          persistenceError?: string
+        }
+        setProjects(data.projects ?? [])
+        announce(threadEvents(statuses.current, data.threads))
+        statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
+        setThreads(data.threads)
+        if (data.thread) threadCache.current.set(data.thread.id, data.thread)
+        setThread(data.thread)
+        if (data.persistenceError) setError(data.persistenceError)
+      }
     }
+    connect()
+    // Coming back to a tab whose stream was given up on reconnects right away.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || events?.readyState !== EventSource.CLOSED)
+        return
+      clearTimeout(retry)
+      attempts = 0
+      connect()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       controller.abort()
-      events.close()
+      clearTimeout(retry)
+      events?.close()
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [activeId])
   // The thread's git branch. Refreshed when the thread opens, after each turn (the agent may
   // switch branches), and when you come back to the window.
   const turnActive = thread ? isActive(thread.status) : false
+  // The open thread's project, known from the sidebar list even before the thread loads.
+  const activeCwd = thread?.cwd ?? threads.find((item) => item.id === activeId)?.cwd
   useEffect(() => {
-    setGit(null)
-    if (!activeId) return
+    setGit(activeCwd ? (gitCache.current.get(activeCwd) ?? null) : null)
+    if (!activeId || !activeCwd) return
     const controller = new AbortController()
     const load = () =>
       api<{ branch: string | null; detached?: boolean }>(
@@ -324,7 +386,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
         undefined,
         controller.signal,
       )
-        .then(setGit)
+        .then((info) => {
+          gitCache.current.set(activeCwd, info)
+          setGit(info)
+        })
         .catch(() => {})
     if (!turnActive) void load()
     window.addEventListener('focus', load)
@@ -332,7 +397,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       controller.abort()
       window.removeEventListener('focus', load)
     }
-  }, [activeId, turnActive])
+  }, [activeId, activeCwd, turnActive])
   useLayoutEffect(() => {
     // Keep the chat pinned to the bottom while it grows (streamed text, work log, status
     // lines) or while the chat area shrinks (a taller composer), unless the user scrolled up.
@@ -642,7 +707,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       return
     }
     if (activeId) drafts.current.set(activeId, draft)
-    setThread(null)
+    setThread(threadCache.current.get(id) ?? null)
     setDraft(drafts.current.get(id) || '')
     setSidebarOpen(false)
     setError('')
@@ -754,6 +819,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setToasts((current) => current.filter((item) => item.thread.id !== target.id))
       if (target.id === activeId) {
         void navigate({ to: '/' })
+        threadCache.current.delete(target.id)
         setThread(null)
         setDraft('')
       }
@@ -830,6 +896,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .filter((provider) => !bootstrap.providers[provider].installed)
         .map((provider) => names[provider])
     : []
+  const diffOpen = Boolean(activeCwd && diffOpenIn[activeCwd])
   const lastUser = thread ? thread.messages.map((message) => message.role).lastIndexOf('user') : -1
   const workLog = thread?.activities.length ? (
     <section className={`work-log ${workLogOpen ? 'open' : ''}`}>
@@ -1086,364 +1153,398 @@ export function Workspace({ threadId }: { threadId?: string }) {
         </div>
       </aside>
       <main className="main">
-        <header className="topbar">
-          <button
-            className="icon-button mobile-menu"
-            aria-label="Open threads"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu size={18} />
-          </button>
-          {sidebarHidden ? (
+        <div className="main-column">
+          <header className="topbar">
             <button
-              className="icon-button show-sidebar"
-              aria-label="Show sidebar"
-              title={`Show sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
-              onClick={toggleSidebar}
+              className="icon-button mobile-menu"
+              aria-label="Open threads"
+              onClick={() => setSidebarOpen(true)}
             >
-              <PanelLeftOpen size={16} />
+              <Menu size={18} />
             </button>
-          ) : null}
-          <div className="topbar-title">
-            <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
-            {thread ? (
-              <span className="chip" title={thread.cwd}>
-                <FolderOpen size={12} />
-                {folder}
-              </span>
+            {sidebarHidden ? (
+              <button
+                className="icon-button show-sidebar"
+                aria-label="Show sidebar"
+                title={`Show sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
+                onClick={toggleSidebar}
+              >
+                <PanelLeftOpen size={16} />
+              </button>
             ) : null}
-          </div>
-          <div className="topbar-actions">
-            {thread ? (
-              <>
-                <StatusBadge status={thread.status} />
-                <button
-                  className="icon-button"
-                  aria-label="Delete thread"
-                  title="Delete thread"
-                  onClick={() => void remove()}
-                  disabled={active || busy}
-                >
-                  <Trash2 size={15} />
-                </button>
-              </>
-            ) : null}
-          </div>
-        </header>
-        <div
-          className="chat-scroll"
-          ref={scrollArea}
-          onScroll={() => {
-            const element = scrollArea.current
-            if (element)
-              stickToBottom.current =
-                element.scrollHeight - element.scrollTop - element.clientHeight < 120
-          }}
-        >
-          <div className="chat-content" ref={content}>
-            {!thread?.messages.length ? (
-              <section className="empty-state">
-                {thread ? (
-                  <>
-                    <ProviderMark provider={thread.provider} size={28} />
-                    <h1>What should we build in {folder}?</h1>
-                    <p>
-                      {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
-                    </p>
-                    <div className="starters">
-                      {starters.map((starter) => (
-                        <button
-                          key={starter.title}
-                          onClick={() => {
-                            setDraft(starter.text)
-                            drafts.current.set(thread.id, starter.text)
-                            composer.current?.focus()
-                          }}
-                        >
-                          {starter.title}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                ) : activeId ? null : (
-                  <>
-                    <span className="brand-mark large">t3</span>
-                    <h1>Your coding agents, one quiet place.</h1>
-                    <p>Pick a project folder and start a thread with Claude or Codex.</p>
-                    <div className="empty-actions">
-                      <button
-                        className="primary"
-                        disabled={!bootstrap}
-                        onClick={() => openNewThread()}
-                      >
-                        <SquarePen size={15} />
-                        New thread
-                        <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={!bootstrap}
-                        onClick={() => setAddProject('sidebar')}
-                      >
-                        <FolderPlus size={15} />
-                        Add project
-                      </button>
-                    </div>
-                  </>
-                )}
-              </section>
-            ) : (
-              <div className="conversation">
-                {thread.messages.map((message, index) => (
-                  <div className="turn" key={message.id}>
-                    <article className={`message ${message.role}`}>
-                      {message.role === 'user' ? (
-                        <>
-                          {message.attachments?.length ? (
-                            <div className="message-images">
-                              {message.attachments.map((item) => (
-                                <a
-                                  key={item.id}
-                                  href={`/api/uploads/${encodeURIComponent(item.id)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  title={item.name}
-                                >
-                                  <img
-                                    src={`/api/uploads/${encodeURIComponent(item.id)}`}
-                                    alt={item.name}
-                                  />
-                                </a>
-                              ))}
-                            </div>
-                          ) : null}
-                          {message.text ? <div className="user-bubble">{message.text}</div> : null}
-                        </>
-                      ) : (
-                        <div className="markdown">
-                          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                            {message.text}
-                          </Markdown>
+            <div className="topbar-title">
+              <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
+              {thread ? (
+                <span className="chip" title={thread.cwd}>
+                  <FolderOpen size={12} />
+                  {folder}
+                </span>
+              ) : null}
+            </div>
+            <div className="topbar-actions">
+              {thread ? (
+                <>
+                  <StatusBadge status={thread.status} />
+                  {git?.branch ? (
+                    <button
+                      className={`icon-button ${diffOpen ? 'active' : ''}`}
+                      aria-label={diffOpen ? 'Hide changes' : 'Show changes'}
+                      aria-pressed={diffOpen}
+                      title={diffOpen ? 'Hide changes' : 'Show changes'}
+                      onClick={() => toggleDiff(!diffOpen)}
+                    >
+                      <FileDiff size={15} />
+                    </button>
+                  ) : null}
+                  <button
+                    className="icon-button"
+                    aria-label="Delete thread"
+                    title="Delete thread"
+                    onClick={() => void remove()}
+                    disabled={active || busy}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </header>
+          <div className="chat-column">
+            <div
+              className="chat-scroll"
+              ref={scrollArea}
+              onScroll={() => {
+                const element = scrollArea.current
+                if (element)
+                  stickToBottom.current =
+                    element.scrollHeight - element.scrollTop - element.clientHeight < 120
+              }}
+            >
+              <div className="chat-content" ref={content}>
+                {!thread?.messages.length ? (
+                  <section className="empty-state">
+                    {thread ? (
+                      <>
+                        <ProviderMark provider={thread.provider} size={28} />
+                        <h1>What should we build in {folder}?</h1>
+                        <p>
+                          {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
+                        </p>
+                        <div className="starters">
+                          {starters.map((starter) => (
+                            <button
+                              key={starter.title}
+                              onClick={() => {
+                                setDraft(starter.text)
+                                drafts.current.set(thread.id, starter.text)
+                                composer.current?.focus()
+                              }}
+                            >
+                              {starter.title}
+                            </button>
+                          ))}
                         </div>
-                      )}
-                      <time dateTime={message.createdAt}>
-                        {new Date(message.createdAt).toLocaleTimeString([], {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </time>
-                    </article>
-                    {/* The work log belongs to the latest turn, right after its prompt. */}
-                    {index === lastUser ? workLog : null}
-                  </div>
-                ))}
-                {lastUser === -1 ? workLog : null}
-                {thread.approvals.map((approval) => (
-                  <section className="approval" key={approval.id}>
-                    <div className="approval-title">
-                      <ShieldAlert size={16} />
-                      <strong>{approval.title}</strong>
-                    </div>
-                    <pre>{approval.detail}</pre>
-                    <div className="approval-actions">
-                      <button
-                        className="secondary"
-                        disabled={busy || !connected}
-                        onClick={() => action('approve', { approvalId: approval.id, allow: false })}
-                      >
-                        Decline
-                      </button>
-                      <button
-                        className="primary"
-                        disabled={busy || !connected}
-                        onClick={() => action('approve', { approvalId: approval.id, allow: true })}
-                      >
-                        Allow once
-                      </button>
-                    </div>
+                      </>
+                    ) : activeId ? null : (
+                      <>
+                        <span className="brand-mark large">t3</span>
+                        <h1>Your coding agents, one quiet place.</h1>
+                        <p>Pick a project folder and start a thread with Claude or Codex.</p>
+                        <div className="empty-actions">
+                          <button
+                            className="primary"
+                            disabled={!bootstrap}
+                            onClick={() => openNewThread()}
+                          >
+                            <SquarePen size={15} />
+                            New thread
+                            <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
+                          </button>
+                          <button
+                            className="secondary"
+                            disabled={!bootstrap}
+                            onClick={() => setAddProject('sidebar')}
+                          >
+                            <FolderPlus size={15} />
+                            Add project
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </section>
-                ))}
-                {/* One working indicator: the work log shows it once the agent starts using tools. */}
-                {active && !thread.approvals.length && !thread.activities.length ? (
-                  <div className="thinking" role="status">
-                    <span />
-                    <span />
-                    <span />
-                    {labels[thread.status]}…
+                ) : (
+                  <div className="conversation">
+                    {thread.messages.map((message, index) => (
+                      <div className="turn" key={message.id}>
+                        <article className={`message ${message.role}`}>
+                          {message.role === 'user' ? (
+                            <>
+                              {message.attachments?.length ? (
+                                <div className="message-images">
+                                  {message.attachments.map((item) => (
+                                    <a
+                                      key={item.id}
+                                      href={`/api/uploads/${encodeURIComponent(item.id)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={item.name}
+                                    >
+                                      <img
+                                        src={`/api/uploads/${encodeURIComponent(item.id)}`}
+                                        alt={item.name}
+                                      />
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {message.text ? (
+                                <div className="user-bubble">{message.text}</div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <div className="markdown">
+                              <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                {message.text}
+                              </Markdown>
+                            </div>
+                          )}
+                          <time dateTime={message.createdAt}>
+                            {new Date(message.createdAt).toLocaleTimeString([], {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })}
+                          </time>
+                        </article>
+                        {/* The work log belongs to the latest turn, right after its prompt. */}
+                        {index === lastUser ? workLog : null}
+                      </div>
+                    ))}
+                    {lastUser === -1 ? workLog : null}
+                    {thread.approvals.map((approval) => (
+                      <section className="approval" key={approval.id}>
+                        <div className="approval-title">
+                          <ShieldAlert size={16} />
+                          <strong>{approval.title}</strong>
+                        </div>
+                        <pre>{approval.detail}</pre>
+                        <div className="approval-actions">
+                          <button
+                            className="secondary"
+                            disabled={busy || !connected}
+                            onClick={() =>
+                              action('approve', { approvalId: approval.id, allow: false })
+                            }
+                          >
+                            Decline
+                          </button>
+                          <button
+                            className="primary"
+                            disabled={busy || !connected}
+                            onClick={() =>
+                              action('approve', { approvalId: approval.id, allow: true })
+                            }
+                          >
+                            Allow once
+                          </button>
+                        </div>
+                      </section>
+                    ))}
+                    {/* One working indicator: the work log shows it once the agent starts using tools. */}
+                    {active && !thread.approvals.length && !thread.activities.length ? (
+                      <div className="thinking" role="status">
+                        <span />
+                        <span />
+                        <span />
+                        {labels[thread.status]}…
+                      </div>
+                    ) : thread.completedAt && thread.startedAt ? (
+                      <div className="turn-divider" role="status">
+                        <span>
+                          {thread.status === 'completed' ? 'Worked' : labels[thread.status]} for{' '}
+                          {duration(thread.startedAt, thread.completedAt)}
+                        </span>
+                      </div>
+                    ) : null}
+                    {thread.error ? (
+                      <div className="error-banner" role="alert">
+                        {thread.error}
+                      </div>
+                    ) : null}
                   </div>
-                ) : thread.completedAt && thread.startedAt ? (
-                  <div className="turn-divider" role="status">
-                    <span>
-                      {thread.status === 'completed' ? 'Worked' : labels[thread.status]} for{' '}
-                      {duration(thread.startedAt, thread.completedAt)}
+                )}
+              </div>
+            </div>
+            {thread || !activeId ? (
+              <footer className="composer-area">
+                {error ? (
+                  <div className="error-banner" role="alert">
+                    <span>{error}</span>
+                    <button
+                      className="icon-button"
+                      aria-label="Dismiss error"
+                      onClick={() => setError('')}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : null}
+                {thread ? (
+                  <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
+                    {pending[thread.id]?.length ? (
+                      <div className="pending-attachments">
+                        {pending[thread.id]!.map((item) => (
+                          <div
+                            className={`pending-image ${item.status}`}
+                            key={item.key}
+                            title={item.name}
+                          >
+                            <img src={item.previewUrl} alt={item.name} />
+                            {item.status === 'uploading' ? (
+                              <LoaderCircle size={14} className="status-spinner" />
+                            ) : null}
+                            <button
+                              type="button"
+                              className="pending-remove"
+                              aria-label={`Remove ${item.name}`}
+                              onClick={() => removePending(item.key)}
+                            >
+                              <X size={11} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <textarea
+                      ref={composer}
+                      aria-label="Message your agent"
+                      placeholder={
+                        active
+                          ? `${names[thread.provider]} is working…`
+                          : `Ask ${names[thread.provider]} to build, fix, or explore…`
+                      }
+                      value={draft}
+                      disabled={active}
+                      onChange={(e) => {
+                        setDraft(e.target.value)
+                        drafts.current.set(thread.id, e.target.value)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                          e.preventDefault()
+                          void send()
+                        }
+                      }}
+                      rows={1}
+                    />
+                    <input
+                      ref={filePicker}
+                      type="file"
+                      multiple
+                      hidden
+                      onChange={(event) => {
+                        const files = [...(event.target.files || [])]
+                        event.target.value = ''
+                        if (files.length) void handleFiles(files, [])
+                      }}
+                    />
+                    <div className="composer-toolbar">
+                      <AgentSettingsControls
+                        key={thread.id}
+                        provider={thread.provider}
+                        cwd={thread.cwd}
+                        value={{
+                          model: thread.model,
+                          effort: thread.effort || '',
+                          permissionMode: thread.permissionMode || defaultPermission,
+                        }}
+                        onChange={(settings) => void updateSettings(settings)}
+                        disabled={active || busy || !connected}
+                        agent={
+                          bootstrap
+                            ? {
+                                installed: {
+                                  claude: bootstrap.providers.claude.installed,
+                                  codex: bootstrap.providers.codex.installed,
+                                },
+                                locked: thread.messages.length > 0 || Boolean(thread.sessionId),
+                                // Switching agents brings back that agent's last-used settings.
+                                onChange: (provider) => {
+                                  if (provider !== thread.provider)
+                                    void updateSettings(settingsFor(provider), provider)
+                                },
+                              }
+                            : undefined
+                        }
+                      />
+                      <div className="composer-actions">
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Attach images or files"
+                          title="Attach images or files (or paste / drop them)"
+                          disabled={active || busy}
+                          onClick={() => filePicker.current?.click()}
+                        >
+                          <Paperclip size={15} />
+                        </button>
+                        {active ? (
+                          <button
+                            className="stop-button"
+                            type="button"
+                            aria-label="Stop"
+                            title="Stop"
+                            onClick={() => action('stop')}
+                            disabled={busy || !connected}
+                          >
+                            <Square size={11} fill="currentColor" />
+                          </button>
+                        ) : (
+                          <button
+                            className="send-button"
+                            type="submit"
+                            aria-label="Send message"
+                            title="Send (Enter)"
+                            disabled={
+                              (!draft.trim() && !pending[thread.id]?.length) ||
+                              Boolean(
+                                pending[thread.id]?.some((item) => item.status !== 'ready'),
+                              ) ||
+                              busy ||
+                              !connected
+                            }
+                          >
+                            <ArrowUp size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </form>
+                ) : null}
+                {thread && git?.branch ? (
+                  <div className="composer-meta">
+                    <span
+                      className="git-branch"
+                      title={
+                        git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`
+                      }
+                    >
+                      <GitBranch size={12} />
+                      <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
                     </span>
                   </div>
                 ) : null}
-                {thread.error ? (
-                  <div className="error-banner" role="alert">
-                    {thread.error}
-                  </div>
-                ) : null}
-              </div>
-            )}
+              </footer>
+            ) : null}
           </div>
         </div>
-        {thread || !activeId ? (
-          <footer className="composer-area">
-            {error ? (
-              <div className="error-banner" role="alert">
-                <span>{error}</span>
-                <button
-                  className="icon-button"
-                  aria-label="Dismiss error"
-                  onClick={() => setError('')}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ) : null}
-            {thread ? (
-              <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
-                {pending[thread.id]?.length ? (
-                  <div className="pending-attachments">
-                    {pending[thread.id]!.map((item) => (
-                      <div
-                        className={`pending-image ${item.status}`}
-                        key={item.key}
-                        title={item.name}
-                      >
-                        <img src={item.previewUrl} alt={item.name} />
-                        {item.status === 'uploading' ? (
-                          <LoaderCircle size={14} className="status-spinner" />
-                        ) : null}
-                        <button
-                          type="button"
-                          className="pending-remove"
-                          aria-label={`Remove ${item.name}`}
-                          onClick={() => removePending(item.key)}
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                <textarea
-                  ref={composer}
-                  aria-label="Message your agent"
-                  placeholder={
-                    active
-                      ? `${names[thread.provider]} is working…`
-                      : `Ask ${names[thread.provider]} to build, fix, or explore…`
-                  }
-                  value={draft}
-                  disabled={active}
-                  onChange={(e) => {
-                    setDraft(e.target.value)
-                    drafts.current.set(thread.id, e.target.value)
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault()
-                      void send()
-                    }
-                  }}
-                  rows={1}
-                />
-                <input
-                  ref={filePicker}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={(event) => {
-                    const files = [...(event.target.files || [])]
-                    event.target.value = ''
-                    if (files.length) void handleFiles(files, [])
-                  }}
-                />
-                <div className="composer-toolbar">
-                  <AgentSettingsControls
-                    key={thread.id}
-                    provider={thread.provider}
-                    cwd={thread.cwd}
-                    value={{
-                      model: thread.model,
-                      effort: thread.effort || '',
-                      permissionMode: thread.permissionMode || defaultPermission,
-                    }}
-                    onChange={(settings) => void updateSettings(settings)}
-                    disabled={active || busy || !connected}
-                    agent={
-                      bootstrap
-                        ? {
-                            installed: {
-                              claude: bootstrap.providers.claude.installed,
-                              codex: bootstrap.providers.codex.installed,
-                            },
-                            locked: thread.messages.length > 0 || Boolean(thread.sessionId),
-                            // Switching agents brings back that agent's last-used settings.
-                            onChange: (provider) => {
-                              if (provider !== thread.provider)
-                                void updateSettings(settingsFor(provider), provider)
-                            },
-                          }
-                        : undefined
-                    }
-                  />
-                  <div className="composer-actions">
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label="Attach images or files"
-                      title="Attach images or files (or paste / drop them)"
-                      disabled={active || busy}
-                      onClick={() => filePicker.current?.click()}
-                    >
-                      <Paperclip size={15} />
-                    </button>
-                    {active ? (
-                      <button
-                        className="stop-button"
-                        type="button"
-                        aria-label="Stop"
-                        title="Stop"
-                        onClick={() => action('stop')}
-                        disabled={busy || !connected}
-                      >
-                        <Square size={11} fill="currentColor" />
-                      </button>
-                    ) : (
-                      <button
-                        className="send-button"
-                        type="submit"
-                        aria-label="Send message"
-                        title="Send (Enter)"
-                        disabled={
-                          (!draft.trim() && !pending[thread.id]?.length) ||
-                          Boolean(pending[thread.id]?.some((item) => item.status !== 'ready')) ||
-                          busy ||
-                          !connected
-                        }
-                      >
-                        <ArrowUp size={16} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </form>
-            ) : null}
-            {thread && git?.branch ? (
-              <div className="composer-meta">
-                <span
-                  className="git-branch"
-                  title={git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`}
-                >
-                  <GitBranch size={12} />
-                  <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
-                </span>
-              </div>
-            ) : null}
-          </footer>
+        {/* Full height beside the header and chat, like an editor's side panel. */}
+        {thread && diffOpen && git?.branch ? (
+          <DiffPanel
+            threadId={thread.id}
+            project={thread.cwd}
+            refreshKey={`${thread.status}:${thread.activities.filter((item) => item.status !== 'running').length}`}
+            onClose={() => toggleDiff(false)}
+          />
         ) : null}
       </main>
       {dragging ? (
