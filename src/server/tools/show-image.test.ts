@@ -23,7 +23,12 @@ beforeEach(async () => {
   await mkdir(project)
   const uploads = new Uploads(join(root, 'data', 'attachments'))
   attach = vi.fn<(block: Block) => void>()
-  context = { cwd: project, attach, saveImage: (bytes) => uploads.saveImage(bytes) }
+  context = {
+    cwd: project,
+    attach,
+    saveImage: (bytes) => uploads.saveImage(bytes),
+    processes: {} as never,
+  }
 })
 afterEach(() => rm(root, { recursive: true, force: true }))
 

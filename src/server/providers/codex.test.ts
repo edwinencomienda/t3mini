@@ -28,7 +28,7 @@ function context(prompt: string): ProviderContext {
     thread,
     prompt,
     images: [],
-    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn() },
+    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn(), processes: {} as never },
     signal: new AbortController().signal,
     session: vi.fn((id) => {
       thread.sessionId = id
@@ -155,7 +155,15 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
   const started = JSON.parse(
     vi.mocked(fresh.text).mock.calls.find((call) => call[0] === 'settings')![1],
   )
-  expect(started.thread.dynamicTools).toEqual([
+  expect(started.thread.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual([
+    'show_image',
+    'start_process',
+    'list_processes',
+    'process_logs',
+    'stop_process',
+    'restart_process',
+  ])
+  expect(started.thread.dynamicTools).toContainEqual(
     expect.objectContaining({
       type: 'function',
       name: 'show_image',
@@ -165,7 +173,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
         required: ['path'],
       }),
     }),
-  ])
+  )
   const resumed = context('settings')
   resumed.thread.sessionId = 'previous-session'
   await runCodex(resumed)
@@ -186,7 +194,12 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
   await writeFile(join(dir, 'shot.png'), png)
   const reply = async (prompt: string) => {
     const ctx = context(prompt)
-    ctx.tools = { cwd: dir, attach: vi.fn(), saveImage: vi.fn(async () => ({ id: 'saved.png' })) }
+    ctx.tools = {
+      cwd: dir,
+      attach: vi.fn(),
+      saveImage: vi.fn(async () => ({ id: 'saved.png' })),
+      processes: {} as never,
+    }
     await runCodex(ctx)
     const result = JSON.parse(
       vi.mocked(ctx.text).mock.calls.find((call) => call[0] === 'tool-result')![1],
@@ -229,6 +242,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     cwd: process.cwd(),
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'gen.png' })),
+    processes: {} as never,
   }
   await runCodex(ctx)
   expect(vi.mocked(ctx.tools.saveImage).mock.calls[0]![0].subarray(1, 4).toString()).toBe('PNG')
@@ -242,6 +256,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     cwd: process.cwd(),
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'x.png' })),
+    processes: {} as never,
   }
   await runCodex(outside)
   expect(outside.tools.saveImage).not.toHaveBeenCalled()

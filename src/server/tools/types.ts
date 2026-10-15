@@ -1,5 +1,15 @@
 import type { z } from 'zod'
 import type { Block } from '../../blocks'
+import type { ProcessInfo } from '../processes'
+
+// A thread's view of the process manager: only its own project's processes.
+export type ProjectProcesses = {
+  list: () => ProcessInfo[]
+  start: (input: { name: string; command: string; cwd?: string }) => Promise<ProcessInfo>
+  logs: (id: string, lines?: number) => string
+  stop: (id: string) => Promise<ProcessInfo>
+  restart: (id: string) => Promise<ProcessInfo>
+}
 
 // The t3 mini tool system. A tool is one definition: a name, a description the agent reads, a
 // zod input shape (validation and the agent-facing schema in one), and a run() that works
@@ -13,6 +23,8 @@ export type ToolContext = {
   attach: (block: Block) => void
   // Stores image bytes with the thread's uploads and returns the id to reference.
   saveImage: (bytes: Buffer) => Promise<{ id: string }>
+  // Long-running processes (dev servers…) in this thread's project.
+  processes: ProjectProcesses
 }
 
 export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {

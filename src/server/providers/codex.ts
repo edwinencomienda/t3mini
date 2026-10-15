@@ -117,7 +117,8 @@ export const runCodex: Runner = async (ctx) => {
       client.send({ id, result: { success, contentItems: [{ type: 'inputText', text }] } })
     const definition = findTool(string(params.tool))
     if (!definition) return reply(false, `Unknown tool: ${string(params.tool) || '(none)'}.`)
-    if (definition.safety === 'approval') {
+    // 'approval' tools ask first, unless the thread runs with full access (no prompts).
+    if (definition.safety === 'approval' && ctx.thread.permissionMode !== 'full-access') {
       const allowed = await ctx
         .approve({
           id: String(id),

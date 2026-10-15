@@ -71,6 +71,27 @@ export async function handleApi(request: Request) {
         throw new HttpError(413, 'The recording is too long.')
       return Response.json(await transcribe(await request.json()))
     }
+    // Long-running processes agents started (the list itself comes with the live updates).
+    if (parts[0] === 'processes' && parts[1]) {
+      const info = service.processes.get(parts[1])
+      if (!info) throw new HttpError(404, 'Process not found.')
+      if (parts[2] === 'logs' && request.method === 'GET') {
+        const lines = Number(url.searchParams.get('lines')) || 500
+        return Response.json({ logs: service.processes.logs(info.id, lines) ?? '' })
+      }
+      if (parts[2] === 'stop' && request.method === 'POST')
+        return Response.json(await service.processes.stop(info.id))
+      if (parts[2] === 'restart' && request.method === 'POST')
+        return Response.json(await service.processes.restart(info.id))
+      if (!parts[2] && request.method === 'DELETE') {
+        try {
+          service.processes.remove(info.id)
+        } catch (error) {
+          throw new HttpError(409, error instanceof Error ? error.message : 'Stop it first.')
+        }
+        return Response.json({ ok: true })
+      }
+    }
     if (parts[0] === 'remote') {
       macOnly('Managing phone access')
       const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))

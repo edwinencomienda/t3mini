@@ -63,6 +63,8 @@ import {
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
+import { ProcessIndicator } from './Processes'
+import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -420,6 +422,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     | null
   >(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   // Add project can return to the new-thread dialog with the added folder selected.
@@ -517,9 +520,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
           // Optional: a server started before projects existed omits it until restarted.
           projects?: ProjectSummary[]
           thread: Thread | null
+          processes?: ProcessInfo[]
           persistenceError?: string
         }
         setProjects(data.projects ?? [])
+        setProcesses(data.processes ?? [])
         announce(threadEvents(statuses.current, data.threads))
         statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
         setThreads(data.threads)
@@ -1834,17 +1839,22 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     </div>
                   </form>
                 ) : null}
-                {thread && git?.branch ? (
+                {thread &&
+                (git?.branch || processes.some((item) => item.project === thread.cwd)) ? (
                   <div className="composer-meta">
-                    <span
-                      className="git-branch"
-                      title={
-                        git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`
-                      }
-                    >
-                      <GitBranch size={12} />
-                      <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
-                    </span>
+                    {git?.branch ? (
+                      <span
+                        className="git-branch"
+                        title={
+                          git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`
+                        }
+                      >
+                        <GitBranch size={12} />
+                        <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
+                      </span>
+                    ) : null}
+                    {/* Dev servers and other processes agents started in this project. */}
+                    <ProcessIndicator processes={processes} project={thread.cwd} />
                   </div>
                 ) : null}
               </footer>

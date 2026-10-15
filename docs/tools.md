@@ -40,6 +40,17 @@ src/components/blocks.tsx   one renderer per block type
 - **Errors:** throw `ToolError` with a message the agent can act on ("File not found: …"); never include secrets or unrelated file contents.
 - **Size:** keep block payloads small (they're saved with the thread and sent on every live update). Store binary data via uploads and reference it by id.
 
+## Process tools
+
+`start_process`, `list_processes`, `process_logs`, `stop_process`, `restart_process` (`tools/processes.ts`) let agents run long-lived commands (dev servers, watchers) that keep going after the tool returns. They're backed by `ProcessManager` (`src/server/processes.ts`), owned by the service:
+
+- **Scope:** a thread's tools get `context.processes`, limited to the thread's project. They can't see or control other projects' processes, and `cwd` must stay inside the project.
+- **Running:** `$SHELL -lc <command>` (a login shell, so PATH matches the user's terminal) in its own process group (`detached`). Output (stdout+stderr, ANSI stripped) is kept in a 256 KB ring buffer; the first local URL printed (`http://localhost:5173`, `0.0.0.0` normalized) is detected. t3 mini's own env secrets (`DEEPGRAM_API_KEY`…) are removed from the child env.
+- **Stopping:** SIGTERM to the whole group, SIGKILL after 5 s. Restart = stop + same command.
+- **Lifetime:** in memory only. On t3 mini shutdown (exit, SIGINT, SIGTERM, SIGHUP) every running group is signaled, so dev servers don't outlive it holding ports. Max 10 running per project.
+- **Safety:** `start_process` and `restart_process` are `approval` (Allow once / Decline unless the thread has full access); list, logs, and stop are `safe`.
+- **UI:** the live snapshot includes `processes`; the composer's meta row shows "● N running" for the open project (`components/Processes.tsx`), with Logs (polled every second while open), Restart, Stop, and Remove. API: `GET /api/processes/:id/logs`, `POST /api/processes/:id/stop|restart`, `DELETE /api/processes/:id`.
+
 ## Agents' own images
 
 Codex has a built-in image generator. Its results arrive as `imageGeneration` items with base64 `result` data and a `savedPath` under `~/.codex/generated_images/<thread>/`. `providers/codex.ts` (`showGeneratedImage`) shows them like `show_image` does: it uses the data, or the saved file **only if it's inside `~/.codex/generated_images`**, runs the bytes through `saveImage()` (real image, ≤10 MB), and attaches it with Codex's revised prompt as the caption. The turn waits for these saves before ending. The work log shows them as "Generate image".

@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -16,8 +16,10 @@ import {
 } from '../types'
 import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
 import { UploadError, Uploads, attachmentSchema } from './uploads'
+import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
+import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import type { PromptImage, Runner, Steer } from './providers/types'
@@ -70,6 +72,34 @@ const summary = (thread: Thread): ThreadSummary => ({
   updatedAt: thread.updatedAt,
   lastMessageAt: lastMessageAt(thread),
 })
+// What a thread's tools may do with processes: only its own project's, started inside it.
+function projectProcesses(manager: ProcessManager, thread: Thread) {
+  const own = (id: string) => {
+    const info = manager.get(id)
+    if (!info || info.project !== thread.cwd) throw new ToolError(`No process with id ${id}.`)
+    return info
+  }
+  return {
+    list: () => manager.list(thread.cwd),
+    start: async (input: { name: string; command: string; cwd?: string }) => {
+      const folder = input.cwd ? resolve(thread.cwd, input.cwd) : thread.cwd
+      const inside = relative(thread.cwd, folder)
+      if (inside.startsWith('..') || isAbsolute(inside))
+        throw new ToolError('Processes can only start inside the project folder.')
+      try {
+        return manager.start({ ...input, cwd: folder, project: thread.cwd, threadId: thread.id })
+      } catch (error) {
+        throw new ToolError(error instanceof Error ? error.message : 'Could not start the process.')
+      }
+    },
+    logs: (id: string, lines?: number) => {
+      own(id)
+      return manager.logs(id, lines) ?? ''
+    },
+    stop: async (id: string) => manager.stop(own(id).id),
+    restart: async (id: string) => manager.restart(own(id).id),
+  }
+}
 // Expands ~, requires an absolute path, and resolves symlinks to the real directory.
 async function resolveFolder(input: string) {
   const expanded =
@@ -105,7 +135,11 @@ export class AgentService {
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
     readonly projectStore = new ProjectStore(projectStorePath(store.path)),
     readonly uploads = new Uploads(join(dirname(store.path), 'attachments')),
-  ) {}
+    readonly processes = new ProcessManager(),
+  ) {
+    // Process status changes (started, URL found, exited) go out with the live updates.
+    processes.subscribe(() => this.notify())
+  }
   async upload(input: unknown) {
     try {
       return await this.uploads.save(input)
@@ -204,6 +238,7 @@ export class AgentService {
       threads: this.list(),
       projects: this.projects(),
       thread: id ? (this.store.threads.get(id) ?? null) : null,
+      processes: this.processes.list(),
       persistenceError: this.persistenceError,
     }
   }
@@ -464,6 +499,7 @@ export class AgentService {
         },
         tools: {
           cwd: thread.cwd,
+          processes: projectProcesses(this.processes, thread),
           saveImage: (bytes) => this.uploads.saveImage(bytes),
           // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
           // written anything since the user's message, it gets a reply of its own.
@@ -567,6 +603,7 @@ export class AgentService {
   }
   async close() {
     await Promise.all([...this.runs.keys()].map((id) => this.stop(id)))
+    await this.processes.stopAll()
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = undefined

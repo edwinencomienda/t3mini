@@ -2586,3 +2586,143 @@ body.resizing {
   background: rgb(255 255 255 / 12%);
   color: #fff;
 }
+
+/* Processes: chip under the composer, list popover, and log viewer */
+.composer-meta {
+  justify-content: space-between;
+}
+.process-indicator {
+  position: relative;
+  margin-left: auto;
+}
+.process-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 1.3rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.process-chip:hover,
+.process-chip[aria-expanded='true'] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.process-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.process-chip.running .process-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 50%, transparent);
+  animation: process-pulse 2s ease-in-out infinite;
+}
+@keyframes process-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
+  }
+}
+.process-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 30;
+  width: min(26rem, calc(100vw - 2rem));
+  max-height: 22rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.process-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-radius: 0.45rem;
+}
+.process-row + .process-row {
+  border-top: 1px solid var(--border);
+}
+.process-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.process-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 13px;
+  font-weight: 500;
+}
+.process-meta {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.process-row.running .process-meta {
+  color: var(--success);
+}
+.process-row.failed .process-meta {
+  color: var(--danger);
+}
+.process-main code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.process-main a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  font-size: 12px;
+  color: var(--primary);
+}
+.process-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.1rem;
+}
+.process-logs.new-dialog {
+  width: min(52rem, calc(100vw - 2rem));
+}
+.process-logs .dialog-top {
+  padding: 1rem 1.1rem 0.25rem;
+}
+.process-logs h2 small {
+  margin-left: 0.4rem;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.process-command {
+  display: block;
+  padding: 0 1.1rem 0.6rem;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.process-output {
+  height: min(28rem, calc(100dvh - 12rem));
+  margin: 0 1.1rem 1.1rem;
+  padding: 0.75rem;
+  overflow: auto;
+  border-radius: 0.5rem;
+  background: #0b0b0b;
+  color: #d6d6d6;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -502,3 +502,39 @@ it('attaches tool content to the current reply, or to a reply of its own', async
   })
   await settle(created.id, finish)
 })
+it("lets a thread's tools manage only its own project's processes", async () => {
+  const { mkdir } = await import('node:fs/promises')
+  const { vi } = await import('vitest')
+  vi.stubEnv('SHELL', '/bin/sh')
+  try {
+    const created = await thread()
+    await service.send(created.id, { text: 'Start the dev server' })
+    await started
+    const processes = context.tools.processes
+    await expect(processes.start({ name: 'x', command: 'true', cwd: '../' })).rejects.toThrow(
+      'inside the project',
+    )
+    await mkdir(join(created.cwd, 'web'))
+    const info = await processes.start({ name: 'Web', command: 'exec sleep 60', cwd: 'web' })
+    expect(info).toMatchObject({
+      project: created.cwd,
+      cwd: join(created.cwd, 'web'),
+      threadId: created.id,
+    })
+    expect(service.snapshot().processes.map((item) => item.id)).toContain(info.id)
+    // A process from another project is invisible to this thread's tools.
+    const other = service.processes.start({
+      name: 'Other',
+      command: 'exec sleep 60',
+      cwd: tmpdir(),
+      project: '/other',
+    })
+    expect(() => processes.logs(other.id)).toThrow('No process')
+    await expect(processes.stop(other.id)).rejects.toThrow('No process')
+    await processes.stop(info.id)
+    await service.processes.stop(other.id)
+    await settle(created.id, finish)
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})
