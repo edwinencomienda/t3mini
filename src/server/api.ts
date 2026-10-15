@@ -2,6 +2,9 @@ import { z } from 'zod'
 import { getService, HttpError } from './service'
 import { pickProjectFolder } from './folder-picker'
 import { getModels } from './models'
+import { dirname, join } from 'node:path'
+import QRCode from 'qrcode'
+import { getRemoteAccess, remoteHeader } from './remote'
 
 // This application launches local agents. Keep every endpoint loopback-only and same-origin.
 export function checkRequest(request: Request) {
@@ -25,8 +28,53 @@ export async function handleApi(request: Request) {
     const service = await getService()
     const url = new URL(request.url),
       parts = url.pathname.split('/').filter(Boolean).slice(1)
-    if (parts[0] === 'folders' && parts[1] === 'pick' && request.method === 'POST')
+    // Set only by the phone-access gateway, which strips it from what the phone sends.
+    const remote = request.headers.get(remoteHeader) === '1'
+    const macOnly = (what: string) => {
+      if (remote) throw new HttpError(403, `${what} is only available on the Mac running t3 mini.`)
+    }
+    if (parts[0] === 'remote') {
+      macOnly('Managing phone access')
+      const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))
+      if (!parts[1] && request.method === 'GET') return Response.json(access.status())
+      if (!parts[1] && request.method === 'POST') {
+        const { enabled } = z.object({ enabled: z.boolean() }).parse(await request.json())
+        try {
+          if (enabled) await access.enable(Number(url.port) || 80)
+          else await access.disable()
+        } catch {
+          throw new HttpError(
+            500,
+            `Could not start phone access on port ${access.port}. Is another app using it?`,
+          )
+        }
+        return Response.json(access.status())
+      }
+      if (parts[1] === 'pair' && request.method === 'POST') {
+        let pairing
+        try {
+          pairing = access.createPairing()
+        } catch (error) {
+          throw new HttpError(409, error instanceof Error ? error.message : 'Phone access is off.')
+        }
+        const links = await Promise.all(
+          pairing.urls.map(async (link) => ({
+            url: link,
+            qr: await QRCode.toDataURL(link, { margin: 1, width: 240 }),
+          })),
+        )
+        return Response.json({ expiresAt: pairing.expiresAt, links })
+      }
+      if (parts[1] === 'devices' && request.method === 'DELETE') {
+        const { id } = z.object({ id: z.string().optional() }).parse(await request.json())
+        await access.revoke(id)
+        return Response.json(access.status())
+      }
+    }
+    if (parts[0] === 'folders' && parts[1] === 'pick' && request.method === 'POST') {
+      macOnly('Browsing folders')
       return Response.json(await pickProjectFolder(await request.json()))
+    }
     if (parts[0] === 'models' && request.method === 'GET') {
       const provider = z.enum(['codex', 'claude']).parse(url.searchParams.get('provider'))
       try {
@@ -75,8 +123,11 @@ export async function handleApi(request: Request) {
       if (request.method === 'DELETE')
         return Response.json(await service.removeProject(await request.json()))
     }
-    if (parts[0] === 'bootstrap' && request.method === 'GET')
-      return Response.json(await service.bootstrap())
+    if (parts[0] === 'bootstrap' && request.method === 'GET') {
+      const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))
+      // remote: this page runs on a paired phone, so Mac-only actions are hidden.
+      return Response.json({ ...(await service.bootstrap()), remote, phoneAccess: access.enabled })
+    }
     if (parts[0] === 'events' && request.method === 'GET') {
       const id = url.searchParams.get('thread') || undefined
       if (id) service.get(id)
@@ -146,7 +197,10 @@ export async function handleApi(request: Request) {
           return Response.json(await service.updateSettings(id, await request.json()))
         if (parts[2] === 'send')
           return Response.json(await service.send(id, await request.json()), { status: 202 })
-        if (parts[2] === 'open-editor') return Response.json(await service.openInEditor(id))
+        if (parts[2] === 'open-editor') {
+          macOnly('Opening VS Code')
+          return Response.json(await service.openInEditor(id))
+        }
         if (parts[2] === 'rename')
           return Response.json(await service.rename(id, await request.json()))
         if (parts[2] === 'stop') return Response.json(await service.stop(id))

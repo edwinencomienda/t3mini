@@ -73,7 +73,21 @@ New threads default to **Claude** (Codex if only Codex is installed) and **Full 
 
 The **Browse…** chooser opens on the Mac running the server. Cancel leaves the current folder unchanged. On other operating systems, enter the project folder path manually.
 
-This first version runs on one local Node process. It binds to loopback and rejects foreign hosts and cross-origin API requests. It has no remote authentication, tunnels, worktree isolation, checkpoint rollback, attachments, or interactive provider question forms. Use a project folder or worktree you intend the agent to edit. Decline unsupported requests or stop the turn and answer with a follow-up message.
+This first version runs on one local Node process. It binds to loopback and rejects foreign hosts and cross-origin API requests. Phone access (below) is the only way in from another device. There are no tunnels, worktree isolation, checkpoint rollback, or interactive provider question forms. Use a project folder or worktree you intend the agent to edit. Decline unsupported requests or stop the turn and answer with a follow-up message.
+
+## Phone access (local network)
+
+Use t3 mini from your phone's browser on the same Wi-Fi. It's off by default and **turns off whenever the server restarts**.
+
+1. On the Mac, open **Settings → Phone access** and turn on **Allow phones on this network**. A phone icon appears in the sidebar footer while it's on.
+2. Click **Connect a phone** and scan the QR code with the phone's camera. The code works once and expires after 5 minutes.
+3. The phone stays paired for 30 days. Revoke one device or all of them in the same section; revoking cuts open connections immediately.
+
+Phones see the same threads live, and can send, steer, approve, stop, and view changes. Mac-only actions (Browse for a folder, Open in VS Code, managing phone access) are hidden on the phone and refused by the server.
+
+How it works: a gateway listens on port `4311` (set `T3_MINI_PHONE_PORT` to change it) only while phone access is on. It accepts requests only for this Mac's own local-network address, only from private network addresses, only with a paired session cookie (`HttpOnly`, `SameSite=Lax`), and only from its own origin, then forwards them to the loopback-only app marked as remote. Session tokens and pairing codes are stored only as SHA-256 hashes in `.data/devices.json`.
+
+**Security:** traffic is plain HTTP, so use this only on a network you trust (such as home Wi-Fi), never on public or shared Wi-Fi. Anyone on the network who can watch traffic could take over a paired session, and with it agents that can run commands on this Mac. Desktop notifications need HTTPS, so phones get in-app toasts and sound only. macOS may ask once whether to allow incoming connections for `node`.
 
 ## Data and configuration
 
@@ -86,6 +100,7 @@ Conversations are atomically saved to `.data/threads.json`, projects to `.data/p
 | `CLAUDE_BIN`         | Optional Claude Code executable override for the SDK and CLI check. |
 | `PORT`               | Production server port; defaults to `4310`.                         |
 | `VSCODE_BIN`         | Optional `code` executable used by the Open in VS Code button.      |
+| `T3_MINI_PHONE_PORT` | Port for phone access on your local network; defaults to `4311`.    |
 
 Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
 

@@ -24,6 +24,7 @@ import {
   Plus,
   Search,
   Settings,
+  Smartphone,
   ShieldAlert,
   Square,
   Sun,
@@ -495,7 +496,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }, [])
   function announce(events: ThreadEvent[]) {
     if (!events.length) return
-    const focused = document.visibilityState === 'visible' && document.hasFocus()
+    const visible = document.visibilityState === 'visible'
+    // Phone browsers (iOS Safari especially) often report no focus while you're looking right
+    // at the page, so on touch screens a visible page counts as being watched.
+    const focused =
+      visible && (document.hasFocus() || window.matchMedia('(pointer: coarse)').matches)
     const preferences = notifyRef.current
     const finished = events.filter((event) => event.kind === 'completed' || event.kind === 'failed')
     if (preferences.sound && events.some((event) => event.kind === 'completed'))
@@ -509,8 +514,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
         return next
       })
     for (const event of events) {
-      const viewing = focused && event.thread.id === selectedId.current
-      if (preferences.inApp && !viewing)
+      // No toast for the thread already on screen, focused or not.
+      const onScreen = visible && event.thread.id === selectedId.current
+      if (preferences.inApp && !onScreen)
         setToasts((current) => [
           ...current.filter((item) => item.thread.id !== event.thread.id),
           event,
@@ -1247,6 +1253,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
               <Monitor size={14} />
             )}
           </button>
+          {/* A reminder on the Mac while phones can connect. */}
+          {bootstrap?.phoneAccess && !bootstrap.remote ? (
+            <button
+              className="icon-button phone-on"
+              aria-label="Phone access is on. Open settings"
+              title="Phone access is on"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Smartphone size={14} />
+            </button>
+          ) : null}
           <button
             className="icon-button"
             aria-label="Settings"
@@ -1290,7 +1307,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               {thread ? (
                 <>
                   <StatusBadge status={thread.status} />
-                  {bootstrap?.editors?.vscode ? (
+                  {bootstrap?.editors?.vscode && !bootstrap.remote ? (
                     <button
                       className="icon-button"
                       aria-label="Open project in VS Code"
@@ -1769,6 +1786,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
         <SettingsDialog
           preferences={notify}
           providers={bootstrap?.providers}
+          remote={Boolean(bootstrap?.remote)}
+          onPhoneAccessChange={(phoneAccess) =>
+            setBootstrap((current) => (current ? { ...current, phoneAccess } : current))
+          }
           theme={theme}
           onThemeChange={changeTheme}
           onChange={(preferences) => {
@@ -1797,6 +1818,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       ) : null}
       {addProject && bootstrap ? (
         <AddProject
+          canBrowse={!bootstrap.remote}
           initialPath={loadPreferences().cwd || bootstrap.defaultCwd}
           onClose={() => setAddProject(null)}
           onAdded={(project) => {
@@ -1925,10 +1947,13 @@ function NewThread({
   )
 }
 function AddProject({
+  canBrowse,
   initialPath,
   onClose,
   onAdded,
 }: {
+  // The folder chooser opens on the Mac, so a paired phone types the path instead.
+  canBrowse: boolean
   initialPath: string
   onClose: () => void
   onAdded: (project: ProjectSummary) => void
@@ -2004,10 +2029,17 @@ function AddProject({
               disabled={busy || picking}
               required
             />
-            <button className="secondary" type="button" onClick={browse} disabled={busy || picking}>
-              <FolderOpen size={14} />
-              {picking ? 'Choosing…' : 'Browse'}
-            </button>
+            {canBrowse ? (
+              <button
+                className="secondary"
+                type="button"
+                onClick={browse}
+                disabled={busy || picking}
+              >
+                <FolderOpen size={14} />
+                {picking ? 'Choosing…' : 'Browse'}
+              </button>
+            ) : null}
           </div>
           <small className="field-hint">
             {picking

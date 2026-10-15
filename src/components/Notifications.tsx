@@ -13,6 +13,7 @@ import {
 import { themeLabels, themes, type Theme } from '../theme'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
+import { PhoneAccess } from './PhoneAccess'
 import {
   desktopPermission,
   eventText,
@@ -158,9 +159,13 @@ export function SettingsDialog({
   onThemeChange,
   onChange,
   onClose,
+  remote = false,
+  onPhoneAccessChange,
 }: {
   preferences: NotificationPreferences
   providers?: Bootstrap['providers']
+  remote?: boolean
+  onPhoneAccessChange?: (enabled: boolean) => void
   theme: Theme
   onThemeChange: (theme: Theme) => void
   onChange: (preferences: NotificationPreferences) => void
@@ -226,6 +231,8 @@ export function SettingsDialog({
             </div>
           </div>
         </section>
+        {/* Phone access is managed only from the Mac itself. */}
+        {!remote ? <PhoneAccess onChange={(enabled) => onPhoneAccessChange?.(enabled)} /> : null}
         <section className="settings-section">
           <h3>Agents</h3>
           {(['claude', 'codex'] as const).map((provider) => {

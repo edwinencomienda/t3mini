@@ -67,6 +67,9 @@ export type Bootstrap = {
   providers: Record<Provider, ProviderHealth>
   // Editors found on this machine that a project can be opened in.
   editors: { vscode: boolean }
+  // Set by the API: this page is on a paired phone; and whether phone access is switched on.
+  remote?: boolean
+  phoneAccess?: boolean
   defaultCwd: string
 }
 export const isActive = (status: Status) => ['starting', 'working', 'waiting'].includes(status)
