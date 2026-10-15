@@ -744,9 +744,35 @@ kbd {
   background: var(--code-surface);
   border: 1px solid var(--border);
 }
-.markdown pre {
+/* Code blocks carry a copy button in their top-right corner, shown on hover (always on touch). */
+.code-block {
+  position: relative;
   margin: 0.75rem 0;
-  padding: 0.75rem 0.9rem;
+}
+.code-copy {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.code-block:hover .code-copy,
+.code-copy:focus-visible {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .code-copy {
+    opacity: 1;
+  }
+}
+.markdown pre {
+  margin: 0;
+  /* Extra room on the right for the copy button, so it never covers the first line. */
+  padding: 0.75rem 2.6rem 0.75rem 0.9rem;
   border-radius: var(--radius);
   background: var(--code-surface);
   border: 1px solid var(--border);

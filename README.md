@@ -48,7 +48,7 @@ On the Mac, t3 mini checks npm for new Claude Code and Codex releases (at startu
 - Agents can show images in the chat (Claude, and Codex threads created from now on): ask “take a screenshot and show me” or “show me the chart you made”. They use t3 mini's `show_image` tool, which only accepts real image files inside the project or temp folder. See [docs/tools.md](docs/tools.md).
 - Agents can rename their own thread: ask “rename this thread to Login bug” or “give this session a better name”. They can't rename other threads. (Codex threads created before this feature don't have it.)
 - Agents can run long-lived processes such as dev servers (“start the dev server”): a **● N running** indicator under the composer lists them with their URL, live **Logs**, **Restart**, and **Stop**. They stop when t3 mini stops. Starting one asks for approval unless the thread has full access.
-- Streamed Markdown replies and a work log for the latest turn. Each step reads like `Run git status`, `Read src/app.ts`, or `Edit src/styles.css`; click a step to see the full command or edit and its output (long output is trimmed).
+- Streamed Markdown replies (code blocks have a copy button) and a work log for the latest turn. Each step reads like `Run git status`, `Read src/app.ts`, or `Edit src/styles.css`; click a step to see the full command or edit and its output (long output is trimmed).
 - Real provider status: starting, working, waiting for approval, completed, stopped, or failed.
 - Explicit **Allow once / Decline** actions when a provider requests tool approval, plus **Stop** for an active turn.
 - Live updates over Server-Sent Events, including reconnect snapshots. Switching threads or closing the browser does not stop an agent.

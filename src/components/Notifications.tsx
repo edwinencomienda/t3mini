@@ -37,14 +37,18 @@ const icons = {
   interrupted: <CircleStop size={16} />,
   waiting: <ShieldAlert size={16} />,
 }
-const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
+
+const agentNames = { claude: 'Claude', codex: 'Codex' } as const
 
 function Toast({
   event,
+  project,
   onOpen,
   onDismiss,
 }: {
   event: ThreadEvent
+  // The project's sidebar name (its custom name, else its folder).
+  project: string
   onOpen: () => void
   onDismiss: () => void
 }) {
@@ -70,7 +74,7 @@ function Toast({
         <span className="toast-text">
           <strong>{event.thread.title}</strong>
           <small>
-            {eventText[event.kind]} · {folderName(event.thread.cwd)}
+            {project} · {agentNames[event.thread.provider]} {eventText[event.kind].toLowerCase()}
           </small>
         </span>
       </button>
@@ -83,10 +87,12 @@ function Toast({
 
 export function Toasts({
   events,
+  projectName,
   onOpen,
   onDismiss,
 }: {
   events: ThreadEvent[]
+  projectName: (path: string) => string
   onOpen: (event: ThreadEvent) => void
   onDismiss: (key: string) => void
 }) {
@@ -97,6 +103,7 @@ export function Toasts({
         <Toast
           key={event.key}
           event={event}
+          project={projectName(event.thread.cwd)}
           onOpen={() => onOpen(event)}
           onDismiss={() => onDismiss(event.key)}
         />

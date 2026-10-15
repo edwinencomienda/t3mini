@@ -136,10 +136,43 @@ const starters = [
     text: 'Help me plan a new feature for this project. First, explore the code and ask me what I want to build.',
   },
 ]
+// A code block in a reply, with a button that copies its text (works on phones too: copyText
+// falls back to a hidden textarea where the Clipboard API isn't allowed).
+function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
+  const block = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <div className="code-block">
+      <pre ref={block} {...props}>
+        {children}
+      </pre>
+      <button
+        type="button"
+        className="icon-button code-copy"
+        aria-label={copied ? 'Copied' : 'Copy code'}
+        title={copied ? 'Copied' : 'Copy'}
+        onClick={() =>
+          void copyText((block.current?.textContent ?? '').replace(/\n$/, '')).then(
+            () => setCopied(true),
+            () => {},
+          )
+        }
+      >
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+      </button>
+    </div>
+  )
+}
 // Links in agent replies open in a new tab so the conversation stays put. noopener/noreferrer
 // stops the opened page from controlling this tab or seeing its URL. react-markdown's default
 // URL filter still drops unsafe schemes such as javascript:.
 const markdownComponents: Components = {
+  pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
   a: ({ node: _node, href, children, ...props }) =>
     href?.startsWith('#') ? (
       <a href={href} {...props}>
@@ -2119,6 +2152,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         ) : null}
         <Toasts
           events={toasts}
+          projectName={projectName}
           onOpen={(event) => {
             setToasts((current) => current.filter((item) => item.key !== event.key))
             select(event.thread.id)
