@@ -241,6 +241,24 @@ it('reports the git branch of a thread project, or none outside a repository', a
   const git = promisify(execFile)
   await git('git', ['-C', created.cwd, 'init', '-q', '-b', 'feature/test-branch'])
   expect(await service.gitInfo(created.id)).toEqual({ branch: 'feature/test-branch' })
+  // A GitHub origin links to the repository until the branch tracks a remote branch.
+  await git('git', ['-C', created.cwd, 'remote', 'add', 'origin', 'git@github.com:edwin/demo.git'])
+  expect(await service.gitInfo(created.id)).toEqual({
+    branch: 'feature/test-branch',
+    url: 'https://github.com/edwin/demo',
+  })
+  await git('git', ['-C', created.cwd, 'config', 'branch.feature/test-branch.remote', 'origin'])
+  await git('git', [
+    '-C',
+    created.cwd,
+    'config',
+    'branch.feature/test-branch.merge',
+    'refs/heads/feature/test-branch',
+  ])
+  expect(await service.gitInfo(created.id)).toEqual({
+    branch: 'feature/test-branch',
+    url: 'https://github.com/edwin/demo/tree/feature/test-branch',
+  })
 })
 it('saves image uploads by content type, rejects disguised files, and passes images to the agent', async () => {
   const png = Buffer.from(

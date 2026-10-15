@@ -16,6 +16,7 @@ import {
   Circle,
   Copy,
   EllipsisVertical,
+  ExternalLink,
   Folder,
   FolderPlus,
   FileUp,
@@ -94,6 +95,7 @@ import remarkGfm from 'remark-gfm'
 import {
   isActive,
   type Bootstrap,
+  type GitInfo,
   type Message,
   type ProjectSummary,
   type Provider,
@@ -401,8 +403,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // switching so the layout doesn't blank out and pop back in while fresh data loads.
   const threadCache = useRef(new Map<string, Thread>())
   const notice = useRef<string | undefined>(undefined)
-  const gitCache = useRef(new Map<string, { branch: string | null; detached?: boolean }>())
-  const [git, setGit] = useState<{ branch: string | null; detached?: boolean } | null>(null)
+  const gitCache = useRef(new Map<string, GitInfo>())
+  const [git, setGit] = useState<GitInfo | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const settleUntil = useRef(0)
@@ -564,12 +566,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (!activeId || !activeCwd) return
     const controller = new AbortController()
     const load = () =>
-      api<{ branch: string | null; detached?: boolean }>(
-        `threads/${activeId}/git`,
-        'GET',
-        undefined,
-        controller.signal,
-      )
+      api<GitInfo>(`threads/${activeId}/git`, 'GET', undefined, controller.signal)
         .then((info) => {
           gitCache.current.set(activeCwd, info)
           setGit(info)
@@ -1844,15 +1841,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 (git?.branch || processes.some((item) => item.project === thread.cwd)) ? (
                   <div className="composer-meta">
                     {git?.branch ? (
-                      <span
+                      // Opens the branch on GitHub in a new tab when the remote is there.
+                      <a
                         className="git-branch"
+                        href={git.url}
+                        target={git.url ? '_blank' : undefined}
+                        rel={git.url ? 'noopener noreferrer' : undefined}
                         title={
-                          git.detached ? `Detached HEAD at ${git.branch}` : `Branch ${git.branch}`
+                          (git.detached
+                            ? `Detached HEAD at ${git.branch}`
+                            : `Branch ${git.branch}`) + (git.url ? ' — open on GitHub' : '')
                         }
                       >
                         <GitBranch size={12} />
                         <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
-                      </span>
+                        {git.url ? (
+                          <ExternalLink size={11} className="git-branch-external" />
+                        ) : null}
+                      </a>
                     ) : null}
                     {/* Dev servers and other processes agents started in this project. */}
                     <ProcessIndicator processes={processes} project={thread.cwd} />

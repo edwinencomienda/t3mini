@@ -8,6 +8,7 @@ import { z } from 'zod'
 import {
   isActive,
   type Bootstrap,
+  type GitInfo,
   type Message,
   type ProjectSummary,
   type Provider,
@@ -19,6 +20,7 @@ import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
+import { githubBranchUrl, githubRepoUrl } from './github'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
@@ -610,30 +612,42 @@ export class AgentService {
     }
     await this.store.save()
   }
-  // The current git branch of a thread's project folder, or null when it isn't a git repo.
-  // Runs git directly (no shell) and only in the thread's own folder.
-  async gitInfo(id: string): Promise<{ branch: string | null; detached?: boolean }> {
+  // The current git branch of a thread's project folder, or null when it isn't a git repo,
+  // plus a GitHub link when the remote is on GitHub. Runs git directly (no shell) and only in
+  // the thread's own folder.
+  async gitInfo(id: string): Promise<GitInfo> {
     const { cwd } = this.get(id)
+    const git = async (args: string[]) =>
+      (await exec('git', ['-C', cwd, ...args], { timeout: 3_000 })).stdout.trim()
+    const optional = (args: string[]) => git(args).catch(() => '')
+    let branch: string
+    let detached = false
     try {
-      const { stdout } = await exec(
-        'git',
-        ['-C', cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
-        {
-          timeout: 3_000,
-        },
-      )
-      return { branch: stdout.trim() || null }
+      branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
     } catch {
       // Not on a branch: either a detached HEAD or not a repository at all.
       try {
-        const { stdout } = await exec('git', ['-C', cwd, 'rev-parse', '--short', 'HEAD'], {
-          timeout: 3_000,
-        })
-        return { branch: stdout.trim() || null, detached: true }
+        branch = await git(['rev-parse', '--short', 'HEAD'])
+        detached = true
       } catch {
         return { branch: null }
       }
     }
+    if (!branch) return { branch: null }
+    // Link to the branch on the remote it tracks; without one (or detached), the repository
+    // on origin, since the branch may not exist on GitHub.
+    const upstream = detached ? '' : await optional(['config', '--get', `branch.${branch}.remote`])
+    const tracked = upstream && upstream !== '.'
+    const remote = tracked ? upstream : 'origin'
+    const merge = tracked ? await optional(['config', '--get', `branch.${branch}.merge`]) : ''
+    const repo = remote.startsWith('-')
+      ? null
+      : githubRepoUrl(await optional(['remote', 'get-url', remote]))
+    const url =
+      repo && merge.startsWith('refs/heads/')
+        ? githubBranchUrl(repo, merge.slice('refs/heads/'.length))
+        : repo
+    return { branch, ...(detached ? { detached } : {}), ...(url ? { url } : {}) }
   }
   // Uncommitted changes in a thread's project: tracked files against HEAD plus new untracked
   // files. git runs without a shell, in the thread's own folder, with output caps.

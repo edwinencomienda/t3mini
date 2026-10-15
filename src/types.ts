@@ -77,4 +77,7 @@ export type Bootstrap = {
   dictation?: boolean
   defaultCwd: string
 }
+// A thread project's git state for the composer. detached: branch is a short commit hash.
+// url: the branch (or repository) on GitHub, when the remote is there.
+export type GitInfo = { branch: string | null; detached?: boolean; url?: string }
 export const isActive = (status: Status) => ['starting', 'working', 'waiting'].includes(status)
