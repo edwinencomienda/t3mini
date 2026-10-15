@@ -27,6 +27,10 @@ lines.on('line', (line) => {
               { reasoningEffort: 'medium' },
               { reasoningEffort: 'high' },
             ],
+            serviceTiers: [
+              { id: 'default', name: 'Standard', description: 'Default speed' },
+              { id: 'fast', name: 'Fast', description: '2x speed, increased usage' },
+            ],
           },
         ],
         nextCursor: null,
@@ -61,6 +65,14 @@ lines.on('line', (line) => {
     send({
       method: 'item/completed',
       params: { item: { type: 'agentMessage', id: 'answer', text: 'Hello world.' } },
+    })
+    send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } })
+  }
+  if (packet.method === 'turn/steer') {
+    send({ id: packet.id, result: { turnId: packet.params.expectedTurnId } })
+    send({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'steered', delta: JSON.stringify(packet.params) },
     })
     send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } })
   }

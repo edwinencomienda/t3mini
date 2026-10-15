@@ -16,6 +16,9 @@ const codexPage = z.object({
       isDefault: z.boolean().optional(),
       defaultReasoningEffort: z.string().optional(),
       supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })).default([]),
+      serviceTiers: z
+        .array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() }))
+        .default([]),
     }),
   ),
   nextCursor: z.string().nullable().optional(),
@@ -50,6 +53,10 @@ export async function readCodexModels(
         isDefault: item.isDefault,
         defaultEffort: item.defaultReasoningEffort,
         efforts: item.supportedReasoningEfforts.map((option) => option.reasoningEffort),
+        // "default"/"standard" is what an empty choice already means.
+        serviceTiers: item.serviceTiers
+          .filter((tier) => !['default', 'standard'].includes(tier.id))
+          .map((tier) => ({ id: tier.id, label: tier.name, description: tier.description })),
       })),
     )
     cursor = page.nextCursor || undefined
@@ -112,13 +119,19 @@ export async function getModels(provider: Provider, path = homedir(), refresh = 
 export async function validateEffort(
   provider: Provider,
   cwd: string,
-  settings: { model: string; effort: string },
+  settings: { model: string; effort: string; serviceTier?: string },
 ) {
-  if (!settings.effort) return
-  if (!settings.model) throw new Error('Choose a model before selecting an effort level.')
-  const models = await getModels(provider, cwd)
-  if (!models.find((model) => model.id === settings.model)?.efforts.includes(settings.effort))
+  if (!settings.effort && !settings.serviceTier) return
+  if (!settings.model)
+    throw new Error('Choose a model before selecting an effort level or service tier.')
+  const model = (await getModels(provider, cwd)).find((item) => item.id === settings.model)
+  if (settings.effort && !model?.efforts.includes(settings.effort))
     throw new Error(
       'This effort level is not supported by the selected model. Use Default or choose a supported level.',
     )
+  if (
+    settings.serviceTier &&
+    !model?.serviceTiers?.some((tier) => tier.id === settings.serviceTier)
+  )
+    throw new Error('This service tier is not available for the selected model. Use Standard.')
 }

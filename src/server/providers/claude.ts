@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { Runner } from './types'
+import type { PromptImage, Runner } from './types'
+import { describeClaudeTool, toolOutput } from './activity'
 import { claudeSettings, threadSettings } from '../provider-settings'
 
 export const runClaude: Runner = async (ctx) => {
@@ -10,16 +11,24 @@ export const runClaude: Runner = async (ctx) => {
   const ready = new Promise<void>((resolve) => {
     releasePrompt = resolve
   })
+  // The input stays open while the turn runs so messages sent mid-turn can be steered in.
+  // It closes at the turn's result; anything already sent still runs before Claude exits.
+  const inbox: SDKUserMessage[] = []
+  let wake: (() => void) | undefined
+  let inputClosed = false
+  const closeInput = () => {
+    inputClosed = true
+    wake?.()
+  }
   const abort = () => {
     abortController.abort()
     releasePrompt()
+    closeInput()
   }
-  async function* prompt(): AsyncGenerator<SDKUserMessage> {
-    await ready
-    if (abortController.signal.aborted) return
-    // Images go first as base64 image blocks, followed by the text.
+  // Images go first as base64 image blocks, followed by the text.
+  async function content(text: string, attached: PromptImage[]) {
     const images = await Promise.all(
-      ctx.images.map(async (image) => ({
+      attached.map(async (image) => ({
         type: 'image' as const,
         source: {
           type: 'base64' as const,
@@ -28,17 +37,39 @@ export const runClaude: Runner = async (ctx) => {
         },
       })),
     )
+    return images.length ? [...images, ...(text ? [{ type: 'text' as const, text }] : [])] : text
+  }
+  async function* prompt(): AsyncGenerator<SDKUserMessage> {
+    await ready
+    if (abortController.signal.aborted) return
     yield {
       type: 'user',
-      message: {
-        role: 'user',
-        content: images.length
-          ? [...images, ...(ctx.prompt ? [{ type: 'text' as const, text: ctx.prompt }] : [])]
-          : ctx.prompt,
-      },
+      message: { role: 'user', content: await content(ctx.prompt, ctx.images) },
       parent_tool_use_id: null,
     }
+    for (;;) {
+      while (inbox.length) yield inbox.shift()!
+      if (inputClosed || abortController.signal.aborted) return
+      await new Promise<void>((resolve) => {
+        wake = resolve
+      })
+      wake = undefined
+    }
   }
+  ctx.onSteer?.(async ({ prompt: text, images }) => {
+    if (inputClosed || abortController.signal.aborted) return false
+    const message = await content(text, images)
+    if (inputClosed) return false
+    // 'next' folds the message into the running turn at its next step.
+    inbox.push({
+      type: 'user',
+      message: { role: 'user', content: message },
+      parent_tool_use_id: null,
+      priority: 'next',
+    })
+    wake?.()
+    return true
+  })
   ctx.signal.addEventListener('abort', abort, { once: true })
   let gotResult = false
   let streamed = false
@@ -91,7 +122,7 @@ export const runClaude: Runner = async (ctx) => {
           toolIds.add(event.content_block.id)
           ctx.activity({
             id: event.content_block.id,
-            label: event.content_block.name,
+            label: describeClaudeTool(event.content_block.name, {}, ctx.thread.cwd).label,
             status: 'running',
           })
         }
@@ -109,8 +140,7 @@ export const runClaude: Runner = async (ctx) => {
             toolIds.add(block.id)
             ctx.activity({
               id: block.id,
-              label: block.name,
-              detail: JSON.stringify(block.input, null, 2),
+              ...describeClaudeTool(block.name, block.input, ctx.thread.cwd),
               status: 'running',
             })
           }
@@ -121,12 +151,15 @@ export const runClaude: Runner = async (ctx) => {
             ctx.activity({
               id: block.tool_use_id,
               label: 'Tool',
+              output: toolOutput(block.content),
               status: block.is_error ? 'failed' : 'completed',
             })
           }
       }
       if (message.type === 'result') {
         gotResult = true
+        // No more steering into this run; messages already sent still play out.
+        closeInput()
         if (message.is_error || message.subtype !== 'success')
           throw new Error(
             'errors' in message
@@ -139,6 +172,7 @@ export const runClaude: Runner = async (ctx) => {
   } finally {
     ctx.signal.removeEventListener('abort', abort)
     releasePrompt()
+    closeInput()
     stream.close()
   }
 }

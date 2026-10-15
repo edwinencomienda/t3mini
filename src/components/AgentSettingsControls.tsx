@@ -18,7 +18,14 @@ import {
 import type { Provider } from '../types'
 import { ProviderIcon } from './ProviderIcon'
 
-type Option = { value: string; label: string; description?: string }
+type Option = { value: string; label: string; description?: string; badge?: string }
+// An extra group of choices shown below the main ones in the same menu.
+type Section = {
+  label: string
+  value: string
+  options: Option[]
+  onSelect: (value: string) => void
+}
 
 // Model lists already loaded this session, so switching threads shows them instantly.
 // (The server also caches provider catalogs for five minutes; Retry forces a fresh load.)
@@ -47,6 +54,7 @@ export function Picker({
   placement,
   tone,
   footer,
+  sections = [],
 }: {
   label: string
   icon: ReactNode
@@ -58,6 +66,7 @@ export function Picker({
   placement: 'up' | 'down'
   tone?: 'warning'
   footer?: ReactNode
+  sections?: Section[]
 }) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
@@ -106,23 +115,36 @@ export function Picker({
       {open ? (
         <div className={`picker-menu ${placement}`} role="menu" aria-label={label} ref={list}>
           <div className="picker-heading">{label}</div>
-          {options.map((option) => (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.value === value}
-              key={option.value || 'default'}
-              onClick={() => {
-                onSelect(option.value)
-                setOpen(false)
-              }}
-            >
-              <span className="picker-option-text">
-                <span>{option.label}</span>
-                {option.description ? <small>{option.description}</small> : null}
-              </span>
-              {option.value === value ? <Check size={14} /> : null}
-            </button>
+          {[{ label: '', value, options, onSelect }, ...sections].map((section, index) => (
+            <div key={section.label || index} role="group" aria-label={section.label || label}>
+              {index ? (
+                <>
+                  <div className="picker-separator" role="separator" />
+                  <div className="picker-heading">{section.label}</div>
+                </>
+              ) : null}
+              {section.options.map((option) => (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={option.value === section.value}
+                  key={option.value || 'default'}
+                  onClick={() => {
+                    section.onSelect(option.value)
+                    setOpen(false)
+                  }}
+                >
+                  <span className="picker-option-text">
+                    <span>
+                      {option.label}
+                      {option.badge ? <span className="picker-badge">{option.badge}</span> : null}
+                    </span>
+                    {option.description ? <small>{option.description}</small> : null}
+                  </span>
+                  {option.value === section.value ? <Check size={14} /> : null}
+                </button>
+              ))}
+            </div>
           ))}
           {footer}
         </div>
@@ -191,6 +213,8 @@ export function AgentSettingsControls({
   const model = catalog.models.find((item) => item.id === value.model)
   const mode = permissionModes.find((item) => item.value === value.permissionMode)!
   const efforts = model?.efforts || []
+  const tiers = model?.serviceTiers || []
+  const tier = tiers.find((item) => item.id === value.serviceTier)
   const modelOptions: Option[] = [
     { value: '', label: 'Provider default' },
     ...(value.model && !model && !loading ? [{ value: value.model, label: value.model }] : []),
@@ -243,7 +267,7 @@ export function AgentSettingsControls({
         options={modelOptions}
         disabled={disabled || loading}
         placement={placement}
-        onSelect={(model) => onChange({ ...value, model, effort: '' })}
+        onSelect={(model) => onChange({ ...value, model, effort: '', serviceTier: '' })}
         footer={
           catalog.error ? (
             <div className="picker-error">
@@ -260,16 +284,39 @@ export function AgentSettingsControls({
           ) : null
         }
       />
-      {efforts.length || value.effort ? (
+      {efforts.length || value.effort || tiers.length ? (
         <Picker
           label="Effort"
           icon={<Gauge size={13} />}
-          text={value.effort ? effortLabel(value.effort) : 'Default effort'}
+          text={
+            (value.effort ? effortLabel(value.effort) : 'Default effort') +
+            (tier ? ` · ${tier.label}` : '')
+          }
           value={value.effort}
           options={effortOptions}
           disabled={disabled || loading}
           placement={placement}
           onSelect={(effort) => onChange({ ...value, effort })}
+          // Codex models can offer faster service tiers; they live in the same menu.
+          sections={
+            tiers.length
+              ? [
+                  {
+                    label: 'Service Tier',
+                    value: value.serviceTier || '',
+                    options: [
+                      { value: '', label: 'Standard', badge: 'Default' },
+                      ...tiers.map((item) => ({
+                        value: item.id,
+                        label: item.label,
+                        description: item.description,
+                      })),
+                    ],
+                    onSelect: (serviceTier) => onChange({ ...value, serviceTier }),
+                  },
+                ]
+              : []
+          }
         />
       ) : null}
       <Picker

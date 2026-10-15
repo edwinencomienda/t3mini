@@ -2,6 +2,7 @@ import type { Runner } from './types'
 import { openCodexClient } from './codex-client'
 import { codexPolicy, threadSettings } from '../provider-settings'
 import { readCodexModels } from '../models'
+import { describeCodexItem } from './activity'
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -65,20 +66,9 @@ export const runCodex: Runner = async (ctx) => {
         if (
           ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch', 'reasoning'].includes(type)
         ) {
-          const label =
-            type === 'commandExecution'
-              ? 'Run command'
-              : type === 'fileChange'
-                ? 'Edit files'
-                : type === 'reasoning'
-                  ? 'Thinking'
-                  : type === 'webSearch'
-                    ? 'Search the web'
-                    : 'Use tool'
           ctx.activity({
             id,
-            label,
-            detail: string(item.command) || undefined,
+            ...describeCodexItem(item, ctx.thread.cwd),
             status:
               packet.method === 'item/started'
                 ? 'running'
@@ -155,12 +145,32 @@ export const runCodex: Runner = async (ctx) => {
         ],
         model,
         effort,
+        // Per turn, like model and effort: the thread's saved choice is the source of truth.
+        ...(settings.serviceTier ? { serviceTierForTurn: settings.serviceTier } : {}),
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: policy.approvalsReviewer,
         sandboxPolicy: policy.sandboxPolicy,
       }),
     )
     turnId = string(object(resultTurn.turn).id)
+    // Messages sent while this turn runs go into it with turn/steer. If Codex refuses (the turn
+    // just ended, or can't take steering right now), the service queues them as the next turn.
+    ctx.onSteer?.(async ({ prompt, images }) => {
+      if (finished || !turnId) return false
+      try {
+        await client.request('turn/steer', {
+          threadId,
+          expectedTurnId: turnId,
+          input: [
+            ...images.map((image) => ({ type: 'localImage', path: image.path })),
+            ...(prompt ? [{ type: 'text', text: prompt }] : []),
+          ],
+        })
+        return true
+      } catch {
+        return false
+      }
+    })
     await done
   } finally {
     ctx.signal.removeEventListener('abort', abort)

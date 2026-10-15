@@ -793,12 +793,31 @@ kbd {
   background: var(--accent);
   color: var(--foreground);
 }
-.work-log-list summary span {
+.work-log-list summary {
+  min-width: 0;
+}
+.step-label {
+  flex-shrink: 0;
+  color: var(--foreground);
+  font-size: 12.5px;
+}
+.step-summary {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--muted-foreground);
+}
+.step-section {
+  display: block;
+  margin: 0.4rem 0 0 1.4rem;
+  font-size: 11px;
+  color: var(--faint);
+}
+.work-log-list .step-output {
+  margin-top: 0.2rem;
 }
 .work-log-list li.completed svg {
   color: var(--success);
@@ -1050,7 +1069,8 @@ kbd {
   font-weight: 500;
   color: var(--faint);
 }
-.picker-menu > button {
+.picker-menu [role='menuitemradio'],
+.picker-menu > .picker-footer-action {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1061,12 +1081,14 @@ kbd {
   text-align: left;
   font-size: 13px;
 }
-.picker-menu > button:hover,
-.picker-menu > button:focus-visible {
+.picker-menu [role='menuitemradio']:hover,
+.picker-menu [role='menuitemradio']:focus-visible,
+.picker-menu > .picker-footer-action:hover,
+.picker-menu > .picker-footer-action:focus-visible {
   background: var(--accent);
   outline: 0;
 }
-.picker-menu > button svg {
+.picker-menu [role='menuitemradio'] svg {
   color: var(--primary);
 }
 .picker-option-text {
@@ -1986,4 +2008,27 @@ body.resizing {
 .sidebar-section .icon-button {
   width: 1.5rem;
   height: 1.5rem;
+}
+
+/* Picker sections and badges (e.g. Codex service tier) */
+.picker-separator {
+  height: 1px;
+  margin: 0.3rem 0.3rem 0.1rem;
+  background: var(--border);
+}
+.picker-badge {
+  margin-left: 0.4rem;
+  padding: 0 0.3rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  vertical-align: 1px;
+}
+
+/* Steering: queued / unsent labels under a message */
+.message-note {
+  margin-top: 0.25rem;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
 }

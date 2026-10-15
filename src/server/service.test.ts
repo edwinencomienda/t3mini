@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentService } from './service'
 import { ThreadStore } from './store'
-import type { ProviderContext, Runner } from './providers/types'
+import type { ProviderContext, Runner, Steer } from './providers/types'
 
 let directory: string
 let service: AgentService
@@ -13,8 +13,11 @@ let finish: () => void
 let reject: (error: Error) => void
 let started: Promise<void>
 let markStarted: () => void
+// Set by a test to make the fake provider accept mid-turn messages.
+let steerHandler: Steer | undefined
 const runner: Runner = async (ctx) => {
   context = ctx
+  if (steerHandler) ctx.onSteer?.(steerHandler)
   ctx.session('native-session')
   markStarted()
   await new Promise<void>((resolve, fail) => {
@@ -24,6 +27,7 @@ const runner: Runner = async (ctx) => {
   })
 }
 beforeEach(async () => {
+  steerHandler = undefined
   directory = await mkdtemp(join(tmpdir(), 't3-mini-test-'))
   started = new Promise((resolve) => {
     markStarted = resolve
@@ -62,11 +66,10 @@ describe('agent lifecycle', () => {
       service.create({ provider: 'codex', cwd: join(directory, 'missing') }),
     ).rejects.toThrow('does not exist')
   })
-  it('rejects concurrent turns and resumes provider session identity', async () => {
+  it('streams a turn and keeps the provider session identity', async () => {
     const created = await thread()
     await service.send(created.id, { text: 'Build this' })
     await started
-    await expect(service.send(created.id, { text: 'Another' })).rejects.toThrow('already working')
     expect(context.thread.sessionId).toBe('native-session')
     context.text('answer', 'Hello ')
     context.text('answer', 'world')
@@ -360,4 +363,100 @@ it('caps the changes panel at 200 files and hides the lines of huge files', asyn
   await writeFile(join(directory, 'huge.txt'), 'changed\n'.repeat(3500))
   const huge = (await service.diff(created.id)).files.find((file) => file.path === 'huge.txt')
   expect(huge).toMatchObject({ tooLarge: true, additions: 3500, deletions: 3500, hunks: [] })
+})
+
+describe('sending while the agent works', () => {
+  const nextStart = () =>
+    (started = new Promise((resolve) => {
+      markStarted = resolve
+    }))
+  it('hands the message to the live run when the provider supports steering', async () => {
+    const steered: string[] = []
+    steerHandler = async ({ prompt }) => {
+      steered.push(prompt)
+      return true
+    }
+    const created = await thread()
+    await service.send(created.id, { text: 'Build this' })
+    await started
+    expect(await service.send(created.id, { text: 'Use TypeScript' })).toEqual({
+      accepted: true,
+      steered: true,
+    })
+    expect(steered).toEqual(['Use TypeScript'])
+    expect(created.messages.at(-1)).toMatchObject({ role: 'user', text: 'Use TypeScript' })
+    expect(created.messages.at(-1)?.queued).toBeUndefined()
+    await settle(created.id, finish)
+    expect(created.status).toBe('completed')
+  })
+  it('queues the message and runs it as the next turn when steering is unavailable', async () => {
+    const created = await thread()
+    await service.send(created.id, { text: 'Build this' })
+    await started
+    expect(await service.send(created.id, { text: 'Then add tests' })).toEqual({
+      accepted: true,
+      steered: false,
+    })
+    expect(created.messages.at(-1)?.queued).toBe(true)
+    const second = nextStart()
+    finish()
+    await second
+    expect(context.prompt).toBe('Then add tests')
+    expect(
+      created.messages.find((message) => message.text === 'Then add tests')?.queued,
+    ).toBeUndefined()
+    expect(created.status).not.toBe('completed')
+    await settle(created.id, finish)
+    expect(created.status).toBe('completed')
+  })
+  it('keeps queued messages but does not send them when the turn is stopped', async () => {
+    const created = await thread()
+    await service.send(created.id, { text: 'Build this' })
+    await started
+    await service.send(created.id, { text: 'Never mind, also this' })
+    await service.stop(created.id)
+    expect(created.status).toBe('interrupted')
+    const message = created.messages.find((item) => item.text === 'Never mind, also this')
+    expect(message).toMatchObject({ unsent: true })
+    expect(message?.queued).toBeUndefined()
+  })
+})
+describe('stopping and restarting with messages sent mid-turn', () => {
+  it('never starts a new turn when a steer fails because the turn was stopped', async () => {
+    let release!: (taken: boolean) => void
+    steerHandler = () =>
+      new Promise<boolean>((resolve) => {
+        release = resolve
+      })
+    const created = await thread()
+    await service.send(created.id, { text: 'Build this' })
+    await started
+    const steering = service.send(created.id, { text: 'Also this' })
+    // Stop only once the steer is in flight with the provider.
+    while (!release) await new Promise((resolve) => setTimeout(resolve, 1))
+    await service.stop(created.id)
+    release(false)
+    await steering
+    expect(created.status).toBe('interrupted')
+    expect(created.messages.find((item) => item.text === 'Also this')).toMatchObject({
+      unsent: true,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(created.status).toBe('interrupted')
+  })
+  it('marks messages still queued at a restart as not sent', async () => {
+    const created = await thread()
+    await service.send(created.id, { text: 'Build this' })
+    await started
+    await service.send(created.id, { text: 'Queued before restart' })
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(directory, 'restart.json'), JSON.stringify([service.get(created.id)]))
+    const store = new ThreadStore(join(directory, 'restart.json'))
+    await store.load()
+    const message = store.threads
+      .get(created.id)
+      ?.messages.find((item) => item.text === 'Queued before restart')
+    expect(message).toMatchObject({ unsent: true })
+    expect(message?.queued).toBeUndefined()
+  })
 })

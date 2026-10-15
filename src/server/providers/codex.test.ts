@@ -100,3 +100,51 @@ it('explicitly resets model and effort to current defaults on a resumed thread',
   expect(wire.thread).toMatchObject({ threadId: 'previous-session', model: 'fixture-model' })
   expect(wire.turn).toMatchObject({ model: 'fixture-model', effort: 'medium' })
 })
+it('sends the selected service tier for the turn, and none for Standard', async () => {
+  const fast = context('settings')
+  fast.thread.model = 'fixture-model'
+  fast.thread.serviceTier = 'fast'
+  await runCodex(fast)
+  const wire = JSON.parse(
+    vi.mocked(fast.text).mock.calls.find((call) => call[0] === 'settings')![1],
+  )
+  expect(wire.turn.serviceTierForTurn).toBe('fast')
+  const standard = context('settings')
+  await runCodex(standard)
+  const plain = JSON.parse(
+    vi.mocked(standard.text).mock.calls.find((call) => call[0] === 'settings')![1],
+  )
+  expect(plain.turn).not.toHaveProperty('serviceTierForTurn')
+})
+it('lists model service tiers without the standard tier', async () => {
+  const { readCodexModels } = await import('../models')
+  const { openCodexClient } = await import('./codex-client')
+  const client = openCodexClient({ cwd: process.cwd() })
+  try {
+    await client.initialize()
+    const [model] = await readCodexModels(client)
+    expect(model?.serviceTiers).toEqual([
+      { id: 'fast', label: 'Fast', description: '2x speed, increased usage' },
+    ])
+  } finally {
+    client.close()
+  }
+})
+it('steers a message into the running turn with turn/steer', async () => {
+  const ctx = context('hang')
+  let steer!: Parameters<NonNullable<ProviderContext['onSteer']>>[0]
+  ctx.onSteer = (handler) => {
+    steer = handler
+  }
+  const run = runCodex(ctx)
+  await vi.waitFor(() => expect(steer).toBeTypeOf('function'))
+  expect(await steer({ prompt: 'Use TypeScript', images: [] })).toBe(true)
+  await run
+  const sent = JSON.parse(vi.mocked(ctx.text).mock.calls.find((call) => call[0] === 'steered')![1])
+  expect(sent).toMatchObject({
+    threadId: 'native-thread',
+    expectedTurnId: 'turn-1',
+    input: [{ type: 'text', text: 'Use TypeScript' }],
+  })
+  expect(await steer({ prompt: 'Too late', images: [] })).toBe(false)
+})

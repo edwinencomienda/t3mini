@@ -23,7 +23,14 @@ export const permissionModes = [
   },
 ] as const
 export type PermissionMode = (typeof permissionModes)[number]['value']
-export type AgentSettings = { model: string; effort: string; permissionMode: PermissionMode }
+export type AgentSettings = {
+  model: string
+  effort: string
+  permissionMode: PermissionMode
+  // Codex service tier (e.g. 'fast'); '' or missing uses the standard tier.
+  serviceTier?: string
+}
+export type ServiceTier = { id: string; label: string; description?: string }
 export type ModelOption = {
   id: string
   label: string
@@ -31,6 +38,7 @@ export type ModelOption = {
   efforts: string[]
   defaultEffort?: string
   isDefault?: boolean
+  serviceTiers?: ServiceTier[]
 }
 export type ModelCatalog = { models: ModelOption[]; error?: string }
 // New threads start with full access unless the user picked something else last time.

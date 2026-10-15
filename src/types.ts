@@ -11,11 +11,21 @@ export type Message = {
   text: string
   createdAt: string
   attachments?: Attachment[]
+  // Sent while the agent was working and waiting to go out as the next turn.
+  queued?: boolean
+  // Queued, but the turn was stopped before it could be sent.
+  unsent?: boolean
 }
 export type Activity = {
   id: string
+  // Short verb or tool name, e.g. "Run", "Read", "Edit".
   label: string
+  // One line: the command, path, or query.
+  summary?: string
+  // Full input for the expanded view (whole command, edit preview, arguments).
   detail?: string
+  // What the step returned, trimmed.
+  output?: string
   status: 'running' | 'completed' | 'failed'
 }
 export type Approval = { id: string; title: string; detail: string }
@@ -27,6 +37,7 @@ export type Thread = {
   model: string
   effort: string
   permissionMode: PermissionMode
+  serviceTier?: string
   status: Status
   createdAt: string
   updatedAt: string

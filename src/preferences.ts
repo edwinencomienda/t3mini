@@ -24,6 +24,7 @@ export function loadPreferences(): Preferences {
       settings[provider] = {
         model: text(value.model),
         effort: value.model ? text(value.effort) : '',
+        serviceTier: value.model ? text(value.serviceTier) : '',
         permissionMode: isPermissionMode(value.permissionMode)
           ? value.permissionMode
           : defaultPermission,

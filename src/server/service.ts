@@ -8,6 +8,7 @@ import { z } from 'zod'
 import {
   isActive,
   type Bootstrap,
+  type Message,
   type ProjectSummary,
   type Provider,
   type Thread,
@@ -18,7 +19,7 @@ import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
-import type { PromptImage, Runner } from './providers/types'
+import type { PromptImage, Runner, Steer } from './providers/types'
 import { defaultPermission } from '../agent-settings'
 import { settingsSchema } from './provider-settings'
 import { validateEffort } from './models'
@@ -36,6 +37,7 @@ const createSchema = z.object({
   cwd: z.string().trim().min(1),
   model: settingsSchema.shape.model.default(''),
   effort: settingsSchema.shape.effort.default(''),
+  serviceTier: settingsSchema.shape.serviceTier,
   permissionMode: settingsSchema.shape.permissionMode.optional(),
 })
 const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
@@ -84,6 +86,10 @@ type Run = {
   controller: AbortController
   approvals: Map<string, (allow: boolean) => void>
   done: Promise<void>
+  // Set by the provider once the live run can take more messages.
+  steer?: Steer
+  // Messages sent mid-turn that the provider couldn't take; they run next.
+  queued: { messageId: string; text: string; images: PromptImage[] }[]
 }
 
 export class AgentService {
@@ -236,6 +242,7 @@ export class AgentService {
       cwd,
       model: data.model,
       effort: data.effort,
+      ...(data.serviceTier ? { serviceTier: data.serviceTier } : {}),
       permissionMode: data.permissionMode ?? defaultPermission,
       status: 'idle',
       createdAt: now,
@@ -286,6 +293,7 @@ export class AgentService {
         model: thread.model,
         effort: thread.effort,
         permissionMode: thread.permissionMode,
+        serviceTier: thread.serviceTier,
       }
       Object.assign(thread, data, { provider })
       try {
@@ -313,18 +321,69 @@ export class AgentService {
     if (this.persistenceError) throw new HttpError(500, this.persistenceError)
     if (this.settingsUpdates.has(id))
       throw new HttpError(409, 'Agent settings are still saving. Try sending again.')
-    if (this.runs.has(id)) throw new HttpError(409, 'This thread is already working.')
-    const previous = structuredClone(thread)
-    const now = new Date().toISOString()
-    thread.messages.push({
+    const images = attachments.map((item) => ({
+      path: this.uploads.imagePath(item.id),
+      mimeType: item.mimeType,
+    }))
+    const message = {
       id: crypto.randomUUID(),
-      role: 'user',
+      role: 'user' as const,
       text,
-      createdAt: now,
+      createdAt: new Date().toISOString(),
       ...(attachments.length ? { attachments } : {}),
-    })
+    }
+    const running = this.runs.get(id)
+    if (running) return this.steer(thread, running, message, images)
+    const previous = structuredClone(thread)
+    thread.messages.push(message)
     if (thread.title === 'New thread')
       thread.title = text.slice(0, 60) || attachments[0]?.name.slice(0, 60) || 'Image'
+    try {
+      await this.startTurn(thread, text, images)
+    } catch (error) {
+      this.store.threads.set(id, previous)
+      throw error
+    }
+    return { accepted: true }
+  }
+  // A message sent while the agent works: hand it to the live run if the provider can take it,
+  // otherwise queue it to run as soon as the current turn ends.
+  private async steer(
+    thread: Thread,
+    run: Run,
+    message: Message,
+    images: PromptImage[],
+  ): Promise<{ accepted: true; steered: boolean }> {
+    thread.messages.push(message)
+    thread.updatedAt = message.createdAt
+    this.notify()
+    let steered = false
+    try {
+      steered = (await run.steer?.({ prompt: message.text, images })) ?? false
+    } catch {
+      steered = false
+    }
+    if (!steered && run.controller.signal.aborted) {
+      // Stopped while we were handing it over: stop means stop, so never start another turn.
+      message.unsent = true
+    } else if (!steered) {
+      // Queue on whichever run is active now (the turn may have ended and a queued follow-up
+      // started meanwhile); with none running, this message starts the next turn itself.
+      const current = this.runs.get(thread.id)
+      if (current?.controller.signal.aborted) message.unsent = true
+      else if (current) {
+        message.queued = true
+        current.queued.push({ messageId: message.id, text: message.text, images })
+      } else await this.startTurn(thread, message.text, images)
+    }
+    this.changed()
+    return { accepted: true, steered }
+  }
+  // Starts a turn for messages already in the thread.
+  private async startTurn(thread: Thread, text: string, images: PromptImage[]) {
+    const id = thread.id
+    if (this.runs.has(id)) throw new HttpError(409, 'This thread is already working.')
+    const now = new Date().toISOString()
     thread.status = 'starting'
     thread.updatedAt = now
     thread.startedAt = now
@@ -334,23 +393,17 @@ export class AgentService {
     thread.approvals = []
     const controller = new AbortController()
     const approvals = new Map<string, (allow: boolean) => void>()
-    const run: Run = { controller, approvals, done: Promise.resolve() }
-    // Reserve before any I/O to reject concurrent submissions.
+    const run: Run = { controller, approvals, done: Promise.resolve(), queued: [] }
+    // Reserve before any I/O; later messages steer this run instead of starting another.
     this.runs.set(id, run)
     try {
       await this.store.save()
     } catch {
       this.runs.delete(id)
-      this.store.threads.set(id, previous)
       throw new HttpError(500, 'Could not save the message.')
     }
     this.notify()
-    const images = attachments.map((item) => ({
-      path: this.uploads.imagePath(item.id),
-      mimeType: item.mimeType,
-    }))
     run.done = this.execute(thread, text, images, run)
-    return { accepted: true }
   }
   private async execute(thread: Thread, prompt: string, images: PromptImage[], run: Run) {
     const touch = () => {
@@ -394,11 +447,16 @@ export class AgentService {
               ...old,
               ...activity,
               label: activity.label === 'Tool' ? old.label : activity.label,
+              summary: activity.summary ?? old.summary,
               detail: activity.detail ?? old.detail,
+              output: activity.output ?? old.output,
             }
           }
           working()
           touch()
+        },
+        onSteer: (handler) => {
+          run.steer = handler
         },
         approve: (approval) =>
           new Promise<boolean>((resolve, reject) => {
@@ -429,6 +487,26 @@ export class AgentService {
       thread.completedAt = new Date().toISOString()
       touch()
       this.runs.delete(thread.id)
+      // Messages queued during the turn go out together as the next turn, unless it was stopped.
+      const queued = run.queued
+      for (const item of queued) {
+        const message = thread.messages.find((entry) => entry.id === item.messageId)
+        if (!message) continue
+        delete message.queued
+        if (run.controller.signal.aborted) message.unsent = true
+      }
+      if (queued.length && !run.controller.signal.aborted)
+        void this.startTurn(
+          thread,
+          queued
+            .map((item) => item.text)
+            .filter(Boolean)
+            .join('\n\n'),
+          queued.flatMap((item) => item.images),
+        ).catch((error: unknown) => {
+          thread.error = error instanceof Error ? error.message : 'Could not send queued messages.'
+          this.notify()
+        })
       try {
         await this.store.save()
       } catch {

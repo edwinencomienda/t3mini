@@ -7,12 +7,14 @@ export const settingsSchema = z.object({
   model: z.string().trim().max(120),
   effort: z.string().trim().max(32),
   permissionMode: z.enum(['approval-required', 'auto-accept-edits', 'auto', 'full-access']),
+  serviceTier: z.string().trim().max(32).default(''),
 })
 export const threadSettings = (
-  thread: Pick<Thread, 'provider' | 'model' | 'effort' | 'permissionMode'>,
+  thread: Pick<Thread, 'provider' | 'model' | 'effort' | 'permissionMode' | 'serviceTier'>,
 ): AgentSettings => ({
   model: thread.model,
   effort: thread.effort || '',
+  serviceTier: thread.serviceTier || '',
   permissionMode: thread.permissionMode || legacyPermission(thread.provider),
 })
 export function codexPolicy(mode: AgentSettings['permissionMode']) {

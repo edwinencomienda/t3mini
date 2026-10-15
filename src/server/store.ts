@@ -13,6 +13,12 @@ export class ThreadStore {
       const saved: Thread[] = JSON.parse(await readFile(this.path, 'utf8'))
       for (const thread of saved) {
         thread.effort ??= ''
+        // The queue of mid-turn messages lives in memory, so after a restart none will be sent.
+        for (const message of thread.messages)
+          if (message.queued) {
+            delete message.queued
+            message.unsent = true
+          }
         thread.permissionMode ??= legacyPermission(thread.provider)
         if (isActive(thread.status)) {
           thread.status = 'interrupted'

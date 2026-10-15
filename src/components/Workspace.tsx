@@ -735,7 +735,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Skipped on touch screens (it would pop up the keyboard) and while a dialog, menu, or
   // rename field has focus.
   const focusedThread = useRef<string | null>(null)
-  const composerReady = Boolean(thread && thread.id === activeId && !isActive(thread.status))
+  const composerReady = Boolean(thread && thread.id === activeId)
   useEffect(() => {
     if (!activeId || !composerReady || focusedThread.current === activeId) return
     focusedThread.current = activeId
@@ -822,8 +822,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       attached.some((item) => item.status !== 'ready') ||
       busy ||
       !connected ||
-      !thread ||
-      isActive(thread.status)
+      !thread
     )
       return
     const text = draft
@@ -977,9 +976,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   ) : (
                     <Circle size={9} />
                   )}
-                  <span>{item.label}</span>
+                  <span className="step-label">{item.label}</span>
+                  {item.summary ? (
+                    <span className="step-summary" title={item.summary}>
+                      {item.summary}
+                    </span>
+                  ) : null}
                 </summary>
-                {item.detail ? <pre>{item.detail}</pre> : <p>No additional details.</p>}
+                {/* The full input (command, edit, arguments), then what it returned. */}
+                {item.detail && item.detail !== item.summary ? (
+                  <pre className="step-detail">{item.detail}</pre>
+                ) : null}
+                {item.output ? (
+                  <>
+                    <span className="step-section">Output</span>
+                    <pre className="step-output">{item.output}</pre>
+                  </>
+                ) : null}
+                {!item.output && (!item.detail || item.detail === item.summary) ? (
+                  <p>{item.status === 'running' ? 'Running…' : 'No output.'}</p>
+                ) : null}
               </details>
             </li>
           ))}
@@ -1376,6 +1392,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               {message.text ? (
                                 <div className="user-bubble">{message.text}</div>
                               ) : null}
+                              {message.queued ? (
+                                <span className="message-note">
+                                  Queued · sends when the current turn ends
+                                </span>
+                              ) : message.unsent ? (
+                                <span className="message-note">
+                                  Not sent · the turn was stopped
+                                </span>
+                              ) : null}
                             </>
                           ) : (
                             <div className="markdown">
@@ -1495,11 +1520,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       aria-label="Message your agent"
                       placeholder={
                         active
-                          ? `${names[thread.provider]} is working…`
+                          ? `${names[thread.provider]} is working… send a message to steer it`
                           : `Ask ${names[thread.provider]} to build, fix, or explore…`
                       }
                       value={draft}
-                      disabled={active}
                       onChange={(e) => {
                         setDraft(e.target.value)
                         drafts.current.set(thread.id, e.target.value)
@@ -1531,6 +1555,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         value={{
                           model: thread.model,
                           effort: thread.effort || '',
+                          serviceTier: thread.serviceTier || '',
                           permissionMode: thread.permissionMode || defaultPermission,
                         }}
                         onChange={(settings) => void updateSettings(settings)}
@@ -1558,7 +1583,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           className="icon-button"
                           aria-label="Attach images or files"
                           title="Attach images or files (or paste / drop them)"
-                          disabled={active || busy}
+                          disabled={busy}
                           onClick={() => filePicker.current?.click()}
                         >
                           <Paperclip size={15} />
@@ -1570,11 +1595,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             aria-label="Stop"
                             title="Stop"
                             onClick={() => action('stop')}
-                            disabled={busy || !connected}
+                            disabled={!connected}
                           >
                             <Square size={11} fill="currentColor" />
                           </button>
-                        ) : (
+                        ) : null}
+                        {/* While the agent works, Send steers it (shown once there's something to send). */}
+                        {!active || draft.trim() || pending[thread.id]?.length ? (
                           <button
                             className="send-button"
                             type="submit"
@@ -1591,7 +1618,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           >
                             <ArrowUp size={16} />
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </form>
