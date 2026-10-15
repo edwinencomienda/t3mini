@@ -26,6 +26,7 @@ import { settingsSchema } from './provider-settings'
 import { validateEffort } from './models'
 
 export class HttpError extends Error {
+  readonly name = 'HttpError'
   constructor(
     public status: number,
     message: string,

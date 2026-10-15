@@ -961,9 +961,10 @@ kbd {
   width: 100%;
   min-height: 2.4rem;
   max-height: 15rem;
-  padding: 0.65rem 0.85rem 0.1rem;
+  padding: 0.7rem 0.95rem 0.2rem;
   resize: none;
   outline: 0;
+  font-size: 14.5px;
   line-height: 1.5;
 }
 .composer-toolbar {
@@ -971,7 +972,13 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.15rem 0.4rem 0.4rem;
+  padding: 0.15rem 0.5rem 0.5rem;
+}
+.composer-left {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
 }
 .composer-actions {
   display: flex;
@@ -987,17 +994,13 @@ kbd {
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 999px;
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--foreground);
+  color: var(--background);
 }
 .send-button:disabled {
   background: var(--accent);
   color: var(--faint);
   opacity: 1;
-}
-.stop-button {
-  background: var(--foreground);
-  color: var(--background);
 }
 
 /* Agent settings pickers */
@@ -2162,19 +2165,130 @@ body.resizing {
   pointer-events: none;
 }
 
-/* Touch screens: finger-sized composer buttons with room between them. */
+/* Composer chips: round icon buttons (attach, permissions) and the model pill. */
+.round-button,
+.picker-trigger.round {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-radius: 999px;
+  /* Quiet until hovered or open; the send button stays solid. */
+  background: transparent;
+  color: var(--foreground);
+}
+.round-button:hover,
+.picker-trigger.round:hover:not(:disabled),
+.picker-trigger.round[aria-expanded='true'] {
+  background: var(--accent);
+}
+.picker-trigger.round.warning {
+  color: var(--warning);
+}
+.picker-trigger.pill {
+  gap: 0.4rem;
+  max-width: 18rem;
+  height: 1.75rem;
+  padding: 0 0.7rem 0 0.55rem;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.picker-trigger.pill:hover:not(:disabled),
+.picker-trigger.pill[aria-expanded='true'] {
+  background: var(--accent);
+}
+.pill-model {
+  font-weight: 500;
+}
+.pill-effort {
+  color: var(--muted-foreground);
+}
+.agent-settings {
+  gap: 0.3rem;
+}
+
+/* Touch screens: finger-sized composer controls with room between them. */
 @media (pointer: coarse) {
+  .composer-left,
   .composer-actions {
-    gap: 0.6rem;
+    gap: 0.5rem;
   }
-  .composer-actions .icon-button,
+  .round-button,
+  .picker-trigger.round,
+  .picker-trigger.pill,
   .send-button,
   .stop-button {
-    width: 2.5rem;
-    height: 2.5rem;
+    height: 2.4rem;
   }
-  .composer-actions .icon-button svg {
-    width: 18px;
-    height: 18px;
+  .round-button,
+  .picker-trigger.round,
+  .send-button,
+  .stop-button {
+    width: 2.4rem;
+  }
+}
+@media (max-width: 480px) {
+  .picker-trigger.pill {
+    max-width: 11rem;
+  }
+}
+
+/* Claude / Codex tabs at the top of the model menu */
+.picker-tabs {
+  display: flex;
+  gap: 0.2rem;
+  margin: 0.1rem 0.1rem 0.35rem;
+  padding: 0.2rem;
+  border-radius: 0.55rem;
+  background: var(--muted);
+}
+.picker-tabs button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 1.75rem;
+  border-radius: 0.4rem;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.picker-tabs button[aria-selected='true'] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+.picker-tabs button:hover:not(:disabled):not([aria-selected='true']) {
+  color: var(--foreground);
+}
+
+/* Phones: notifications drop in under the header so they never cover the composer. */
+@keyframes toast-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+@media (max-width: 760px) {
+  .overlay-stack {
+    /* Just below the chat header (3.25rem tall), never over it. */
+    top: calc(env(safe-area-inset-top, 0px) + 3.25rem + 0.5rem);
+    bottom: auto;
+    left: 0.75rem;
+    right: 0.75rem;
+    width: auto;
+    align-items: stretch;
+  }
+  /* Newest first, right under the top edge. */
+  .toasts {
+    flex-direction: column-reverse;
+  }
+  .toast,
+  .notify-prompt {
+    animation-name: toast-in-top;
   }
 }

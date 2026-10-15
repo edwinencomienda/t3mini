@@ -22,6 +22,16 @@ export function checkRequest(request: Request) {
   )
     throw new HttpError(415, 'Expected application/json.')
 }
+// Checked by shape, not instanceof: in dev the long-lived service was created by an earlier
+// copy of service.ts, so after a hot reload its HttpError is a different class than the one
+// imported here, and instanceof would turn every 404/409 into a generic 500.
+export function isHttpError(error: unknown): error is HttpError {
+  return (
+    error instanceof Error &&
+    (error.name === 'HttpError' || error.constructor.name === 'HttpError') &&
+    typeof (error as { status?: unknown }).status === 'number'
+  )
+}
 export async function handleApi(request: Request) {
   try {
     checkRequest(request)
@@ -214,18 +224,16 @@ export async function handleApi(request: Request) {
     }
     throw new HttpError(404, 'Endpoint not found.')
   } catch (error) {
-    const status =
-      error instanceof HttpError
-        ? error.status
-        : error instanceof z.ZodError || error instanceof SyntaxError
-          ? 400
-          : 500
-    const message =
-      error instanceof HttpError
-        ? error.message
-        : status === 400
-          ? 'Invalid request. Check your input.'
-          : 'The server could not complete the request.'
+    const status = isHttpError(error)
+      ? error.status
+      : error instanceof z.ZodError || error instanceof SyntaxError
+        ? 400
+        : 500
+    const message = isHttpError(error)
+      ? error.message
+      : status === 400
+        ? 'Invalid request. Check your input.'
+        : 'The server could not complete the request.'
     return Response.json({ error: message }, { status })
   }
 }

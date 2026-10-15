@@ -28,6 +28,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 ## Things to know
 
 - **Restart the dev server after server changes.** The service and the phone-access gateway live on `globalThis` so running agents survive hot reloads; new server code only takes effect after restarting `npm run dev`. Check that no thread is running first (`/api/bootstrap`, status `starting`/`working`/`waiting`), since a restart interrupts running turns.
+- **Don't use `instanceof` on server error classes across modules.** After a hot reload the long-lived service throws errors from an older copy of `service.ts`, so `instanceof HttpError` fails and real 404s/409s turn into 500s. `api.ts` uses `isHttpError()` (checks by name and `status`); follow that pattern for new error types.
 - **Security posture.** The app listens on loopback only and rejects foreign hosts and cross-origin requests (`checkRequest`). Agents can run arbitrary commands, so any new way in must authenticate. Phone access is the only remote entry point; read `docs/phone-access.md` before touching it.
 - **Phones run in an insecure context** (plain HTTP on a LAN address). Don't use `crypto.randomUUID`, `navigator.clipboard`, or other secure-context-only APIs in client code; see `docs/phone-access.md` → Pitfalls.
 - **Commands run without a shell** (`execFile` with argument arrays, `--` before paths). Keep it that way.
@@ -35,4 +36,4 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 
 ## Feature docs
 
-- [docs/phone-access.md](docs/phone-access.md): phone access over the local network (gateway, pairing, security model, pitfalls, testing).
+- [docs/phone-access.md](docs/phone-access.md): phone access over the local network (gateway, pairing, security model, pitfalls, testing, plus the planned Tailscale HTTPS follow-up).

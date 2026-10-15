@@ -82,7 +82,7 @@ Anyone who reaches the app can make agents run commands on the Mac (threads defa
 5. **Host, source address, and Origin checks** in `allowed()` block DNS rebinding and other sites driving the gateway. `checkRequest()` in `api.ts` still enforces loopback + same-origin for the app itself.
 6. **Store hashes only.** Codes and session tokens are SHA-256 hashed in memory and on disk; the raw token exists only in the phone's cookie.
 7. **Revocation is immediate.** `revoke()` destroys tracked sockets (SSE, WebSockets) for that device.
-8. **Plain HTTP is a known risk.** Anyone who can watch traffic on the network can steal the cookie. The UI and README say "trusted network only". Phase 2 (below) removes this.
+8. **Plain HTTP is a known risk.** Anyone who can watch traffic on the network can steal the cookie. The UI and README say "trusted network only". The planned Tailscale HTTPS mode (see "Future" below) removes this.
 
 ## Pitfalls we hit (read before changing client code)
 
@@ -92,7 +92,7 @@ Anyone who reaches the app can make agents run commands on the Mac (threads defa
   - The Notification API needs HTTPS, so phones get in-app toasts and sound only. The Settings toggle shows it as unsupported or blocked, depending on the browser.
   - Before using any new browser API in the client, check MDN for "Secure context: This feature is available only in secure contexts".
 - **Never let a client async handler fail silently.** Attach paths go through `attachFiles()`, which shows errors above the composer. Follow the same pattern for new phone-reachable actions.
-- **iOS Safari won't open a `display:none` file input from a script `click()`.** The 📎 button is a `<label>` with the real `<input type="file">` stretched over it (`.attach-button`). The label has `overflow: hidden` so the input can't spill over and steal taps from Send.
+- **iOS Safari won't open a `display:none` file input from a script `click()`.** The **+** attach button is a `<label>` with the real `<input type="file">` stretched over it (`.attach-button`). The label has `overflow: hidden` so the input can't spill over and steal taps from Send.
 - **iOS Safari reports `document.hasFocus() === false` while the page is on screen.** Toast/unread logic treats a visible page as watched on `(pointer: coarse)` devices and never toasts the thread on screen.
 - **Touch targets.** Composer buttons are 40px with a 10px gap under `@media (pointer: coarse)`; the 28px desktop size was too small to hit reliably.
 - **iPhone photos** can be HEIC or very large. `prepareImage()` converts anything the browser can decode and scales to ≤2048px / ~4 MB before upload (Claude rejects images over ~5 MB).
@@ -134,6 +134,47 @@ On a real phone: Settings → Phone access → on → Connect a phone → scan. 
 | "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                              |
 | Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `npm run dev` (this also turns phone access off).                                 |
 
-## Phase 2: HTTPS with Tailscale (planned)
+## Future: HTTPS with Tailscale (not built yet)
 
-Serving the gateway over Tailscale (`tailscale serve` or a `tailscale cert` certificate on the MagicDNS name) would encrypt traffic, make the phone a secure context (fixing Notifications and the other secure-context APIs), and allow access away from home. Expected changes: accept the Tailscale hostname in `allowed()`, mark the cookie `Secure`, and generate QR links for the HTTPS name. t3code's `packages/tailscale` is a reference.
+Phase 1 is plain HTTP on the local network. This is the planned next step, written so an agent can pick it up. Nothing below exists in the code yet.
+
+### Why
+
+- **Encryption.** Plain HTTP lets anyone watching the network steal a phone's session cookie (security invariant 8). Tailscale traffic is end-to-end encrypted (WireGuard), and `tailscale serve` adds a real HTTPS certificate.
+- **Secure context on the phone.** Over HTTPS the phone gets the APIs that are missing today: desktop/phone notifications, the Clipboard API, `crypto.randomUUID()`. The fallbacks in `src/attachments.ts` can stay.
+- **Away from home.** Works over cellular or any network where both devices are on the same tailnet, without opening ports.
+
+### Approach (same as t3code)
+
+Reference: t3code's `packages/tailscale/src/tailscale.ts` (`readTailscaleStatus`, `ensureTailscaleServe`, `disableTailscaleServe`, `probeTailscaleHttpsEndpoint`).
+
+1. **Detect Tailscale.** Run `tailscale status --json` (no shell, with a timeout). Use `BackendState === 'Running'`, `Self.DNSName` (the MagicDNS name, e.g. `macbook.tail1234.ts.net.`, strip the trailing dot), and `Self.TailscaleIPs`. If the CLI is missing or not running, hide the option. On macOS the CLI may be `/Applications/Tailscale.app/Contents/MacOS/Tailscale` when `tailscale` isn't on PATH.
+2. **Serve the gateway over HTTPS.** When the user turns on a new **Tailscale (HTTPS)** option, start the gateway as today, then run
+   `tailscale serve --bg --https=<servePort> http://127.0.0.1:<gatewayPort>`
+   (t3code uses `servePort` 8443 by default). Turning it off, and server shutdown, runs `tailscale serve --https=<servePort> off`. MagicDNS and HTTPS certificates must be enabled in the tailnet admin console; surface a clear error if `serve` fails.
+3. **Keep pairing.** Being on the tailnet is not enough on its own (shared tailnets, other people's devices). The QR code and session cookie stay exactly as they are; only the URL changes to `https://<DNSName>:<servePort>/pair?code=…`.
+
+### Code changes expected
+
+| Where                           | Change                                                                                                                                                                                                                                                   |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New `src/server/tailscale.ts`   | `status()`, `serve(gatewayPort)`, `stopServe()` using `execFile` with argument arrays and timeouts, like `editor.ts`.                                                                                                                                    |
+| `remote.ts` → `allowed()`       | Accept `Host` = `<DNSName>:<servePort>` (or bare `<DNSName>` for port 443) in addition to LAN addresses. Requests arrive from `tailscale serve` on loopback, which `isPrivateAddress()` already allows. Origin check becomes `https://<DNSName>[:port]`. |
+| `remote.ts` → cookie            | Add `Secure` when the request came through Tailscale (check the host, or the `X-Forwarded-Proto: https` header that `serve` sets). Keep `HttpOnly; SameSite=Lax`. Consider a separate cookie name so HTTP and HTTPS sessions don't mix.                  |
+| `remote.ts` → `createPairing()` | Add an `https://<DNSName>…` link; show it first in the UI when available.                                                                                                                                                                                |
+| `api.ts`                        | `POST /api/remote` takes `{ enabled, tailscale?: boolean }`; status reports Tailscale availability, DNS name, and serve state. Turning phone access off also stops `serve`. Stop `serve` on process exit too, so it never outlives "off on restart".     |
+| `PhoneAccess.tsx`               | A "Use Tailscale (HTTPS)" choice when available, with the HTTPS QR code. Drop the plain-HTTP warning in that mode; keep it for LAN mode.                                                                                                                 |
+| Docs                            | Update this file, the README Phone access section, and `AGENTS.md`.                                                                                                                                                                                      |
+
+### Security notes for that work
+
+- **Never use Tailscale Funnel.** Funnel publishes to the public internet. Only `serve` (tailnet-only) is acceptable.
+- `serve` adds identity headers (`Tailscale-User-Login`, `Tailscale-User-Name`). They're useful for labeling devices, but **don't use them as the only authentication**, and strip them from anything that doesn't come through `serve` (the gateway already strips client `x-t3-*` headers; do the same for `tailscale-*` on LAN requests).
+- Keep every Phase 1 invariant: app on loopback only, off on restart, Mac-only pairing, hashed storage, immediate revocation.
+- If the user restricts the tailnet with ACLs, document which devices need access to the Mac on `servePort`.
+
+### Testing
+
+- Unit-test `tailscale.ts` with a stand-in CLI via an env override (like `VSCODE_BIN` in the VS Code test), covering status parsing, `serve`/`off` arguments, missing CLI, and timeouts.
+- Gateway tests: accept the Tailscale host and HTTPS origin, set `Secure` on the cookie, still reject unknown hosts and unpaired devices.
+- Manual: phone on cellular with Tailscale running, scan the HTTPS QR code, confirm the lock icon, then test notifications, sending, steering, uploads, and revocation.

@@ -65,3 +65,20 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
   )
   expect(await bootstrap.json()).toMatchObject({ remote: true, phoneAccess: false })
 })
+it('keeps HTTP statuses for errors from another copy of HttpError (dev hot reload)', async () => {
+  const { isHttpError, handleApi } = await import('./api')
+  // A second class with the same name, like the one a hot-reloaded service.ts produces.
+  class HttpError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+    ) {
+      super(message)
+    }
+  }
+  expect(isHttpError(new HttpError(404, 'Thread not found.'))).toBe(true)
+  expect(isHttpError(Object.assign(new Error('x'), { status: 404 }))).toBe(false)
+  const missing = await handleApi(new Request('http://127.0.0.1:4310/api/threads/missing-id'))
+  expect(missing.status).toBe(404)
+  expect(await missing.json()).toEqual({ error: 'Thread not found.' })
+})

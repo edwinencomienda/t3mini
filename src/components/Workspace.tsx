@@ -19,7 +19,6 @@ import {
   PanelLeftOpen,
   Monitor,
   Moon,
-  Paperclip,
   Pencil,
   Plus,
   Search,
@@ -168,7 +167,9 @@ async function api<T>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const data = await response.json()
-  if (!response.ok) throw new Error(data.error || 'Request failed.')
+  // The status rides along so callers can tell "not found" from other failures.
+  if (!response.ok)
+    throw Object.assign(new Error(data.error || 'Request failed.'), { status: response.status })
   return data as T
 }
 function StatusDot({ status, unread = false }: { status: Status; unread?: boolean }) {
@@ -281,10 +282,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Last known state of each visited thread and each project's git branch, shown instantly on
   // switching so the layout doesn't blank out and pop back in while fresh data loads.
   const threadCache = useRef(new Map<string, Thread>())
+  const notice = useRef<string | undefined>(undefined)
   const gitCache = useRef(new Map<string, { branch: string | null; detached?: boolean }>())
   const [git, setGit] = useState<{ branch: string | null; detached?: boolean } | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const settleUntil = useRef(0)
   const composer = useRef<HTMLTextAreaElement>(null)
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -342,7 +345,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
   useEffect(() => {
     // Show the cached copy right away (connection status stays as is; the new stream takes over).
     setThread(activeId ? (threadCache.current.get(activeId) ?? null) : null)
-    setError('')
+    // A note left by the previous view (e.g. "That thread was deleted.") survives the switch.
+    setError(notice.current ?? '')
+    notice.current = undefined
     const controller = new AbortController()
     // Load the thread directly too: a first visit shows up without waiting for the stream, and
     // a deleted thread gets a clear error.
@@ -352,9 +357,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
           threadCache.current.set(loaded.id, loaded)
           setThread((current) => (current?.id === loaded.id ? current : loaded))
         })
-        .catch((error: Error) => {
-          if (!controller.signal.aborted) setError(error.message)
+        .catch((error: Error & { status?: number }) => {
+          if (controller.signal.aborted) return
+          if (error.status === 404) leave()
+          else setError(error.message)
         })
+    // The open thread was deleted (here, on another device, or before this link was opened):
+    // go home like the desktop does after deleting, instead of waiting on a thread that's gone.
+    let gone = false
+    const leave = () => {
+      if (gone || !activeId) return
+      gone = true
+      threadCache.current.delete(activeId)
+      drafts.current.delete(activeId)
+      events?.close()
+      clearTimeout(retry)
+      notice.current = 'That thread was deleted.'
+      void navigate({ to: '/', replace: true })
+    }
     // The browser retries a dropped stream by itself, but gives up for good if a retry gets an
     // error response (for example while the server restarts). Reconnect ourselves with a
     // growing delay so the page never sits on stale state.
@@ -387,6 +407,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
         announce(threadEvents(statuses.current, data.threads))
         statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
         setThreads(data.threads)
+        if (activeId && !data.thread && !data.threads.some((item) => item.id === activeId)) {
+          leave()
+          return
+        }
         if (data.thread) threadCache.current.set(data.thread.id, data.thread)
         setThread(data.thread)
         if (data.persistenceError) setError(data.persistenceError)
@@ -443,15 +467,37 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // Only the chat container scrolls; scrollIntoView would also shift the outer layout.
     const element = scrollArea.current
     if (!element) return
+    // Opening a thread lands at the bottom: for a moment it stays pinned no matter what, while
+    // messages load, images size themselves, and phone scroll momentum settles.
+    stickToBottom.current = true
+    settleUntil.current = Date.now() + 900
     const pin = () => {
-      if (stickToBottom.current) element.scrollTop = element.scrollHeight
+      if (stickToBottom.current || Date.now() < settleUntil.current)
+        element.scrollTop = element.scrollHeight
     }
     pin()
+    let frames = 0
+    let frame = requestAnimationFrame(function repin() {
+      pin()
+      if (++frames < 30) frame = requestAnimationFrame(repin)
+    })
     const observer = new ResizeObserver(pin)
     observer.observe(element)
     if (content.current) observer.observe(content.current)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
   }, [activeId])
+  // The thread's messages arriving (first visit, or the live copy replacing the cached one)
+  // re-pins within the same settle window.
+  const loadedThread = thread?.id
+  useLayoutEffect(() => {
+    const element = scrollArea.current
+    if (!element || !loadedThread) return
+    if (stickToBottom.current || Date.now() < settleUntil.current)
+      element.scrollTop = element.scrollHeight
+  }, [loadedThread])
   useEffect(() => {
     const saved = loadNotificationPreferences()
     const permission = desktopPermission()
@@ -1137,7 +1183,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   disabled={busy}
                   onClick={() => void quickCreate(cwd)}
                 >
-                  <Plus size={14} />
+                  <Plus size={15} />
                 </button>
               </div>
               {!collapsed[cwd] || query
@@ -1362,7 +1408,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
               ref={scrollArea}
               onScroll={() => {
                 const element = scrollArea.current
-                if (element)
+                // Scroll positions while a thread is still settling aren't the user's choice.
+                if (element && Date.now() >= settleUntil.current)
                   stickToBottom.current =
                     element.scrollHeight - element.scrollTop - element.clientHeight < 120
               }}
@@ -1576,7 +1623,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       placeholder={
                         active
                           ? `${names[thread.provider]} is working… send a message to steer it`
-                          : `Ask ${names[thread.provider]} to build, fix, or explore…`
+                          : `Chat with ${names[thread.provider]}`
                       }
                       value={draft}
                       onChange={(e) => {
@@ -1592,43 +1639,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       rows={1}
                     />
                     <div className="composer-toolbar">
-                      <AgentSettingsControls
-                        key={thread.id}
-                        provider={thread.provider}
-                        cwd={thread.cwd}
-                        value={{
-                          model: thread.model,
-                          effort: thread.effort || '',
-                          serviceTier: thread.serviceTier || '',
-                          permissionMode: thread.permissionMode || defaultPermission,
-                        }}
-                        onChange={(settings) => void updateSettings(settings)}
-                        disabled={active || busy || !connected}
-                        agent={
-                          bootstrap
-                            ? {
-                                installed: {
-                                  claude: bootstrap.providers.claude.installed,
-                                  codex: bootstrap.providers.codex.installed,
-                                },
-                                locked: thread.messages.length > 0 || Boolean(thread.sessionId),
-                                // Switching agents brings back that agent's last-used settings.
-                                onChange: (provider) => {
-                                  if (provider !== thread.provider)
-                                    void updateSettings(settingsFor(provider), provider)
-                                },
-                              }
-                            : undefined
-                        }
-                      />
-                      <div className="composer-actions">
+                      <div className="composer-left">
                         {/* The file input covers the button so a tap opens the picker natively;
                             iOS Safari won't open a hidden input from a script click. */}
                         <label
-                          className={`icon-button attach-button ${busy ? 'disabled' : ''}`}
+                          className={`round-button attach-button ${busy ? 'disabled' : ''}`}
                           title="Attach images or files (or paste / drop them)"
                         >
-                          <Paperclip size={15} />
+                          <Plus size={15} />
                           <input
                             ref={filePicker}
                             type="file"
@@ -1642,6 +1660,44 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             }}
                           />
                         </label>
+                        <AgentSettingsControls
+                          key={thread.id}
+                          provider={thread.provider}
+                          cwd={thread.cwd}
+                          value={{
+                            model: thread.model,
+                            effort: thread.effort || '',
+                            serviceTier: thread.serviceTier || '',
+                            permissionMode: thread.permissionMode || defaultPermission,
+                          }}
+                          onChange={(settings) => void updateSettings(settings)}
+                          disabled={active || busy || !connected}
+                          agent={
+                            bootstrap
+                              ? {
+                                  installed: {
+                                    claude: bootstrap.providers.claude.installed,
+                                    codex: bootstrap.providers.codex.installed,
+                                  },
+                                  locked: thread.messages.length > 0 || Boolean(thread.sessionId),
+                                  // Switching agents brings back that agent's last-used settings,
+                                  // or the model picked from its tab (with default effort).
+                                  onChange: (provider, model) => {
+                                    if (provider === thread.provider) return
+                                    const remembered = settingsFor(provider)
+                                    void updateSettings(
+                                      model === undefined
+                                        ? remembered
+                                        : { ...remembered, model, effort: '', serviceTier: '' },
+                                      provider,
+                                    )
+                                  },
+                                }
+                              : undefined
+                          }
+                        />
+                      </div>
+                      <div className="composer-actions">
                         {active ? (
                           <button
                             className="stop-button"
@@ -1651,7 +1707,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             onClick={() => action('stop')}
                             disabled={!connected}
                           >
-                            <Square size={11} fill="currentColor" />
+                            <Square size={10} fill="currentColor" />
                           </button>
                         ) : null}
                         {/* While the agent works, Send steers it (shown once there's something to send). */}
@@ -1670,7 +1726,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               !connected
                             }
                           >
-                            <ArrowUp size={16} />
+                            <ArrowUp size={15} />
                           </button>
                         ) : null}
                       </div>

@@ -1,14 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  Check,
-  ChevronDown,
-  Gauge,
-  Lock,
-  LockOpen,
-  RefreshCw,
-  Sparkles,
-  Terminal,
-} from 'lucide-react'
+import { Check, ChevronDown, Lock, LockOpen, RefreshCw, Terminal } from 'lucide-react'
 import {
   effortLabel,
   permissionModes,
@@ -40,7 +31,8 @@ export function ProviderMark({ provider, size = 14 }: { provider: Provider; size
 export type AgentChoice = {
   installed: Record<Provider, boolean>
   locked: boolean
-  onChange: (provider: Provider) => void
+  // Switches agent; with a model, also selects that model (picked from the other tab).
+  onChange: (provider: Provider, model?: string) => void
 }
 
 export function Picker({
@@ -55,10 +47,21 @@ export function Picker({
   tone,
   footer,
   sections = [],
+  variant = 'default',
+  trigger,
+  header,
+  onOpenChange,
 }: {
   label: string
-  icon: ReactNode
+  icon?: ReactNode
   text: string
+  // 'pill' and 'round' are the composer's soft chip and circle styles.
+  variant?: 'default' | 'pill' | 'round'
+  // Custom button content instead of icon + text + chevron.
+  trigger?: ReactNode
+  // Shown above the options (e.g. provider tabs).
+  header?: ReactNode
+  onOpenChange?: (open: boolean) => void
   value: string
   options: Option[]
   onSelect: (value: string) => void
@@ -71,13 +74,20 @@ export function Picker({
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
+  const openChange = useRef(onOpenChange)
+  openChange.current = onOpenChange
+  useEffect(() => openChange.current?.(open), [open])
   useEffect(() => {
     if (!open) return
     const close = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false)
     }
     document.addEventListener('pointerdown', close)
-    list.current?.querySelector<HTMLButtonElement>('[aria-checked="true"], button')?.focus()
+    // Focus the selected option, not header controls like the provider tabs.
+    ;(
+      list.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
+      list.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"], button')
+    )?.focus()
     return () => document.removeEventListener('pointerdown', close)
   }, [open])
   useEffect(() => {
@@ -101,19 +111,25 @@ export function Picker({
     <div className="picker" ref={root} onKeyDown={open ? move : undefined}>
       <button
         type="button"
-        className={`picker-trigger ${tone || ''}`}
+        className={`picker-trigger ${variant} ${tone || ''}`}
         aria-label={`${label}: ${text}`}
+        title={variant === 'round' ? `${label}: ${text}` : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen(!open)}
       >
-        {icon}
-        <span>{text}</span>
-        <ChevronDown size={12} className="picker-chevron" />
+        {trigger ?? (
+          <>
+            {icon}
+            <span>{text}</span>
+            <ChevronDown size={12} className="picker-chevron" />
+          </>
+        )}
       </button>
       {open ? (
         <div className={`picker-menu ${placement}`} role="menu" aria-label={label} ref={list}>
+          {header}
           <div className="picker-heading">{label}</div>
           {[{ label: '', value, options, onSelect }, ...sections].map((section, index) => (
             <div key={section.label || index} role="group" aria-label={section.label || label}>
@@ -153,6 +169,60 @@ export function Picker({
   )
 }
 
+// Model list for one provider, shared through the session cache; a request already in flight
+// is reused, so two pickers (or both tabs) never load the same list twice.
+const inflight = new Map<string, Promise<ModelCatalog>>()
+function useCatalog(provider: Provider, cwd: string) {
+  const cacheKey = `${provider}|${cwd}`
+  const [catalog, setCatalog] = useState<ModelCatalog>(
+    () => catalogs.get(cacheKey) ?? { models: [] },
+  )
+  const [loading, setLoading] = useState(() => !catalogs.has(cacheKey))
+  const [reload, setReload] = useState(0)
+  useEffect(() => {
+    const cached = catalogs.get(cacheKey)
+    if (cached && !reload) {
+      setCatalog(cached)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setCatalog({ models: [] })
+    const timer = setTimeout(() => {
+      let request = reload ? undefined : inflight.get(cacheKey)
+      if (!request) {
+        const params = new URLSearchParams({ provider, cwd, ...(reload ? { refresh: '1' } : {}) })
+        request = fetch(`/api/models?${params}`)
+          .then(async (response) => {
+            if (!response.ok) throw new Error('Could not load models.')
+            return (await response.json()) as ModelCatalog
+          })
+          .then((loaded) => {
+            if (!loaded.error) catalogs.set(cacheKey, loaded)
+            return loaded
+          })
+          .catch(() => ({
+            models: [],
+            error: 'Models unavailable. Use Provider default or retry.',
+          }))
+          .finally(() => inflight.delete(cacheKey))
+        inflight.set(cacheKey, request)
+      }
+      void request.then((loaded) => {
+        if (cancelled) return
+        setCatalog(loaded)
+        setLoading(false)
+      })
+    }, 200)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [cacheKey, provider, cwd, reload])
+  return { catalog, loading, retry: () => setReload((count) => count + 1) }
+}
+
 export function AgentSettingsControls({
   provider,
   cwd,
@@ -170,60 +240,32 @@ export function AgentSettingsControls({
   disabled?: boolean
   placement?: 'up' | 'down'
 }) {
-  const cacheKey = `${provider}|${cwd}`
-  const [catalog, setCatalog] = useState<ModelCatalog>(
-    () => catalogs.get(cacheKey) ?? { models: [] },
-  )
-  const [loading, setLoading] = useState(() => !catalogs.has(cacheKey))
-  const [reload, setReload] = useState(0)
-  useEffect(() => {
-    const cached = catalogs.get(cacheKey)
-    if (cached && !reload) {
-      setCatalog(cached)
-      setLoading(false)
-      return
-    }
-    const controller = new AbortController()
-    setLoading(true)
-    setCatalog({ models: [] })
-    const timer = setTimeout(() => {
-      const params = new URLSearchParams({ provider, cwd, ...(reload ? { refresh: '1' } : {}) })
-      fetch(`/api/models?${params}`, { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) throw new Error('Could not load models.')
-          return response.json() as Promise<ModelCatalog>
-        })
-        .then((loaded) => {
-          if (!loaded.error) catalogs.set(cacheKey, loaded)
-          setCatalog(loaded)
-        })
-        .catch(() => {
-          if (!controller.signal.aborted)
-            setCatalog({ models: [], error: 'Models unavailable. Use Provider default or retry.' })
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
-        })
-    }, 200)
-    return () => {
-      clearTimeout(timer)
-      controller.abort()
-    }
-  }, [cacheKey, provider, cwd, reload])
+  // The menu's Claude / Codex tabs. Opening the menu starts on the thread's own agent.
+  const [tab, setTab] = useState<Provider>(provider)
+  useEffect(() => setTab(provider), [provider])
+  const { catalog, loading, retry } = useCatalog(provider, cwd)
+  const browsing = useCatalog(tab, cwd)
+  const otherTab = tab !== provider
   const model = catalog.models.find((item) => item.id === value.model)
   const mode = permissionModes.find((item) => item.value === value.permissionMode)!
   const efforts = model?.efforts || []
   const tiers = model?.serviceTiers || []
   const tier = tiers.find((item) => item.id === value.serviceTier)
-  const modelOptions: Option[] = [
-    { value: '', label: 'Provider default' },
-    ...(value.model && !model && !loading ? [{ value: value.model, label: value.model }] : []),
-    ...catalog.models.map((item) => ({
-      value: item.id,
-      label: item.label,
-      description: item.description,
-    })),
-  ]
+  // The list under the selected tab: this thread's agent, or the other one to switch to.
+  const listed = otherTab ? browsing.catalog : catalog
+  const listLoading = otherTab ? browsing.loading : loading
+  const modelOptions: Option[] = listLoading
+    ? []
+    : [
+        { value: '', label: 'Provider default' },
+        ...(!otherTab && value.model && !model ? [{ value: value.model, label: value.model }] : []),
+        ...listed.models.map((item) => ({
+          value: item.id,
+          label: item.label,
+          description: item.description,
+        })),
+      ]
+  const canSwitch = Boolean(agent && !agent.locked)
   const effortOptions: Option[] = [
     {
       value: '',
@@ -239,44 +281,116 @@ export function AgentSettingsControls({
       ? value.model
       : 'Loading…'
     : model?.label || value.model || 'Default model'
+  // The pill reads like "Opus 5.5 Medium": the model, then the effort (and a faster tier).
+  const effortText = [
+    value.effort
+      ? effortLabel(value.effort)
+      : model?.defaultEffort
+        ? effortLabel(model.defaultEffort)
+        : '',
+    tier?.label ?? '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const sections = [
+    ...(efforts.length || value.effort
+      ? [
+          {
+            label: 'Effort',
+            value: value.effort,
+            options: effortOptions,
+            onSelect: (effort: string) => onChange({ ...value, effort }),
+          },
+        ]
+      : []),
+    // Codex models can offer faster service tiers.
+    ...(tiers.length
+      ? [
+          {
+            label: 'Service Tier',
+            value: value.serviceTier || '',
+            options: [
+              { value: '', label: 'Standard', badge: 'Default' },
+              ...tiers.map((item) => ({
+                value: item.id,
+                label: item.label,
+                description: item.description,
+              })),
+            ],
+            onSelect: (serviceTier: string) => onChange({ ...value, serviceTier }),
+          },
+        ]
+      : []),
+  ]
   return (
     <div className="agent-settings" aria-label="Agent settings" role="group">
-      {agent ? (
-        <span title={agent.locked ? 'Start a new thread to use a different agent.' : undefined}>
-          <Picker
-            label="Agent"
-            icon={<ProviderMark provider={provider} size={14} />}
-            text={providerNames[provider]}
-            value={provider}
-            options={(['claude', 'codex'] as const).map((item) => ({
-              value: item,
-              label: providerNames[item],
-              description: agent.installed[item] ? undefined : 'CLI not found',
-            }))}
-            disabled={disabled || agent.locked}
-            placement={placement}
-            onSelect={(selected) => agent.onChange(selected as Provider)}
-          />
-        </span>
-      ) : null}
+      {/* One pill for agent, model, effort, and tier; permissions stay one tap away. */}
       <Picker
         label="Model"
-        icon={<Sparkles size={13} />}
-        text={modelText}
-        value={value.model}
+        variant="pill"
+        text={[providerNames[provider], modelText, effortText].filter(Boolean).join(' ')}
+        trigger={
+          <>
+            <ProviderMark provider={provider} size={13} />
+            <span className="pill-model">{modelText}</span>
+            {effortText ? <span className="pill-effort">{effortText}</span> : null}
+          </>
+        }
+        // In the other agent's tab nothing is selected yet.
+        value={otherTab ? '\u0000' : value.model}
         options={modelOptions}
         disabled={disabled || loading}
         placement={placement}
-        onSelect={(model) => onChange({ ...value, model, effort: '', serviceTier: '' })}
+        onOpenChange={(open) => {
+          if (open) setTab(provider)
+        }}
+        onSelect={(model) =>
+          otherTab
+            ? agent?.onChange(tab, model)
+            : onChange({ ...value, model, effort: '', serviceTier: '' })
+        }
+        // Effort and tier belong to this thread's model, so they show on its own tab only.
+        sections={otherTab ? [] : sections}
+        header={
+          agent ? (
+            <div className="picker-tabs" role="tablist" aria-label="Agent">
+              {(['claude', 'codex'] as const).map((item) => {
+                const blocked = item !== provider && !canSwitch
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === item}
+                    disabled={blocked}
+                    title={
+                      blocked
+                        ? `Start a new thread to use ${providerNames[item]}.`
+                        : !agent.installed[item]
+                          ? `${providerNames[item]} CLI not found`
+                          : undefined
+                    }
+                    onClick={() => setTab(item)}
+                  >
+                    <ProviderMark provider={item} size={12} />
+                    {providerNames[item]}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null
+        }
         footer={
-          catalog.error ? (
+          listLoading ? (
+            <div className="picker-error">Loading models…</div>
+          ) : listed.error ? (
             <div className="picker-error">
-              <span>{catalog.error}</span>
+              <span>{listed.error}</span>
               <button
                 type="button"
                 className="icon-button"
                 aria-label="Retry loading models"
-                onClick={() => setReload((count) => count + 1)}
+                onClick={() => (otherTab ? browsing.retry() : retry())}
               >
                 <RefreshCw size={13} />
               </button>
@@ -284,45 +398,13 @@ export function AgentSettingsControls({
           ) : null
         }
       />
-      {efforts.length || value.effort || tiers.length ? (
-        <Picker
-          label="Effort"
-          icon={<Gauge size={13} />}
-          text={
-            (value.effort ? effortLabel(value.effort) : 'Default effort') +
-            (tier ? ` · ${tier.label}` : '')
-          }
-          value={value.effort}
-          options={effortOptions}
-          disabled={disabled || loading}
-          placement={placement}
-          onSelect={(effort) => onChange({ ...value, effort })}
-          // Codex models can offer faster service tiers; they live in the same menu.
-          sections={
-            tiers.length
-              ? [
-                  {
-                    label: 'Service Tier',
-                    value: value.serviceTier || '',
-                    options: [
-                      { value: '', label: 'Standard', badge: 'Default' },
-                      ...tiers.map((item) => ({
-                        value: item.id,
-                        label: item.label,
-                        description: item.description,
-                      })),
-                    ],
-                    onSelect: (serviceTier) => onChange({ ...value, serviceTier }),
-                  },
-                ]
-              : []
-          }
-        />
-      ) : null}
       <Picker
         label="Permissions"
-        icon={value.permissionMode === 'full-access' ? <LockOpen size={13} /> : <Lock size={13} />}
+        variant="round"
         text={mode.label}
+        trigger={
+          value.permissionMode === 'full-access' ? <LockOpen size={14} /> : <Lock size={14} />
+        }
         value={value.permissionMode}
         tone={value.permissionMode === 'full-access' ? 'warning' : undefined}
         options={permissionModes.map((item) => ({ ...item }))}
@@ -339,7 +421,7 @@ export function AgentSettingsControls({
           className="icon-button retry-models"
           aria-label="Retry loading models"
           title={catalog.error}
-          onClick={() => setReload((count) => count + 1)}
+          onClick={() => retry()}
         >
           <RefreshCw size={13} />
         </button>
