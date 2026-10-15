@@ -52,6 +52,26 @@ export function saveDictationSounds(on: boolean) {
     // The choice still applies until reload.
   }
 }
+// Thread vocabulary: the server sends unusual words from the agent's last replies to Deepgram as
+// keyterms (per browser, on unless turned off in Settings → Dictation).
+const threadWordsKey = 't3-mini:dictation-thread-words'
+export function loadThreadWords() {
+  try {
+    return localStorage.getItem(threadWordsKey) !== 'off'
+  } catch {
+    return true
+  }
+}
+export function saveThreadWords(on: boolean) {
+  try {
+    localStorage.setItem(threadWordsKey, on ? 'on' : 'off')
+  } catch {
+    // The choice still applies until reload.
+  }
+}
+// Which thread to take vocabulary from, if that's turned on.
+const vocabularyThread = (threadId?: string) =>
+  threadId && loadThreadWords() ? threadId : undefined
 const cue = (kind: 'start' | 'stop') => {
   if (loadDictationSounds()) playCue(kind)
 }
@@ -85,11 +105,11 @@ function toBase64(blob: Blob) {
 }
 
 // Sends a finished recording in one piece: the fallback when streaming isn't available.
-async function transcribeRecording(audio: Blob) {
+async function transcribeRecording(audio: Blob, thread?: string) {
   const response = await fetch('/api/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mimeType: audio.type, data: await toBase64(audio) }),
+    body: JSON.stringify({ thread, mimeType: audio.type, data: await toBase64(audio) }),
   })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || 'Dictation failed.')
@@ -97,9 +117,11 @@ async function transcribeRecording(audio: Blob) {
 }
 
 // A live-transcription session over the server's WebSocket relay.
-function openStream(onWords: (text: string) => void) {
+function openStream(onWords: (text: string) => void, thread?: string) {
   const socket = new WebSocket(
-    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/dictation/stream`,
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/dictation/stream${
+      thread ? `?thread=${encodeURIComponent(thread)}` : ''
+    }`,
   )
   const finals: string[] = []
   let interim = ''
@@ -159,11 +181,14 @@ function openStream(onWords: (text: string) => void) {
 }
 
 export function DictationButton({
+  threadId,
   onText,
   onPreview,
   onError,
   disabled = false,
 }: {
+  // The thread being dictated into, for its vocabulary.
+  threadId?: string
   onText: (text: string) => void
   // The words so far while recording ('' when done), e.g. for the composer placeholder.
   onPreview?: (text: string) => void
@@ -215,9 +240,10 @@ export function DictationButton({
     const media = new MediaRecorder(stream.current, mimeType ? { mimeType } : undefined)
     // Every chunk is kept, so the fallback can still send the whole recording.
     const chunks: Blob[] = []
+    const thread = vocabularyThread(threadId)
     const live = openStream((words) => {
       if (!cancelled.current) handlers.current.onPreview?.(words)
-    })
+    }, thread)
     live.onOpen(() => chunks.forEach((chunk) => live.send(chunk)))
     media.ondataavailable = (event) => {
       if (!event.data.size) return
@@ -239,7 +265,7 @@ export function DictationButton({
       }
       setState('transcribing')
       try {
-        const text = (await live.finish()) ?? (await transcribeRecording(audio))
+        const text = (await live.finish()) ?? (await transcribeRecording(audio, thread))
         if (cancelled.current) return
         if (text) handlers.current.onText(text)
         else handlers.current.onError('No speech was heard. Try again a bit closer to the mic.')

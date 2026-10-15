@@ -22,6 +22,7 @@ import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
 import { githubBranchUrl, githubRepoUrl } from './github'
+import { commonWords, extractKeyterms } from './keyterms'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
@@ -750,6 +751,16 @@ export class AgentService {
   // The current git branch of a thread's project folder, or null when it isn't a git repo,
   // plus a GitHub link when the remote is on GitHub. Runs git directly (no shell) and only in
   // the thread's own folder.
+  // Unusual words from the agent's last two replies, to help dictation spell them (see
+  // keyterms.ts for what is and isn't sent). Unknown threads simply get none.
+  async dictationKeyterms(id: string) {
+    const thread = this.store.threads.get(id)
+    const replies = (thread?.messages ?? [])
+      .filter((message) => message.role === 'assistant' && message.text)
+      .slice(-2)
+      .map((message) => message.text)
+    return replies.length ? extractKeyterms(replies, await commonWords()) : []
+  }
   async gitInfo(id: string): Promise<GitInfo> {
     const { cwd } = this.get(id)
     const git = async (args: string[]) =>

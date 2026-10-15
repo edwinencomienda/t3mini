@@ -14,6 +14,7 @@ import {
   maxAudioBytes,
   saveDictationKey,
   transcribe,
+  transcriptionThread,
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
 import { providerUpdates, updateProvider } from './cli-updates'
@@ -76,7 +77,11 @@ export async function handleApi(request: Request) {
       const length = Number(request.headers.get('content-length') || 0)
       if (length > Math.ceil(maxAudioBytes * 1.4))
         throw new HttpError(413, 'The recording is too long.')
-      return Response.json(await transcribe(await request.json()))
+      const body = await request.json()
+      const thread = transcriptionThread(body)
+      return Response.json(
+        await transcribe(body, thread ? await service.dictationKeyterms(thread) : []),
+      )
     }
     // Long-running processes agents started (the list itself comes with the live updates).
     if (parts[0] === 'processes' && parts[1]) {

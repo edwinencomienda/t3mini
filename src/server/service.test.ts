@@ -200,6 +200,20 @@ it('lets the agent rename only its own thread through the rename tool', async ()
   expect(saved.find((item: { id: string }) => item.id === created.id).title).toBe('Login bug')
   await settle(created.id, () => finish())
 })
+it('takes dictation vocabulary from the last two agent replies only', async () => {
+  const created = await thread()
+  created.messages.push(
+    { id: 'a1', role: 'assistant', text: 'Old reply about Kubernetes.', createdAt: '' },
+    { id: 'u1', role: 'user', text: 'My message mentions Zanzibarqux.', createdAt: '' },
+    { id: 'a2', role: 'assistant', text: 'Then we used Deepgram here.', createdAt: '' },
+    { id: 'a3', role: 'assistant', text: 'And Vite restarted.', createdAt: '' },
+  )
+  const terms = await service.dictationKeyterms(created.id)
+  expect(terms).toEqual(expect.arrayContaining(['Deepgram', 'Vite']))
+  expect(terms).not.toContain('Kubernetes')
+  expect(terms).not.toContain('Zanzibarqux')
+  expect(await service.dictationKeyterms('no-such-thread')).toEqual([])
+})
 it('saves projects, lists them by recent activity, and only removes empty ones', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'other-project'))

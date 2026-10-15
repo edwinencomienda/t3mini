@@ -1,7 +1,8 @@
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
-import { dictationKey, maxAudioBytes } from './dictation'
+import { deepgramParams, dictationKey, maxAudioBytes } from './dictation'
+import { getService } from './service'
 import { remoteHeader } from './remote'
 
 // Live dictation: the browser streams microphone audio over a WebSocket to this server, which
@@ -14,14 +15,8 @@ import { remoteHeader } from './remote'
 export const streamPath = '/api/dictation/stream'
 // Matches the browser's 5-minute recording limit, plus time for Deepgram to finish.
 const maxSessionMs = 5 * 60_000 + 30_000
-const deepgramUrl = () =>
-  `wss://api.deepgram.com/v1/listen?${new URLSearchParams({
-    model: process.env.DEEPGRAM_MODEL || 'nova-3',
-    smart_format: 'true',
-    interim_results: 'true',
-    // Keep dictated content out of Deepgram's model-improvement program.
-    mip_opt_out: 'true',
-  })}`
+const deepgramUrl = (keyterms: string[]) =>
+  `wss://api.deepgram.com/v1/listen?${deepgramParams(keyterms, { interim_results: 'true' })}`
 
 // Same rules as the HTTP API (checkRequest): loopback host and same origin only. Browsers always
 // send Origin on WebSockets, so it's required. Paired phones arrive through the phone-access
@@ -50,11 +45,24 @@ export function handleDictationUpgrade(request: IncomingMessage, socket: Duplex,
   if (!allowedUpgrade(request)) return refuse('403 Forbidden')
   const key = dictationKey()
   if (!key) return refuse('409 Conflict')
-  server.handleUpgrade(request, socket, head, (client) => relay(client, key))
+  // The browser only says which thread it's dictating into (?thread=…); the vocabulary is looked
+  // up and filtered here, so the browser never chooses what is sent to Deepgram.
+  const thread = new URL(request.url ?? '/', 'http://localhost').searchParams.get('thread')
+  void (async () => {
+    const keyterms =
+      thread && /^[\w-]{1,100}$/.test(thread)
+        ? await getService()
+            .then((service) => service.dictationKeyterms(thread))
+            .catch(() => [])
+        : []
+    server.handleUpgrade(request, socket, head, (client) => relay(client, key, keyterms))
+  })()
 }
 
-function relay(client: WebSocket, key: string) {
-  const upstream = new WebSocket(deepgramUrl(), { headers: { Authorization: `Token ${key}` } })
+function relay(client: WebSocket, key: string, keyterms: string[]) {
+  const upstream = new WebSocket(deepgramUrl(keyterms), {
+    headers: { Authorization: `Token ${key}` },
+  })
   // Audio that arrives before Deepgram has accepted the connection.
   const pending: RawData[] = []
   let received = 0

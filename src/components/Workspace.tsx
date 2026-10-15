@@ -2003,6 +2003,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <div className="composer-actions">
                         {bootstrap?.dictation && dictationSupported() ? (
                           <DictationButton
+                            threadId={thread.id}
                             onText={(text) => {
                               const element = composer.current
                               const before =

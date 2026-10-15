@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
+import { supportsKeyterms } from './keyterms'
 
 // Dictation: the browser records audio and posts it here; the server sends it to Deepgram.
 // The API key comes from DEEPGRAM_API_KEY (takes priority) or from Settings, which saves it in
@@ -28,6 +29,8 @@ export class DictationError extends Error {
 }
 
 const requestSchema = z.object({
+  // The thread being dictated into, for its vocabulary (see keyterms.ts).
+  thread: z.string().max(100).optional(),
   mimeType: z.string().max(100),
   data: z.string().max(Math.ceil((maxAudioBytes * 4) / 3) + 4),
 })
@@ -106,7 +109,27 @@ export async function clearDictationKey(path: string) {
   return dictationStatus()
 }
 
-export async function transcribe(input: unknown): Promise<{ text: string }> {
+// The thread a transcription request is for, if any (the server looks up its vocabulary).
+export const transcriptionThread = (input: unknown) =>
+  requestSchema.pick({ thread: true }).safeParse(input).data?.thread
+// The Deepgram query for a dictation: model, formatting, privacy, and the thread's keyterms.
+export function deepgramParams(keyterms: string[] = [], extra: Record<string, string> = {}) {
+  const model = process.env.DEEPGRAM_MODEL || 'nova-3'
+  const params = new URLSearchParams({
+    model,
+    smart_format: 'true',
+    // Keep dictated content out of Deepgram's model-improvement program.
+    mip_opt_out: 'true',
+    ...extra,
+  })
+  if (supportsKeyterms(model)) for (const term of keyterms) params.append('keyterm', term)
+  return params
+}
+
+export async function transcribe(
+  input: unknown,
+  keyterms: string[] = [],
+): Promise<{ text: string }> {
   const key = currentKey()
   if (!key)
     throw new DictationError(503, 'Dictation is not set up. Add a Deepgram key in Settings.')
@@ -118,12 +141,7 @@ export async function transcribe(input: unknown): Promise<{ text: string }> {
   const audio = Buffer.from(data, 'base64')
   if (!audio.length) throw new DictationError(400, 'The recording is empty.')
   if (audio.length > maxAudioBytes) throw new DictationError(413, 'The recording is too long.')
-  const params = new URLSearchParams({
-    model: process.env.DEEPGRAM_MODEL || 'nova-3',
-    smart_format: 'true',
-    // Keep dictated content out of Deepgram's model-improvement program.
-    mip_opt_out: 'true',
-  })
+  const params = deepgramParams(keyterms)
   let response: Response
   try {
     response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {

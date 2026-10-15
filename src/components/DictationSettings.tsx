@@ -5,7 +5,9 @@ import {
   dictationSupported,
   loadDictationSounds,
   loadMicrophone,
+  loadThreadWords,
   saveDictationSounds,
+  saveThreadWords,
   saveMicrophone,
 } from './Dictation'
 import { Toggle } from './ui'
@@ -17,6 +19,7 @@ function MicrophonePicker() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selected, setSelected] = useState(loadMicrophone)
   const [sounds, setSounds] = useState(loadDictationSounds)
+  const [threadWords, setThreadWords] = useState(loadThreadWords)
   const [error, setError] = useState('')
   const refresh = () =>
     navigator.mediaDevices
@@ -123,6 +126,24 @@ function MicrophonePicker() {
             saveDictationSounds(on)
             setSounds(on)
             if (on) playCue('start')
+          }}
+        />
+      </div>
+      <div className="setting-row">
+        <div>
+          <strong>Use words from the thread</strong>
+          <small>
+            Helps spell names and code terms: up to 40 unusual words from the agent’s last two
+            replies go to Deepgram with your audio. Code blocks, links, and anything that looks like
+            a key are never included.
+          </small>
+        </div>
+        <Toggle
+          label="Use words from the thread"
+          checked={threadWords}
+          onChange={(on) => {
+            saveThreadWords(on)
+            setThreadWords(on)
           }}
         />
       </div>
