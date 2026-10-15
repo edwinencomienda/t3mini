@@ -300,7 +300,8 @@ kbd {
   align-items: center;
   gap: 0.5rem;
   height: 1.9rem;
-  padding: 0 0.5rem 0 1.4rem;
+  /* Status icons line up under the project's folder icon; no extra indent needed. */
+  padding: 0 0.5rem;
   border-radius: 0.4rem;
   color: var(--muted-foreground);
   font-size: 13px;
@@ -399,34 +400,39 @@ kbd {
 }
 .status-dot {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  margin: 0 3px;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
   border-radius: 50%;
+  /* Every thread shows a state: a hollow ring by default (idle, seen, stopped)… */
+  border: 1.5px solid var(--faint);
   background: transparent;
 }
+/* …filled when something needs attention. */
 .status-dot.waiting {
+  border-color: var(--warning);
   background: var(--warning);
   box-shadow: 0 0 0 3px rgb(217 119 6 / 18%);
 }
 .status-dot.failed {
+  border-color: var(--danger);
   background: var(--danger);
 }
 /* Finished threads stay quiet once seen; an unseen result gets a blue dot until opened. */
 .status-dot.unread {
+  border-color: var(--primary);
   background: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
 }
 .status-dot.unread.failed {
+  border-color: var(--danger);
   background: var(--danger);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
 }
 .thread-row.unread {
   color: var(--foreground);
   font-weight: 600;
-}
-.status-dot.interrupted {
-  background: var(--faint);
 }
 .status-spinner {
   flex-shrink: 0;
