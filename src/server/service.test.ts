@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentService } from './service'
-import { ThreadStore } from './store'
+import { ProjectStore, ThreadStore } from './store'
 import type { ProviderContext, Runner, Steer } from './providers/types'
 
 let directory: string
@@ -221,6 +221,22 @@ it('saves projects, lists them by recent activity, and only removes empty ones',
   await expect(service.removeProject({ path: created.cwd })).rejects.toThrow('threads')
   await service.removeProject({ path: other })
   expect(service.projects().map((project) => project.path)).toEqual([created.cwd])
+})
+it('renames a project label without touching its folder, and resets it with an empty name', async () => {
+  const created = await thread()
+  const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })
+  expect(renamed).toMatchObject({ path: created.cwd, name: 'Client site', threadCount: 1 })
+  expect(service.get(created.id).cwd).toBe(created.cwd)
+  // The name survives a restart.
+  const store = new ProjectStore(join(directory, 'projects.json'))
+  await store.load()
+  expect(store.projects.get(created.cwd)?.name).toBe('Client site')
+  const reset = await service.renameProject({ path: created.cwd, name: '' })
+  expect(reset.name).toBeUndefined()
+  await expect(
+    service.renameProject({ path: join(directory, 'unknown'), name: 'Nope' }),
+  ).rejects.toThrow('Project not found')
+  await expect(service.renameProject({ path: created.cwd, name: 'x'.repeat(81) })).rejects.toThrow()
 })
 it('switches agents only before the first message', async () => {
   const created = await thread()

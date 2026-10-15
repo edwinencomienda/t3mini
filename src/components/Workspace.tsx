@@ -429,12 +429,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
     | null
   >(null)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
+  // The sidebar name of a project: the name you gave it, else its folder name.
+  const projectName = (path: string) =>
+    projects.find((project) => project.path === path)?.name || folderName(path)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
-  // Add project can return to the new-thread dialog with the added folder selected.
   const [addProject, setAddProject] = useState(false)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
+  const [renamingProject, setRenamingProject] = useState<{ path: string; name: string } | null>(
+    null,
+  )
   const closeMenu = useCallback(() => setMenu(null), [])
   const [toasts, setToasts] = useState<ThreadEvent[]>([])
   const [showPrompt, setShowPrompt] = useState(false)
@@ -1131,6 +1136,32 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setError((error as Error).message)
     }
   }
+  const committedProjectRename = useRef<typeof renamingProject>(null)
+  async function renameProject() {
+    // Same once-only guard as thread renames: Enter unmounts the input, which also fires blur.
+    if (!renamingProject || committedProjectRename.current === renamingProject) return
+    committedProjectRename.current = renamingProject
+    const { path } = renamingProject
+    const name = renamingProject.name.trim()
+    setRenamingProject(null)
+    const current = projects.find((project) => project.path === path)
+    // Typing the folder name itself, or clearing the field, goes back to the folder name.
+    const next = name === folderName(path) ? '' : name
+    if (next === (current?.name ?? '')) return
+    const show = (label: string) =>
+      setProjects((list) =>
+        list.map((project) =>
+          project.path === path ? { ...project, name: label || undefined } : project,
+        ),
+      )
+    show(next)
+    try {
+      await api('projects/rename', 'POST', { path, name: next })
+    } catch (error) {
+      show(current?.name ?? '')
+      setError((error as Error).message)
+    }
+  }
   const query = search.trim().toLowerCase()
   const visibleThreads = threads.filter((item) =>
     `${item.title} ${item.cwd}`.toLowerCase().includes(query),
@@ -1147,9 +1178,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
   ]
   const groups = projectPaths
     .map((path) => ({ path, items: visibleThreads.filter((item) => item.cwd === path) }))
-    .filter((group) => !query || group.items.length || group.path.toLowerCase().includes(query))
+    .filter(
+      (group) =>
+        !query ||
+        group.items.length ||
+        `${group.path} ${projectName(group.path)}`.toLowerCase().includes(query),
+    )
   const active = thread ? isActive(thread.status) : false
-  const folder = thread ? folderName(thread.cwd) : undefined
+  const folder = thread ? projectName(thread.cwd) : undefined
   const runningCount = threads.filter((item) => isActive(item.status)).length
   const missingClis = bootstrap
     ? (['claude', 'codex'] as const)
@@ -1309,19 +1345,56 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   setMenu({ kind: 'project', path: cwd, position: menuPosition(event) })
                 }}
               >
-                <button
-                  className="project-toggle"
-                  onClick={() => setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })}
-                  aria-expanded={!collapsed[cwd]}
-                  title={cwd}
-                >
-                  {collapsed[cwd] ? <Folder size={14} /> : <FolderOpen size={14} />}
-                  <span>{folderName(cwd)}</span>
-                </button>
+                {renamingProject?.path === cwd ? (
+                  <div className="project-toggle renaming">
+                    {collapsed[cwd] ? <Folder size={14} /> : <FolderOpen size={14} />}
+                    <input
+                      className="thread-rename"
+                      aria-label="Project name"
+                      autoFocus
+                      maxLength={80}
+                      placeholder={folderName(cwd)}
+                      title="Leave empty to use the folder name"
+                      value={renamingProject.name}
+                      onFocus={(event) => event.target.select()}
+                      onChange={(event) =>
+                        setRenamingProject({ path: cwd, name: event.target.value })
+                      }
+                      onBlur={() => void renameProject()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          void renameProject()
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault()
+                          setRenamingProject(null)
+                        }
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    className="project-toggle"
+                    // The second click of a double-click renames instead of toggling again.
+                    onClick={(event) => {
+                      if (event.detail < 2) setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })
+                    }}
+                    onDoubleClick={() => {
+                      // Undo the first click's toggle, then rename.
+                      setCollapsed((current) => ({ ...current, [cwd]: !current[cwd] }))
+                      setRenamingProject({ path: cwd, name: projectName(cwd) })
+                    }}
+                    aria-expanded={!collapsed[cwd]}
+                    title={cwd}
+                  >
+                    {collapsed[cwd] ? <Folder size={14} /> : <FolderOpen size={14} />}
+                    <span>{projectName(cwd)}</span>
+                  </button>
+                )}
                 <button
                   className="icon-button project-add"
-                  aria-label={`New thread in ${folderName(cwd)}`}
-                  title={`New thread in ${folderName(cwd)}`}
+                  aria-label={`New thread in ${projectName(cwd)}`}
+                  title={`New thread in ${projectName(cwd)}`}
                   disabled={busy}
                   onClick={() => void quickCreate(cwd)}
                 >
@@ -1965,6 +2038,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   icon: <SquarePen size={14} />,
                   onSelect: () => openNewThread(path),
                 },
+                {
+                  label: 'Rename',
+                  icon: <Pencil size={14} />,
+                  onSelect: () => setRenamingProject({ path, name: projectName(path) }),
+                },
                 { label: 'Copy path', icon: <Copy size={14} />, onSelect: () => copyPath(path) },
                 'separator',
                 {
@@ -2011,6 +2089,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         <NewThread
           bootstrap={bootstrap}
           projects={projectPaths}
+          projectName={projectName}
           initialProject={newThreadProject}
           onAddProject={() => {
             setNewThreadProject(null)
@@ -2047,6 +2126,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
 function NewThread({
   bootstrap,
   projects,
+  projectName,
   initialProject,
   onAddProject,
   onClose,
@@ -2054,6 +2134,7 @@ function NewThread({
 }: {
   bootstrap: Bootstrap
   projects: string[]
+  projectName: (path: string) => string
   initialProject: string
   onAddProject: () => void
   onClose: () => void
@@ -2087,7 +2168,7 @@ function NewThread({
   }
   const options = (projects.includes(cwd) ? projects : [cwd, ...projects]).map((path) => ({
     value: path,
-    label: folderName(path),
+    label: projectName(path),
     description: path,
   }))
   return (
@@ -2120,7 +2201,7 @@ function NewThread({
           <Picker
             label="Project"
             icon={<Folder size={14} />}
-            text={folderName(cwd)}
+            text={projectName(cwd)}
             value={cwd}
             options={options}
             disabled={busy}

@@ -176,6 +176,8 @@ export async function handleApi(request: Request) {
         }
       }
     }
+    if (parts[0] === 'projects' && parts[1] === 'rename' && !parts[2] && request.method === 'POST')
+      return Response.json(await service.renameProject(await request.json()))
     if (parts[0] === 'projects' && !parts[1]) {
       if (request.method === 'POST')
         return Response.json(await service.addProject(await request.json()), { status: 201 })

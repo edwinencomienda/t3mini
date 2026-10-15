@@ -1365,6 +1365,19 @@ kbd {
   font-size: 13px;
   color: var(--foreground);
 }
+.project-toggle.renaming {
+  background: var(--card);
+  box-shadow: 0 0 0 1px var(--primary);
+  color: var(--foreground);
+}
+.project-toggle.renaming svg {
+  flex-shrink: 0;
+}
+.project-toggle.renaming .thread-rename {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
 
 /* Toasts + notification prompt */
 .overlay-stack {

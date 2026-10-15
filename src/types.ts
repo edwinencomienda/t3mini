@@ -61,8 +61,14 @@ export type ThreadSummary = Pick<
   lastMessageAt: string
 }
 // A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
-export type Project = { path: string; addedAt: string }
-export type ProjectSummary = { path: string; lastActiveAt: string; threadCount: number }
+// name: shown instead of the folder name; renaming never touches the folder on disk.
+export type Project = { path: string; addedAt: string; name?: string }
+export type ProjectSummary = {
+  path: string
+  name?: string
+  lastActiveAt: string
+  threadCount: number
+}
 export type ProviderHealth = { installed: boolean; version?: string }
 export type Bootstrap = {
   threads: ThreadSummary[]

@@ -47,6 +47,7 @@ const createSchema = z.object({
   permissionMode: settingsSchema.shape.permissionMode.optional(),
 })
 const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
+const projectNameSchema = projectSchema.extend({ name: z.string().trim().max(80) })
 const promptSchema = z
   .object({
     text: z.string().trim().max(100_000),
@@ -162,6 +163,7 @@ export class AgentService {
     for (const project of this.projectStore.projects.values())
       projects.set(project.path, {
         path: project.path,
+        ...(project.name ? { name: project.name } : {}),
         lastActiveAt: project.addedAt,
         threadCount: 0,
       })
@@ -191,6 +193,29 @@ export class AgentService {
       this.notify()
     }
     return this.projects().find((project) => project.path === path)!
+  }
+  // Changes the name shown for a project; an empty name goes back to the folder name. Only the
+  // label changes: the folder, its path, and its threads stay as they are.
+  async renameProject(input: unknown) {
+    const { path, name } = projectNameSchema.parse(input)
+    const saved = this.projectStore.projects.get(path)
+    if (!saved && ![...this.store.threads.values()].some((thread) => thread.cwd === path))
+      throw new HttpError(404, 'Project not found.')
+    // A folder known only through its threads gets saved as a project to hold the name.
+    const project = saved ?? { path, addedAt: new Date().toISOString() }
+    const previous = { ...project }
+    if (name) project.name = name
+    else delete project.name
+    this.projectStore.projects.set(path, project)
+    try {
+      await this.projectStore.save()
+    } catch {
+      if (saved) this.projectStore.projects.set(path, previous)
+      else this.projectStore.projects.delete(path)
+      throw new HttpError(500, 'Could not rename the project.')
+    }
+    this.notify()
+    return this.projects().find((item) => item.path === path)!
   }
   async removeProject(input: unknown) {
     const { path } = projectSchema.parse(input)

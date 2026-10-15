@@ -61,7 +61,11 @@ export class ProjectStore {
       const saved: Project[] = JSON.parse(await readFile(this.path, 'utf8'))
       for (const project of saved)
         if (typeof project?.path === 'string' && typeof project.addedAt === 'string')
-          this.projects.set(project.path, project)
+          this.projects.set(project.path, {
+            path: project.path,
+            addedAt: project.addedAt,
+            ...(typeof project.name === 'string' && project.name ? { name: project.name } : {}),
+          })
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
     }
