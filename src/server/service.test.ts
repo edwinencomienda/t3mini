@@ -188,6 +188,18 @@ it('renames a thread, trims the title, and rejects empty names', async () => {
   await service.send(created.id, { text: 'This should not replace a custom title' })
   expect(service.get(created.id).title).toBe('Release prep')
 })
+it('lets the agent rename only its own thread through the rename tool', async () => {
+  const created = await thread()
+  const other = await thread()
+  await service.send(created.id, { text: 'Name this thread' })
+  await started
+  expect(await context.tools.rename('Login bug')).toBe('Login bug')
+  expect(service.get(created.id).title).toBe('Login bug')
+  expect(service.get(other.id).title).toBe('New thread')
+  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
+  expect(saved.find((item: { id: string }) => item.id === created.id).title).toBe('Login bug')
+  await settle(created.id, () => finish())
+})
 it('saves projects, lists them by recent activity, and only removes empty ones', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'other-project'))

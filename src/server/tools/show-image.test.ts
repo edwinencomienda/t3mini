@@ -28,6 +28,7 @@ beforeEach(async () => {
     attach,
     saveImage: (bytes) => uploads.saveImage(bytes),
     processes: {} as never,
+    rename: vi.fn(),
   }
 })
 afterEach(() => rm(root, { recursive: true, force: true }))

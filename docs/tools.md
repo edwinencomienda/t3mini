@@ -11,13 +11,15 @@ src/server/tools/
   types.ts       defineTool(), ToolContext, ToolError
   paths.ts       resolveAllowedFile(): the shared "inside the project or temp" check
   show-image.ts  the show_image tool
+  rename-thread.ts  the rename_thread tool
+  processes.ts   the process tools (start_process…)
   index.ts       the registry: every tool, plus Claude naming helpers
 src/blocks.ts    Block types: rich content tools add to replies (shared with the client)
 src/components/blocks.tsx   one renderer per block type
 ```
 
 1. **A tool** is a definition: `name`, `label` (work log), `description` (what the agent reads), `input` (a zod raw shape: validation and the agent-facing schema in one), `safety`, optional `summarize()` (work log summary), and `run(context, input)`.
-2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), and `saveImage(bytes)` (store an image with the uploads, checked by its bytes). It's built per turn in `service.ts` (`execute()` → `tools`).
+2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
 3. **The Claude adapter** (`providers/claude.ts`) turns the registry into an in-process MCP server with the SDK's `createSdkMcpServer()` + `tool()`, named `t3mini`. Claude sees `mcp__t3mini__<name>`. `safe` tools go in `allowedTools` and are allowed in `canUseTool`, so they never prompt. A thrown `ToolError` goes back to Claude as a readable error (`isError: true`); other errors become "<Label> failed."
 4. **Blocks**: `attach()` appends a `Block` to the latest assistant message of the turn, or creates an assistant message holding only the block if the agent hasn't written anything since the user's message. Blocks are saved with the thread (`Message.blocks`) and rendered by `components/blocks.tsx` under the message text.
 5. **The Codex adapter** (`providers/codex.ts`) declares every tool as a `dynamicTools` entry (`type: 'function'`, `inputSchema` from `toolJsonSchema()`) on `thread/start`, and answers the app-server's `item/tool/call` requests with `{ success, contentItems: [{ type: 'inputText', text }] }`. Codex saves dynamic tools with the thread (session `dynamic_tools`), so resumed turns keep them; `thread/resume` can't add them, so **Codex threads created before a tool existed don't have it**. `approval` tools go through Allow once / Decline before running. The feature is experimental in the app-server; t3 mini already initializes with `capabilities.experimentalApi: true`.
@@ -50,6 +52,13 @@ src/components/blocks.tsx   one renderer per block type
 - **Lifetime:** in memory only. On t3 mini shutdown (exit, SIGINT, SIGTERM, SIGHUP) every running group is signaled, so dev servers don't outlive it holding ports. Max 10 running per project.
 - **Safety:** `start_process` and `restart_process` are `approval` (Allow once / Decline unless the thread has full access); list, logs, and stop are `safe`.
 - **UI:** the live snapshot includes `processes`; the composer's meta row shows "● N running" for the open project (`components/Processes.tsx`), with Logs (polled every second while open), Restart, Stop, and Remove. API: `GET /api/processes/:id/logs`, `POST /api/processes/:id/stop|restart`, `DELETE /api/processes/:id`.
+
+## rename_thread
+
+- Input: `{ title }`, trimmed, 1–120 characters. There is no thread id: the tool can only rename the thread the agent is running in (`context.rename`, which calls `AgentService.rename` for that thread, saves, and pushes a live update so the sidebar changes right away).
+- Safety: `safe` (it only changes a label). The description tells the agent to use it only when the user asks to rename the thread.
+- Typical use: "rename this thread to Login bug" or "give this session a better name".
+- Codex declares tools when a thread starts, so Codex threads created before this tool existed don't have it; Claude threads get it on their next turn.
 
 ## Agents' own images
 

@@ -28,7 +28,13 @@ function context(prompt: string): ProviderContext {
     thread,
     prompt,
     images: [],
-    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn(), processes: {} as never },
+    tools: {
+      cwd: process.cwd(),
+      attach: vi.fn(),
+      saveImage: vi.fn(),
+      processes: {} as never,
+      rename: vi.fn(),
+    },
     signal: new AbortController().signal,
     session: vi.fn((id) => {
       thread.sessionId = id
@@ -157,6 +163,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
   )
   expect(started.thread.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual([
     'show_image',
+    'rename_thread',
     'start_process',
     'list_processes',
     'process_logs',
@@ -199,6 +206,7 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
       attach: vi.fn(),
       saveImage: vi.fn(async () => ({ id: 'saved.png' })),
       processes: {} as never,
+      rename: vi.fn(),
     }
     await runCodex(ctx)
     const result = JSON.parse(
@@ -243,6 +251,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'gen.png' })),
     processes: {} as never,
+    rename: vi.fn(),
   }
   await runCodex(ctx)
   expect(vi.mocked(ctx.tools.saveImage).mock.calls[0]![0].subarray(1, 4).toString()).toBe('PNG')
@@ -257,6 +266,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'x.png' })),
     processes: {} as never,
+    rename: vi.fn(),
   }
   await runCodex(outside)
   expect(outside.tools.saveImage).not.toHaveBeenCalled()

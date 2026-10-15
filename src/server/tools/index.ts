@@ -1,10 +1,11 @@
 import { z } from 'zod'
 import { showImage } from './show-image'
 import { processTools } from './processes'
+import { renameThread } from './rename-thread'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
 
 // Every tool agents can use. Add new tools here (one file each in this folder).
-export const tools: ToolDefinition<any>[] = [showImage, ...processTools]
+export const tools: ToolDefinition<any>[] = [showImage, renameThread, ...processTools]
 
 // Tools reach Claude through an in-process MCP server named "t3mini", so Claude sees them as
 // mcp__t3mini__<name>.

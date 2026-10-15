@@ -25,6 +25,8 @@ export type ToolContext = {
   saveImage: (bytes: Buffer) => Promise<{ id: string }>
   // Long-running processes (dev servers…) in this thread's project.
   processes: ProjectProcesses
+  // Renames this thread (never another one) and returns the saved title.
+  rename: (title: string) => Promise<string>
 }
 
 export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
