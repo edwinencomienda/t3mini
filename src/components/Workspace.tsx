@@ -426,7 +426,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   // Add project can return to the new-thread dialog with the added folder selected.
-  const [addProject, setAddProject] = useState<null | 'sidebar' | 'new-thread'>(null)
+  const [addProject, setAddProject] = useState(false)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   const [toasts, setToasts] = useState<ThreadEvent[]>([])
@@ -1077,7 +1077,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   function openNewThread(path?: string) {
     if (!bootstrap) return
     const initial = path ?? thread?.cwd ?? projects[0]?.path
-    if (!initial) return setAddProject('new-thread')
+    if (!initial) return setAddProject(true)
     setNewThreadProject(initial)
   }
   const openNewThreadRef = useRef(openNewThread)
@@ -1232,7 +1232,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             </button>
             <button
               className="icon-button"
-              onClick={() => setAddProject('sidebar')}
+              onClick={() => setAddProject(true)}
               disabled={!bootstrap}
               aria-label="Add project"
               title="Add project"
@@ -1602,7 +1602,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           <button
                             className="secondary"
                             disabled={!bootstrap}
-                            onClick={() => setAddProject('sidebar')}
+                            onClick={() => setAddProject(true)}
                           >
                             <FolderPlus size={15} />
                             Add project
@@ -1988,7 +1988,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           initialProject={newThreadProject}
           onAddProject={() => {
             setNewThreadProject(null)
-            setAddProject('new-thread')
+            setAddProject(true)
           }}
           onClose={() => setNewThreadProject(null)}
           onCreated={(created) => {
@@ -2002,16 +2002,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
         <AddProject
           canBrowse={!bootstrap.remote}
           initialPath={loadPreferences().cwd || bootstrap.defaultCwd}
-          onClose={() => setAddProject(null)}
+          onClose={() => setAddProject(false)}
           onAdded={(project) => {
             setProjects((current) => [
               project,
               ...current.filter((item) => item.path !== project.path),
             ])
             setCollapsed((current) => ({ ...current, [project.path]: false }))
-            // From the new-thread dialog, go back to it with the new project selected.
-            if (addProject === 'new-thread') setNewThreadProject(project.path)
-            setAddProject(null)
+            setAddProject(false)
+            // Start working in it right away: a new thread with your last agent and settings.
+            void quickCreate(project.path)
           }}
         />
       ) : null}
