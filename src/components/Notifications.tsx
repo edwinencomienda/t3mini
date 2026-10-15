@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { themeLabels, themes, type Theme } from '../theme'
 import type { Bootstrap } from '../types'
-import { playChime } from '../sound'
+import { playSound, sounds } from '../sound'
 import {
   desktopPermission,
   eventText,
@@ -285,17 +285,41 @@ export function SettingsDialog({
           <div className="setting-row">
             <div>
               <strong>Sound</strong>
-              <small>Play a short chime when a thread finishes.</small>
+              <small>Play a sound when a thread finishes.</small>
             </div>
             <Toggle
               label="Sound"
               checked={preferences.sound}
               onChange={(sound) => {
-                if (sound) playChime()
+                if (sound) playSound(preferences.soundName)
                 onChange({ ...preferences, sound })
               }}
             />
           </div>
+          {preferences.sound ? (
+            <div className="setting-row sound-choice">
+              <div>
+                <strong>Sound style</strong>
+                <small>Click one to hear it.</small>
+              </div>
+              <div className="segmented" role="radiogroup" aria-label="Sound style">
+                {sounds.map((sound) => (
+                  <button
+                    key={sound.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={preferences.soundName === sound.value}
+                    onClick={() => {
+                      playSound(sound.value)
+                      onChange({ ...preferences, soundName: sound.value })
+                    }}
+                  >
+                    {sound.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
     </dialog>

@@ -44,7 +44,7 @@ import {
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
-import { playChime, unlockSound } from '../sound'
+import { playSound, unlockSound } from '../sound'
 import { loadTheme, nextTheme, saveTheme, themeLabels, type Theme } from '../theme'
 import remarkGfm from 'remark-gfm'
 import {
@@ -210,6 +210,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     desktop: false,
     inApp: true,
     sound: true,
+    soundName: 'chime',
     prompted: true,
   })
   const notifyRef = useRef(notify)
@@ -324,7 +325,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const focused = document.visibilityState === 'visible' && document.hasFocus()
     const preferences = notifyRef.current
     const finished = events.filter((event) => event.kind === 'completed' || event.kind === 'failed')
-    if (preferences.sound && events.some((event) => event.kind === 'completed')) playChime()
+    if (preferences.sound && events.some((event) => event.kind === 'completed'))
+      playSound(preferences.soundName)
     const unseen = finished.filter((event) => !(focused && event.thread.id === selectedId.current))
     if (unseen.length)
       setUnread((current) => {

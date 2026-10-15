@@ -1,4 +1,5 @@
 import { isActive, type Status, type ThreadSummary } from './types'
+import { isSoundName, type SoundName } from './sound'
 
 export type ThreadEvent = {
   key: string
@@ -11,6 +12,7 @@ export type NotificationPreferences = {
   inApp: boolean
   // Chime when a thread finishes.
   sound: boolean
+  soundName: SoundName
   // Set once the first-visit prompt was answered, so it never nags again.
   prompted: boolean
 }
@@ -20,6 +22,7 @@ const defaults: NotificationPreferences = {
   desktop: false,
   inApp: true,
   sound: true,
+  soundName: 'chime',
   prompted: false,
 }
 
@@ -62,6 +65,7 @@ export function loadNotificationPreferences(): NotificationPreferences {
       desktop: saved.desktop === true,
       inApp: saved.inApp !== false,
       sound: saved.sound !== false,
+      soundName: isSoundName(saved.soundName) ? saved.soundName : 'chime',
       prompted: saved.prompted === true,
     }
   } catch {
