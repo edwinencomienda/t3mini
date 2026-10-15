@@ -16,8 +16,20 @@ const maxLength = 32
 // Deepgram allows 500 tokens across all keyterms; stay far below it.
 const maxTotalLength = 600
 
+// Words dictation already gets right that the word list leaves out: it has no proper nouns
+// (months, weekdays) and misses some everyday modern words.
+const everyday = [
+  ...'january february march april may june july august september october november december'.split(
+    ' ',
+  ),
+  ...'jan feb mar apr jun jul aug sep sept oct nov dec'.split(' '),
+  ...'monday tuesday wednesday thursday friday saturday sunday'.split(' '),
+  ...'mon tue tues wed thu thur thurs fri sat sun'.split(' '),
+  ...'admin admins app apps signup signups wifi todo todos okay'.split(' '),
+]
+
 // Common English words (SCOWL sizes 10–60, with American and British spellings, inflections
-// included). Loaded once, lazily.
+// included, plus the everyday words above). Loaded once, lazily.
 let common: Promise<Set<string>> | undefined
 export function commonWords() {
   return (common ??= (async () => {
@@ -32,7 +44,7 @@ export function commonWords() {
         ),
       ),
     )
-    return new Set(lists.flat().map((word) => word.toLowerCase()))
+    return new Set([...lists.flat(), ...everyday].map((word) => word.toLowerCase()))
   })())
 }
 
@@ -40,7 +52,11 @@ export function commonWords() {
 const keyPrefix =
   /^(sk|pk|rk|ghp|gho|ghu|ghs|ghr|github|xox[abprs]?|akia|asia|aiza|eyj|whsec|glpat)/i
 // Short acronyms that are just ordinary words in caps.
-const plainCaps = new Set(['OK', 'ID', 'AM', 'PM', 'US', 'UK', 'TV', 'FAQ', 'ETA', 'TODO', 'NOTE'])
+const plainCaps = new Set(
+  'OK ID AM PM US UK TV FAQ ETA TODO NOTE UTC GMT EST EDT CST CDT MST MDT PST PDT CET BST'.split(
+    ' ',
+  ),
+)
 
 // A token that could be a secret or random data, rather than a word someone would say.
 function looksSecret(token: string) {

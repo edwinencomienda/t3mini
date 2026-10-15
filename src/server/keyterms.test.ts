@@ -26,6 +26,20 @@ it('picks names, identifiers, acronyms, and jargon, not ordinary words', () => {
     expect(terms).not.toContain(ordinary)
 })
 
+it('skips dates, time zones, and everyday words that dictation already gets right', () => {
+  const terms = extractKeyterms(
+    [
+      'Merged on 15 Oct at 09:00 UTC by the admin. Next sync is Monday, October 20, in the app.',
+      'The admin panel uses LDAP; ask Ivan to check the LDAP settings in the app.',
+    ],
+    words,
+  )
+  for (const plain of ['Oct', 'October', 'UTC', 'Monday', 'admin', 'app'])
+    expect(terms).not.toContain(plain)
+  expect(terms).toContain('LDAP')
+  expect(terms).toContain('Ivan')
+})
+
 it('never sends anything that looks like a key, token, or random data', () => {
   // Fake secrets in every shape; none of them may come out, in any piece.
   const secrets = [
