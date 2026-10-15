@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest'
-import { threadEvents } from './notifications'
+import { describe, expect, it } from 'vitest'
+import { notifyingTab, tabStaleMs, threadEvents } from './notifications'
 import type { Status, ThreadSummary } from './types'
 
 const summary = (id: string, status: Status): ThreadSummary => ({
@@ -49,4 +49,37 @@ it('ignores unchanged, newly seen, and non-turn transitions', () => {
       ],
     ),
   ).toEqual([])
+})
+
+describe('notifyingTab', () => {
+  const now = 1_000_000
+  it('picks the most recently visited open tab', () => {
+    expect(
+      notifyingTab(
+        {
+          a: { visitedAt: now - 5_000, aliveAt: now },
+          b: { visitedAt: now - 1_000, aliveAt: now },
+          c: { visitedAt: 0, aliveAt: now },
+        },
+        now,
+      ),
+    ).toBe('b')
+  })
+  it('skips tabs that stopped checking in', () => {
+    expect(
+      notifyingTab(
+        {
+          a: { visitedAt: now - 5_000, aliveAt: now },
+          b: { visitedAt: now - 1_000, aliveAt: now - tabStaleMs },
+        },
+        now,
+      ),
+    ).toBe('a')
+  })
+  it('falls back to a tab that was opened but never visited', () => {
+    expect(notifyingTab({ a: { visitedAt: 0, aliveAt: now } }, now)).toBe('a')
+  })
+  it('has no answer without tabs, so each tab decides alone', () => {
+    expect(notifyingTab({}, now)).toBeUndefined()
+  })
 })

@@ -112,3 +112,74 @@ export function saveUnread(ids: Set<string>) {
     // Without storage the indicator still works until reload.
   }
 }
+
+// Open t3 mini tabs in this browser, so only one of them notifies: the one you used last.
+// If you're on a t3 mini tab, that tab is the last one used and it's focused, so nothing pops
+// up; when you're elsewhere, that one tab sends the notification (and plays the sound).
+// Kept in localStorage (shared by every tab) rather than a BroadcastChannel round trip, so the
+// check is synchronous when an event arrives.
+type TabRecord = { visitedAt: number; aliveAt: number }
+const tabsKey = 't3-mini:tabs'
+// A tab that stopped checking in (crashed, killed) no longer counts. Background tabs' timers
+// can be throttled to once a minute, so allow a few missed check-ins.
+export const tabStaleMs = 3 * 60_000
+export const tabHeartbeatMs = 30_000
+// Not crypto.randomUUID: phones reach t3 mini over plain HTTP, where it isn't available.
+const tabId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+
+// The tab that should notify: the most recently visited one that is still open.
+export function notifyingTab(tabs: Record<string, TabRecord>, now: number): string | undefined {
+  let best: string | undefined
+  let bestAt = -1
+  for (const [id, tab] of Object.entries(tabs))
+    if (now - tab.aliveAt < tabStaleMs && tab.visitedAt > bestAt) {
+      best = id
+      bestAt = tab.visitedAt
+    }
+  return best
+}
+function loadTabs(): Record<string, TabRecord> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(tabsKey) || '{}')
+    const tabs: Record<string, TabRecord> = {}
+    if (saved && typeof saved === 'object')
+      for (const [id, tab] of Object.entries(saved as Record<string, Partial<TabRecord>>))
+        if (typeof tab?.visitedAt === 'number' && typeof tab.aliveAt === 'number')
+          tabs[id] = { visitedAt: tab.visitedAt, aliveAt: tab.aliveAt }
+    return tabs
+  } catch {
+    return {}
+  }
+}
+function updateTabs(change: (tabs: Record<string, TabRecord>, now: number) => void) {
+  const now = Date.now()
+  const tabs = loadTabs()
+  change(tabs, now)
+  // Drop tabs that went away without saying so.
+  for (const [id, tab] of Object.entries(tabs)) if (now - tab.aliveAt >= tabStaleMs) delete tabs[id]
+  try {
+    localStorage.setItem(tabsKey, JSON.stringify(tabs))
+  } catch {
+    // Without storage every tab notifies on its own, as before.
+  }
+}
+// This tab is being used (focused or shown).
+export const markTabVisited = () =>
+  updateTabs((tabs, now) => {
+    tabs[tabId] = { visitedAt: now, aliveAt: now }
+  })
+// This tab is still open (also registers a tab opened in the background).
+export const markTabAlive = () =>
+  updateTabs((tabs, now) => {
+    tabs[tabId] = { visitedAt: tabs[tabId]?.visitedAt ?? 0, aliveAt: now }
+  })
+// This tab is closing.
+export const forgetTab = () =>
+  updateTabs((tabs) => {
+    delete tabs[tabId]
+  })
+// Whether this tab is the one that notifies. With no record at all (storage blocked), yes.
+export function isNotifyingTab() {
+  const tab = notifyingTab(loadTabs(), Date.now())
+  return tab === undefined || tab === tabId
+}

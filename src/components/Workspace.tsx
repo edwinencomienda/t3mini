@@ -52,7 +52,12 @@ import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
 import {
   desktopPermission,
   eventText,
+  forgetTab,
+  isNotifyingTab,
   loadNotificationPreferences,
+  markTabAlive,
+  markTabVisited,
+  tabHeartbeatMs,
   loadUnread,
   saveUnread,
   requestDesktopPermission,
@@ -645,20 +650,33 @@ export function Workspace({ threadId }: { threadId?: string }) {
     })
   }
   useEffect(() => {
-    // Coming back to the window counts as seeing the thread that's open.
+    // Coming back to the window counts as seeing the thread that's open, and makes this the
+    // tab that notifies.
     const onFocus = () => {
-      if (selectedId.current && document.visibilityState === 'visible') markRead(selectedId.current)
+      if (document.visibilityState !== 'visible') return
+      markTabVisited()
+      if (selectedId.current) markRead(selectedId.current)
     }
+    if (document.visibilityState === 'visible' && document.hasFocus()) markTabVisited()
+    else markTabAlive()
+    const heartbeat = setInterval(markTabAlive, tabHeartbeatMs)
+    // pageshow: coming back from the back/forward cache, after pagehide forgot this tab.
+    const onShow = () => (document.hasFocus() ? markTabVisited() : markTabAlive())
     // Audio needs a prior user gesture; arm it on the first interaction.
     window.addEventListener('pointerdown', unlockSound, { once: true })
     window.addEventListener('keydown', unlockSound, { once: true })
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onFocus)
+    window.addEventListener('pagehide', forgetTab)
+    window.addEventListener('pageshow', onShow)
     return () => {
+      clearInterval(heartbeat)
       window.removeEventListener('pointerdown', unlockSound)
       window.removeEventListener('keydown', unlockSound)
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onFocus)
+      window.removeEventListener('pagehide', forgetTab)
+      window.removeEventListener('pageshow', onShow)
     }
   }, [])
   function announce(events: ThreadEvent[]) {
@@ -669,8 +687,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const focused =
       visible && (document.hasFocus() || window.matchMedia('(pointer: coarse)').matches)
     const preferences = notifyRef.current
+    // With several tabs open, only the one you used last chimes and sends desktop notifications.
+    const notifier = isNotifyingTab()
     const finished = events.filter((event) => event.kind === 'completed' || event.kind === 'failed')
-    if (preferences.sound && events.some((event) => event.kind === 'completed'))
+    if (notifier && preferences.sound && events.some((event) => event.kind === 'completed'))
       playSound(preferences.soundName)
     const unseen = finished.filter((event) => !(focused && event.thread.id === selectedId.current))
     if (unseen.length)
@@ -688,7 +708,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ...current.filter((item) => item.thread.id !== event.thread.id),
           event,
         ])
-      if (preferences.desktop && !focused && desktopPermission() === 'granted') {
+      if (notifier && preferences.desktop && !focused && desktopPermission() === 'granted') {
         try {
           const notification = new Notification(
             `${names[event.thread.provider]} · ${eventText[event.kind]}`,
