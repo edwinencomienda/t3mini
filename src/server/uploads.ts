@@ -64,14 +64,7 @@ export class Uploads {
     const bytes = Buffer.from(data, 'base64')
     if (!bytes.length) throw new UploadError('The file is empty.')
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    if (kind === 'image') {
-      if (bytes.length > maxImageBytes) throw new UploadError('Images can be up to 10 MB.')
-      const type = sniffImage(bytes)
-      if (!type) throw new UploadError('Only PNG, JPEG, GIF, and WebP images can be attached.')
-      const id = `${crypto.randomUUID()}.${imageTypes[type]}`
-      await writeFile(join(this.directory, id), bytes, { mode: 0o600, flag: 'wx' })
-      return { kind, id, name, mimeType: type, size: bytes.length }
-    }
+    if (kind === 'image') return { kind, name, ...(await this.saveImage(bytes)) }
     if (bytes.length > maxFileBytes) throw new UploadError('Files can be up to 25 MB.')
     // A UUID folder keeps the original file name readable for the agent without collisions.
     const folder = join(this.directory, 'files', crypto.randomUUID())
@@ -79,6 +72,18 @@ export class Uploads {
     const path = join(folder, safeName(name))
     await writeFile(path, bytes, { mode: 0o600, flag: 'wx' })
     return { kind, path, name, size: bytes.length }
+  }
+  // Stores image bytes under a generated id after checking the real format from the bytes.
+  // Used by uploads and by tools that show images (e.g. show_image).
+  async saveImage(bytes: Buffer) {
+    if (!bytes.length) throw new UploadError('The image is empty.')
+    if (bytes.length > maxImageBytes) throw new UploadError('Images can be up to 10 MB.')
+    const type = sniffImage(bytes)
+    if (!type) throw new UploadError('Only PNG, JPEG, GIF, and WebP images can be shown.')
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    const id = `${crypto.randomUUID()}.${imageTypes[type]}`
+    await writeFile(join(this.directory, id), bytes, { mode: 0o600, flag: 'wx' })
+    return { id, mimeType: type, size: bytes.length }
   }
   // Resolves attachments sent with a message to saved images; unknown ids are rejected.
   async resolve(attachments: z.infer<typeof attachmentSchema>[]): Promise<Attachment[]> {

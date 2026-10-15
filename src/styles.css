@@ -2484,3 +2484,105 @@ body.resizing {
     padding-right: 2rem;
   }
 }
+
+/* Content tools add to agent replies (show_image…) */
+.blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.markdown + .blocks {
+  margin-top: 0.75rem;
+}
+.message.assistant > .blocks:first-child {
+  margin-top: 0;
+}
+.block-image {
+  margin: 0;
+  max-width: 100%;
+}
+.block-image a {
+  display: inline-block;
+  max-width: 100%;
+  border-radius: 0.6rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--muted);
+}
+.block-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 28rem;
+  object-fit: contain;
+}
+.block-image figcaption {
+  margin-top: 0.35rem;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+
+/* Image preview dialog: the image fits the screen on a dimmed backdrop. */
+.image-preview {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #fff;
+}
+.image-preview::backdrop {
+  background: rgb(0 0 0 / 82%);
+}
+.image-preview[open] {
+  display: flex;
+  flex-direction: column;
+}
+.image-preview-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+.image-preview-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 50%);
+}
+.image-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem calc(0.8rem + env(safe-area-inset-bottom, 0px));
+  font-size: 13px;
+}
+.image-preview-bar span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgb(255 255 255 / 80%);
+}
+.image-preview-bar a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: rgb(255 255 255 / 85%);
+}
+.image-preview-bar a:hover {
+  color: #fff;
+}
+.image-preview-bar .icon-button {
+  color: rgb(255 255 255 / 85%);
+}
+.image-preview-bar .icon-button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 12%);
+  color: #fff;
+}

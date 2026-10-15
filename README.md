@@ -41,6 +41,7 @@ Claude runs through the Claude Agent SDK, which includes its own Claude Code run
 
 - Saved threads, independent provider sessions, and project folders. Each thread has a `/threads/<thread-id>` URL, so refresh, direct links, and browser Back/Forward preserve selection.
 - Provider-supplied model pickers, model-specific effort levels, and saved permission modes.
+- Agents can show images in the chat (Claude, and Codex threads created from now on): ask “take a screenshot and show me” or “show me the chart you made”. They use t3 mini's `show_image` tool, which only accepts real image files inside the project or temp folder. See [docs/tools.md](docs/tools.md).
 - Streamed Markdown replies and a work log for the latest turn. Each step reads like `Run git status`, `Read src/app.ts`, or `Edit src/styles.css`; click a step to see the full command or edit and its output (long output is trimmed).
 - Real provider status: starting, working, waiting for approval, completed, stopped, or failed.
 - Explicit **Allow once / Decline** actions when a provider requests tool approval, plus **Stop** for an active turn.

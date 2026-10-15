@@ -1,5 +1,7 @@
 // Turns provider tool calls into readable work-log steps: a short label ("Run", "Read"), a
 // one-line summary (the command or path), the full input for the expanded view, and output.
+import { findClaudeTool, findTool } from '../tools'
+
 export type ToolStep = { label: string; summary?: string; detail?: string }
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -99,6 +101,18 @@ export function describeClaudeTool(name: string, rawInput: unknown, cwd: string)
       }
     }
   }
+  // t3 mini's own tools read like built-ins: "Show image · screen.png".
+  const own = findClaudeTool(name)
+  if (own) {
+    // The input may still be empty: the step is shown as soon as Claude starts the call.
+    let summary: string | undefined
+    try {
+      summary = own.summarize?.(input as never)
+    } catch {
+      summary = undefined
+    }
+    return { label: own.label, summary, detail: json(rawInput) }
+  }
   // MCP tools are named mcp__<server>__<tool>.
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name)
   if (mcp) return { label: mcp[2]!, summary: mcp[1], detail: json(rawInput) }
@@ -194,6 +208,27 @@ export function describeCodexItem(
         summary: string(item.server),
         detail: json(item.arguments),
         output: item.result ? json(item.result) : undefined,
+      }
+    case 'dynamicToolCall': {
+      // t3 mini's own tools read like built-ins: "Show image · envelope.png".
+      const own = findTool(string(item.tool))
+      let summary: string | undefined
+      try {
+        summary = own?.summarize?.(object(item.arguments) as never)
+      } catch {
+        summary = undefined
+      }
+      return {
+        label: own?.label ?? (string(item.tool) || 'Use tool'),
+        summary,
+        detail: json(item.arguments),
+      }
+    }
+    case 'imageGeneration':
+      return {
+        label: 'Generate image',
+        summary: string(item.revisedPrompt) ? firstLine(string(item.revisedPrompt)) : undefined,
+        detail: string(item.revisedPrompt) || undefined,
       }
     case 'reasoning':
       return { label: 'Thinking' }

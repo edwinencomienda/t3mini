@@ -1,8 +1,12 @@
+import { readFile, realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join, sep } from 'node:path'
 import type { Runner } from './types'
 import { openCodexClient } from './codex-client'
 import { codexPolicy, threadSettings } from '../provider-settings'
 import { readCodexModels } from '../models'
 import { describeCodexItem } from './activity'
+import { findTool, runTool, toolJsonSchema, tools } from '../tools'
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -42,6 +46,9 @@ export const runCodex: Runner = async (ctx) => {
               client.send({ id, result: { decision: allow ? 'accept' : 'decline' } }),
             )
             .catch(() => client.send({ id, result: { decision: 'decline' } }))
+        } else if (packet.method === 'item/tool/call') {
+          // One of t3 mini's tools (show_image…), declared as dynamicTools at thread/start.
+          void callTool(id, params)
         } else {
           client.send({
             id,
@@ -63,8 +70,19 @@ export const runCodex: Runner = async (ctx) => {
           typeof item.text === 'string'
         )
           ctx.text(id, item.text, true)
+        // Codex's built-in image generator: show the picture in the reply.
+        if (type === 'imageGeneration' && packet.method === 'item/completed')
+          savingImages.push(showGeneratedImage(item))
         if (
-          ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch', 'reasoning'].includes(type)
+          [
+            'commandExecution',
+            'fileChange',
+            'mcpToolCall',
+            'dynamicToolCall',
+            'imageGeneration',
+            'webSearch',
+            'reasoning',
+          ].includes(type)
         ) {
           ctx.activity({
             id,
@@ -92,6 +110,56 @@ export const runCodex: Runner = async (ctx) => {
       }
     },
   })
+  // Answers Codex's item/tool/call with the same runner the Claude adapter uses. Tools marked
+  // 'approval' go through Allow once / Decline first.
+  async function callTool(id: string | number, params: Record<string, unknown>) {
+    const reply = (success: boolean, text: string) =>
+      client.send({ id, result: { success, contentItems: [{ type: 'inputText', text }] } })
+    const definition = findTool(string(params.tool))
+    if (!definition) return reply(false, `Unknown tool: ${string(params.tool) || '(none)'}.`)
+    if (definition.safety === 'approval') {
+      const allowed = await ctx
+        .approve({
+          id: String(id),
+          title: `Allow ${definition.label}?`,
+          detail: JSON.stringify(params.arguments ?? {}, null, 2),
+        })
+        .catch(() => false)
+      if (!allowed) return reply(false, 'The user declined this tool request.')
+    }
+    const result = await runTool(definition, ctx.tools, params.arguments)
+    reply(result.ok, result.text)
+  }
+  // Images Codex generates itself arrive as an imageGeneration item with the image data
+  // (base64) and/or the file Codex saved under ~/.codex/generated_images. Only that folder is
+  // read, and the bytes go through the same checks as uploads.
+  async function showGeneratedImage(item: Record<string, unknown>) {
+    if (item.status === 'failed' || item.failure) return
+    const fromData = async () => {
+      const data = string(item.result).replace(/^data:image\/[a-z+.-]+;base64,/i, '')
+      return data ? Buffer.from(data, 'base64') : undefined
+    }
+    const fromFile = async () => {
+      if (!string(item.savedPath)) return undefined
+      const root = await realpath(join(homedir(), '.codex', 'generated_images'))
+      const file = await realpath(string(item.savedPath))
+      return file.startsWith(root + sep) ? readFile(file) : undefined
+    }
+    for (const source of [fromData, fromFile]) {
+      try {
+        const bytes = await source()
+        if (!bytes?.length) continue
+        const { id } = await ctx.tools.saveImage(bytes)
+        const caption = string(item.revisedPrompt).slice(0, 300)
+        ctx.tools.attach({ type: 'image', id, ...(caption ? { caption } : {}) })
+        return
+      } catch {
+        // Not a usable image from this source (or too large); try the next one.
+      }
+    }
+  }
+  // Generated images still being saved; the turn waits for them before it ends.
+  const savingImages: Promise<void>[] = []
   const abort = () => {
     if (turnId && ctx.thread.sessionId)
       client.send({
@@ -124,7 +192,18 @@ export const runCodex: Runner = async (ctx) => {
     }
     const result = object(
       await client.request(ctx.thread.sessionId ? 'thread/resume' : 'thread/start', {
-        ...(ctx.thread.sessionId ? { threadId: ctx.thread.sessionId } : {}),
+        ...(ctx.thread.sessionId
+          ? { threadId: ctx.thread.sessionId }
+          : // Codex saves these with the thread (session dynamic_tools), so resumed turns
+            // keep them; they can only be declared when the thread starts.
+            {
+              dynamicTools: tools.map((definition) => ({
+                type: 'function',
+                name: definition.name,
+                description: definition.description,
+                inputSchema: toolJsonSchema(definition),
+              })),
+            }),
         cwd: ctx.thread.cwd,
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: policy.approvalsReviewer,
@@ -172,6 +251,7 @@ export const runCodex: Runner = async (ctx) => {
       }
     })
     await done
+    await Promise.all(savingImages)
   } finally {
     ctx.signal.removeEventListener('abort', abort)
     client.close()

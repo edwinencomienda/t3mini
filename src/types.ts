@@ -1,4 +1,5 @@
 import type { PermissionMode } from './agent-settings'
+import type { Block } from './blocks'
 
 export type Provider = 'codex' | 'claude'
 export type Status =
@@ -11,6 +12,8 @@ export type Message = {
   text: string
   createdAt: string
   attachments?: Attachment[]
+  // Content added by tools during the reply (images now; charts and more later).
+  blocks?: Block[]
   // Sent while the agent was working and waiting to go out as the next turn.
   queued?: boolean
   // Queued, but the turn was stopped before it could be sent.

@@ -1,5 +1,11 @@
 import { readFile } from 'node:fs/promises'
-import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import {
+  createSdkMcpServer,
+  query,
+  tool,
+  type SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk'
+import { claudeToolName, mcpServerName, runTool, tools } from '../tools'
 import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { claudeSettings, threadSettings } from '../provider-settings'
@@ -75,6 +81,38 @@ export const runClaude: Runner = async (ctx) => {
   let streamed = false
   let assistantId = String(crypto.randomUUID())
   const toolIds = new Set<string>()
+  // t3 mini's own tools (show_image…) run in this process as an MCP server for this turn.
+  const t3Tools = createSdkMcpServer({
+    name: mcpServerName,
+    version: '1.0.0',
+    tools: tools.map((definition) =>
+      tool(
+        definition.name,
+        definition.description,
+        definition.input,
+        async (input) => {
+          // Refusals (bad path, wrong file type…) go back to Claude as a readable error.
+          const result = await runTool(definition, ctx.tools, input)
+          return { content: [{ type: 'text', text: result.text }], isError: !result.ok }
+        },
+        // Load up front, so Claude can call it directly instead of searching for it first.
+        { alwaysLoad: true },
+      ),
+    ),
+  })
+  // Work-log labels are cosmetic: if describing a step ever fails, show the plain tool name
+  // rather than failing the turn.
+  const describe = (name: string, input: unknown) => {
+    try {
+      return describeClaudeTool(name, input, ctx.thread.cwd)
+    } catch {
+      return { label: name }
+    }
+  }
+  // Display-only tools never need the user's approval.
+  const safeTools = tools
+    .filter((definition) => definition.safety === 'safe')
+    .map((definition) => claudeToolName(definition.name))
   const stream = query({
     prompt: prompt(),
     options: {
@@ -83,9 +121,12 @@ export const runClaude: Runner = async (ctx) => {
       includePartialMessages: true,
       ...claudeSettings(threadSettings(ctx.thread)),
       settingSources: ['user', 'project', 'local'],
+      mcpServers: { [mcpServerName]: t3Tools },
+      allowedTools: safeTools,
       ...(process.env.CLAUDE_BIN ? { pathToClaudeCodeExecutable: process.env.CLAUDE_BIN } : {}),
       ...(ctx.thread.sessionId ? { resume: ctx.thread.sessionId } : {}),
       canUseTool: async (toolName, input, options) => {
+        if (safeTools.includes(toolName)) return { behavior: 'allow', updatedInput: input }
         const allow = await ctx.approve({
           id: options.toolUseID,
           title: `Allow ${toolName}?`,
@@ -122,7 +163,7 @@ export const runClaude: Runner = async (ctx) => {
           toolIds.add(event.content_block.id)
           ctx.activity({
             id: event.content_block.id,
-            label: describeClaudeTool(event.content_block.name, {}, ctx.thread.cwd).label,
+            label: describe(event.content_block.name, {}).label,
             status: 'running',
           })
         }
@@ -140,7 +181,7 @@ export const runClaude: Runner = async (ctx) => {
             toolIds.add(block.id)
             ctx.activity({
               id: block.id,
-              ...describeClaudeTool(block.name, block.input, ctx.thread.cwd),
+              ...describe(block.name, block.input),
               status: 'running',
             })
           }

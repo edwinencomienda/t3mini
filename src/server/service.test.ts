@@ -482,3 +482,23 @@ it('opens only the thread project folder in VS Code', async () => {
     else process.env.VSCODE_BIN = previous
   }
 })
+it('attaches tool content to the current reply, or to a reply of its own', async () => {
+  const created = await thread()
+  await service.send(created.id, { text: 'Show me a screenshot' })
+  await started
+  // Nothing written yet in this turn: the image gets a reply of its own.
+  context.tools.attach({ type: 'image', id: 'a.png' })
+  expect(created.messages.at(-1)).toMatchObject({
+    role: 'assistant',
+    text: '',
+    blocks: [{ id: 'a.png' }],
+  })
+  // After the agent writes, more content joins that reply.
+  context.text('reply', 'Here it is:')
+  context.tools.attach({ type: 'image', id: 'b.png', caption: 'Second' })
+  expect(created.messages.at(-1)).toMatchObject({
+    text: 'Here it is:',
+    blocks: [{ id: 'b.png', caption: 'Second' }],
+  })
+  await settle(created.id, finish)
+})

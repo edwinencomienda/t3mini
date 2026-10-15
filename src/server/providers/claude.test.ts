@@ -3,7 +3,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { runClaude } from './claude'
 import type { ProviderContext } from './types'
 
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }))
+// Fake only query(); the real tool()/createSdkMcpServer() build t3 mini's tool server.
+vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@anthropic-ai/claude-agent-sdk')>()),
+  query: vi.fn(),
+}))
 afterEach(() => vi.resetAllMocks())
 it.each(['', 'low'] as const)(
   'applies effort %s before resuming and sending any prompt',
@@ -54,6 +58,7 @@ it.each(['', 'low'] as const)(
       },
       prompt: 'Continue the conversation',
       images: [],
+      tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn() },
       signal: new AbortController().signal,
       session: vi.fn(),
       text: vi.fn(),
@@ -122,6 +127,7 @@ it('steers messages into the running turn until its result, then stops accepting
     },
     prompt: 'Build this',
     images: [],
+    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn() },
     signal: new AbortController().signal,
     session: vi.fn(),
     text: vi.fn(),
@@ -139,4 +145,51 @@ it('steers messages into the running turn until its result, then stops accepting
   expect(inputs.map((input) => input.message.content)).toEqual(['Build this', 'Use TypeScript'])
   expect(inputs[1]?.priority).toBe('next')
   expect(await steer({ prompt: 'Too late', images: [] })).toBe(false)
+})
+it('gives Claude the t3 mini tools and runs display-only ones without asking', async () => {
+  let options: Parameters<typeof query>[0]['options']
+  vi.mocked(query).mockImplementation((params) => {
+    options = params.options
+    async function* messages(): AsyncGenerator<SDKMessage> {
+      yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' } as SDKMessage
+    }
+    return Object.assign(messages(), {
+      applyFlagSettings: vi.fn(async () => {}),
+      close: vi.fn(),
+    }) as unknown as ReturnType<typeof query>
+  })
+  const approve = vi.fn(async () => false)
+  const ctx = {
+    thread: {
+      id: 't',
+      title: 'Test',
+      provider: 'claude',
+      cwd: process.cwd(),
+      model: '',
+      effort: '',
+      permissionMode: 'approval-required',
+      status: 'starting',
+      createdAt: '',
+      updatedAt: '',
+      messages: [],
+      activities: [],
+      approvals: [],
+    },
+    prompt: 'Show me',
+    images: [],
+    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn() },
+    signal: new AbortController().signal,
+    session: vi.fn(),
+    text: vi.fn(),
+    activity: vi.fn(),
+    approve,
+  } as ProviderContext
+  await runClaude(ctx)
+  expect(Object.keys(options!.mcpServers ?? {})).toEqual(['t3mini'])
+  expect(options!.allowedTools).toContain('mcp__t3mini__show_image')
+  const decision = await options!.canUseTool!('mcp__t3mini__show_image', { path: 'a.png' }, {
+    toolUseID: 'x',
+  } as never)
+  expect(decision).toMatchObject({ behavior: 'allow' })
+  expect(approve).not.toHaveBeenCalled()
 })

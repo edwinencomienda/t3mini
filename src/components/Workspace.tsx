@@ -62,6 +62,8 @@ import {
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { DiffPanel } from './DiffPanel'
+import { Blocks } from './blocks'
+import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -164,6 +166,11 @@ const MessageView = memo(
                     target="_blank"
                     rel="noopener noreferrer"
                     title={item.name}
+                    onClick={previewOnClick({
+                      src: `/api/uploads/${encodeURIComponent(item.id)}`,
+                      alt: item.name,
+                      caption: item.name,
+                    })}
                   >
                     <img
                       src={`/api/uploads/${encodeURIComponent(item.id)}`}
@@ -183,9 +190,15 @@ const MessageView = memo(
             ) : null}
           </>
         ) : (
-          <div className="markdown">
-            <MessageMarkdown text={message.text} />
-          </div>
+          <>
+            {message.text ? (
+              <div className="markdown">
+                <MessageMarkdown text={message.text} />
+              </div>
+            ) : null}
+            {/* Images and other content added by tools during this reply. */}
+            {message.blocks?.length ? <Blocks blocks={message.blocks} /> : null}
+          </>
         )}
         <time dateTime={message.createdAt}>
           {new Date(message.createdAt).toLocaleTimeString([], {
@@ -202,7 +215,8 @@ const MessageView = memo(
     before.message.queued === after.message.queued &&
     before.message.unsent === after.message.unsent &&
     before.message.createdAt === after.message.createdAt &&
-    (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0),
+    (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
+    (before.message.blocks?.length ?? 0) === (after.message.blocks?.length ?? 0),
 )
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
@@ -1847,6 +1861,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           />
         ) : null}
       </main>
+      <ImagePreview />
       {dragging ? (
         <div className="drop-overlay" aria-hidden>
           <div>

@@ -462,6 +462,25 @@ export class AgentService {
           working()
           touch()
         },
+        tools: {
+          cwd: thread.cwd,
+          saveImage: (bytes) => this.uploads.saveImage(bytes),
+          // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
+          // written anything since the user's message, it gets a reply of its own.
+          attach: (block) => {
+            const last = thread.messages.at(-1)
+            if (last?.role === 'assistant') last.blocks = [...(last.blocks ?? []), block]
+            else
+              thread.messages.push({
+                id: `tool:${crypto.randomUUID()}`,
+                role: 'assistant',
+                text: '',
+                createdAt: new Date().toISOString(),
+                blocks: [block],
+              })
+            touch()
+          },
+        },
         onSteer: (handler) => {
           run.steer = handler
         },

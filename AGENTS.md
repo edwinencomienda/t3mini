@@ -23,7 +23,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 | API              | `src/server/api.ts` (all routes, request checks), `src/routes/api.$.ts`                                                                                                                                                                                                                                        |
 | Core             | `src/server/service.ts` (threads, turns, steering/queue, projects, git, diff), `store.ts` (atomic JSON persistence in `.data/`)                                                                                                                                                                                |
 | Providers        | `src/server/providers/claude.ts` (Agent SDK), `codex.ts` + `codex-client.ts` (app-server JSON-RPC), `activity.ts` (work-log summaries), `provider-settings.ts`, `models.ts`                                                                                                                                    |
-| Other server     | `uploads.ts` (attachments), `editor.ts` (Open in VS Code), `folder-picker.ts`, `remote.ts` (phone access gateway), `dictation.ts` (Deepgram key + transcription)                                                                                                                                               |
+| Other server     | `uploads.ts` (attachments), `editor.ts` (Open in VS Code), `folder-picker.ts`, `remote.ts` (phone access gateway), `dictation.ts` (Deepgram key + transcription), `tools/` (agent tools: registry, `show_image`, safe-path checks)                                                                             |
 
 ## Things to know
 
@@ -38,4 +38,5 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 
 ## Feature docs
 
+- [docs/tools.md](docs/tools.md): the agent tool system (`show_image` and how to add tools such as charts).
 - [docs/phone-access.md](docs/phone-access.md): phone access over the local network (gateway, pairing, security model, pitfalls, testing, plus the planned Tailscale HTTPS follow-up).

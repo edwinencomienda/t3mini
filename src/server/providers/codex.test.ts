@@ -28,6 +28,7 @@ function context(prompt: string): ProviderContext {
     thread,
     prompt,
     images: [],
+    tools: { cwd: process.cwd(), attach: vi.fn(), saveImage: vi.fn() },
     signal: new AbortController().signal,
     session: vi.fn((id) => {
       thread.sessionId = id
@@ -147,4 +148,102 @@ it('steers a message into the running turn with turn/steer', async () => {
     input: [{ type: 'text', text: 'Use TypeScript' }],
   })
   expect(await steer({ prompt: 'Too late', images: [] })).toBe(false)
+})
+it('declares t3 mini tools when a thread starts, and not again on resume', async () => {
+  const fresh = context('settings')
+  await runCodex(fresh)
+  const started = JSON.parse(
+    vi.mocked(fresh.text).mock.calls.find((call) => call[0] === 'settings')![1],
+  )
+  expect(started.thread.dynamicTools).toEqual([
+    expect.objectContaining({
+      type: 'function',
+      name: 'show_image',
+      inputSchema: expect.objectContaining({
+        type: 'object',
+        properties: expect.objectContaining({ path: expect.objectContaining({ type: 'string' }) }),
+        required: ['path'],
+      }),
+    }),
+  ])
+  const resumed = context('settings')
+  resumed.thread.sessionId = 'previous-session'
+  await runCodex(resumed)
+  const wire = JSON.parse(
+    vi.mocked(resumed.text).mock.calls.find((call) => call[0] === 'settings')![1],
+  )
+  expect(wire.thread).not.toHaveProperty('dynamicTools')
+})
+it('answers item/tool/call by running the tool, and reports refusals as failures', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 't3-mini-codex-tool-'))
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  await writeFile(join(dir, 'shot.png'), png)
+  const reply = async (prompt: string) => {
+    const ctx = context(prompt)
+    ctx.tools = { cwd: dir, attach: vi.fn(), saveImage: vi.fn(async () => ({ id: 'saved.png' })) }
+    await runCodex(ctx)
+    const result = JSON.parse(
+      vi.mocked(ctx.text).mock.calls.find((call) => call[0] === 'tool-result')![1],
+    )
+    return { result, ctx }
+  }
+  try {
+    const shown = await reply('tool:shot.png')
+    expect(shown.result).toEqual({
+      success: true,
+      contentItems: [{ type: 'inputText', text: 'Shown to the user: shot.png.' }],
+    })
+    expect(shown.ctx.tools.attach).toHaveBeenCalledWith({ type: 'image', id: 'saved.png' })
+    const refused = await reply('tool:/etc/hosts')
+    expect(refused.result.success).toBe(false)
+    expect(refused.result.contentItems[0].text).toMatch('Only files inside')
+    expect(refused.ctx.tools.attach).not.toHaveBeenCalled()
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+it('labels Codex calls to t3 mini tools in the work log', async () => {
+  const { describeCodexItem } = await import('./activity')
+  expect(
+    describeCodexItem(
+      { type: 'dynamicToolCall', tool: 'show_image', arguments: { path: '/tmp/a.png' } },
+      '/work',
+    ),
+  ).toMatchObject({ label: 'Show image', summary: 'a.png' })
+  expect(
+    describeCodexItem({ type: 'dynamicToolCall', tool: 'show_image', arguments: {} }, '/work'),
+  ).toMatchObject({
+    label: 'Show image',
+    summary: undefined,
+  })
+})
+it("shows images from Codex's built-in generator, reading files only from its own folder", async () => {
+  const ctx = context('imagegen')
+  ctx.tools = {
+    cwd: process.cwd(),
+    attach: vi.fn(),
+    saveImage: vi.fn(async () => ({ id: 'gen.png' })),
+  }
+  await runCodex(ctx)
+  expect(vi.mocked(ctx.tools.saveImage).mock.calls[0]![0].subarray(1, 4).toString()).toBe('PNG')
+  expect(ctx.tools.attach).toHaveBeenCalledWith({
+    type: 'image',
+    id: 'gen.png',
+    caption: 'A watercolor bird among spring blossoms',
+  })
+  const outside = context('imagegen:outside')
+  outside.tools = {
+    cwd: process.cwd(),
+    attach: vi.fn(),
+    saveImage: vi.fn(async () => ({ id: 'x.png' })),
+  }
+  await runCodex(outside)
+  expect(outside.tools.saveImage).not.toHaveBeenCalled()
+  expect(outside.tools.attach).not.toHaveBeenCalled()
 })

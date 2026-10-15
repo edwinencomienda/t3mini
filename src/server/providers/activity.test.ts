@@ -77,3 +77,13 @@ it('summarizes Codex commands, file changes, and failures', () => {
     ).summary,
   ).toBe('a.ts, b.ts +1 more')
 })
+it("labels t3 mini's own tools, even before their input has arrived", () => {
+  // Claude announces a tool call before streaming its input; this used to throw and fail the turn.
+  expect(describeClaudeTool('mcp__t3mini__show_image', {}, cwd)).toMatchObject({
+    label: 'Show image',
+    summary: undefined,
+  })
+  expect(
+    describeClaudeTool('mcp__t3mini__show_image', { path: '/tmp/envelope.png' }, cwd),
+  ).toMatchObject({ label: 'Show image', summary: 'envelope.png' })
+})

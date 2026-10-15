@@ -50,6 +50,45 @@ lines.on('line', (line) => {
       send({ method: 'turn/completed', params: { turn: { status: 'completed' } } })
       return
     }
+    // Codex's built-in image generator: an imageGeneration item with base64 data, or with only
+    // a saved path (used to check that paths outside ~/.codex/generated_images are ignored).
+    if (prompt.startsWith('imagegen')) {
+      const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+      const outside = prompt === 'imagegen:outside'
+      send({
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'imageGeneration',
+            id: 'img-1',
+            status: 'completed',
+            revisedPrompt: 'A watercolor bird among spring blossoms',
+            result: outside ? '' : png,
+            savedPath: outside ? '/etc/hosts' : null,
+            failure: null,
+          },
+        },
+      })
+      send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } })
+      return
+    }
+    // Calls a t3 mini tool the way Codex does (item/tool/call), with the path from the prompt.
+    if (prompt.startsWith('tool:')) {
+      send({
+        id: 'tool-1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'native-thread',
+          turnId: 'turn-1',
+          callId: 'call-1',
+          namespace: null,
+          tool: 'show_image',
+          arguments: { path: prompt.slice(5) },
+        },
+      })
+      return
+    }
     if (prompt === 'crash') process.exit(2)
     if (prompt === 'hang') return
     if (prompt === 'approval') {
@@ -73,6 +112,13 @@ lines.on('line', (line) => {
     send({
       method: 'item/agentMessage/delta',
       params: { itemId: 'steered', delta: JSON.stringify(packet.params) },
+    })
+    send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } })
+  }
+  if (packet.id === 'tool-1' && packet.result) {
+    send({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'tool-result', delta: JSON.stringify(packet.result) },
     })
     send({ method: 'turn/completed', params: { turn: { id: 'turn-1', status: 'completed' } } })
   }
