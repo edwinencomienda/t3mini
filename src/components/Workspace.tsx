@@ -178,7 +178,10 @@ function StatusDot({ status, unread = false }: { status: Status; unread?: boolea
     )
   return <span className={`status-dot ${status}`} title={labels[status]} />
 }
+// Shown in the header only while the agent is running (including waiting on an approval).
+// Finished, stopped, failed, and idle threads keep the header clean; the chat shows the outcome.
 function StatusBadge({ status }: { status: Status }) {
+  if (!isActive(status)) return null
   return (
     <span className={`status-badge ${status}`}>
       <StatusDot status={status} />
@@ -548,6 +551,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
       } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
         event.preventDefault()
         toggleSidebarRef.current()
+      } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'd') {
+        // In place of the browser's bookmark shortcut, which has no use here.
+        event.preventDefault()
+        toggleChangesRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -948,6 +955,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .map((provider) => names[provider])
     : []
   const diffOpen = Boolean(activeCwd && diffOpenIn[activeCwd])
+  // ⌘D toggles the changes panel when the open thread's project is a git repository.
+  const toggleChangesRef = useRef(() => {})
+  toggleChangesRef.current = () => {
+    if (thread && git?.branch) toggleDiff(!diffOpen)
+  }
   const lastUser = thread ? thread.messages.map((message) => message.role).lastIndexOf('user') : -1
   const workLog = thread?.activities.length ? (
     <section className={`work-log ${workLogOpen ? 'open' : ''}`}>
@@ -1282,7 +1294,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       className={`icon-button ${diffOpen ? 'active' : ''}`}
                       aria-label={diffOpen ? 'Hide changes' : 'Show changes'}
                       aria-pressed={diffOpen}
-                      title={diffOpen ? 'Hide changes' : 'Show changes'}
+                      title={`${diffOpen ? 'Hide' : 'Show'} changes (${isMac ? '⌘D' : 'Ctrl+D'})`}
                       onClick={() => toggleDiff(!diffOpen)}
                     >
                       <FileDiff size={15} />
