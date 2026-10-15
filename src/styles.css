@@ -187,7 +187,6 @@ kbd {
   grid-template-columns: 16.5rem minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
-  transition: grid-template-columns 0.18s ease;
 }
 .sidebar {
   display: flex;
