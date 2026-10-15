@@ -11,13 +11,15 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:4310**. Create a thread, click **Browse…** to choose a project folder from the native macOS folder chooser (or enter an absolute or `~/` path), choose your agent, and send a message. Enter sends; Shift + Enter inserts a line break. Choose a model, effort level, and permission mode in the new-thread dialog or from the composer toolbar. Selections are saved per thread and apply to the next message; controls are disabled while an agent is working. ⌘⇧O (Ctrl+Shift+O) opens a new thread, and the **+** next to a project in the sidebar starts a thread there in one click. When nothing else is focused, typing or pasting anywhere in the window goes straight into the composer, which also works with dictation apps that paste their text.
+Open **http://localhost:4310**. Click **Add project** and choose a folder with **Browse…** (the native macOS folder chooser) or enter an absolute or `~/` path. Then click **New thread**, pick the project, and send a message. The new-thread dialog starts on the project you were last active in: the open thread's project, otherwise the most recently active one. Enter sends; Shift + Enter inserts a line break. The composer toolbar holds the agent (Claude or Codex), model, effort level, and permission mode. New threads start with your last choices. Model, effort, and permissions can change between any two messages; the agent can change only until the first message, because a provider session can't move to another agent. Selections are saved per thread and apply to the next message; controls are disabled while an agent is working. ⌘⇧O (Ctrl+Shift+O) opens a new thread, and the **+** next to a project in the sidebar starts a thread there in one click with your last settings. When nothing else is focused, typing or pasting anywhere in the window goes straight into the composer, which also works with dictation apps that paste their text.
 
-Right-click a thread in the sidebar to **Rename** it (or double-click its name), copy its project path, or **Delete** it. Renaming works while an agent is running; deleting requires stopping it first.
+Right-click a thread in the sidebar to **Rename** it (or double-click its name), copy its project path, or **Delete** it. Renaming works while an agent is running; deleting requires stopping it first. Right-click a project to start a thread there, copy its path, or **Remove** it from the sidebar (only once it has no threads; files on disk are never touched).
 
-When a thread finishes, fails, stops, or needs approval, a toast appears in the corner. Click it to open that thread. On your first visit, t3 mini offers to turn on desktop notifications, which fire while the window is in the background. Enable or disable desktop and in-app notifications at any time from **Settings** (gear icon at the bottom of the sidebar). If you blocked notifications in the browser prompt, allow them in your browser's site settings for localhost, then reload.
+Use the sun/moon/monitor button at the bottom of the sidebar to cycle between Light, Dark, and System themes, or pick one under **Settings → Appearance**. System follows your OS setting.
 
-t3 mini remembers your last agent, project folder, and per-agent model, effort, and permission choices, plus notification settings, in this browser (`localStorage`), so new threads start with them.
+When a thread finishes, a short chime plays (turn it off under **Settings → Notifications → Sound**). A thread that finishes or fails while you aren't looking at it gets a dot and a bold title in the sidebar until you open it. When a thread finishes, fails, stops, or needs approval, a toast appears in the corner. Click it to open that thread. On your first visit, t3 mini offers to turn on desktop notifications, which fire while the window is in the background. Enable or disable desktop and in-app notifications at any time from **Settings** (gear icon at the bottom of the sidebar). If you blocked notifications in the browser prompt, allow them in your browser's site settings for localhost, then reload.
+
+t3 mini remembers your last agent, project folder, and per-agent model, effort, and permission choices, plus notification, sound, unread, and theme settings, in this browser (`localStorage`), so new threads start with them.
 
 Install and sign in to the providers you want to use:
 
@@ -31,7 +33,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude
 ```
 
-Claude runs through the Claude Agent SDK, which includes its own Claude Code runtime and uses your local provider credentials. The sidebar's CLI check reports whether a standalone `claude` / `codex` command is available; it does not verify your login or account limits. Restart the server after installing a CLI or changing environment settings.
+Claude runs through the Claude Agent SDK, which includes its own Claude Code runtime and uses your local provider credentials. The **Settings → Agents** section (a warning icon appears in the sidebar footer when a CLI is missing) reports whether a standalone `claude` / `codex` command is available; it does not verify your login or account limits. Restart the server after installing a CLI or changing environment settings.
 
 ## What it does
 
@@ -73,7 +75,7 @@ This first version runs on one local Node process. It binds to loopback and reje
 
 ## Data and configuration
 
-Conversations are atomically saved to `.data/threads.json` (gitignored). Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
+Conversations are atomically saved to `.data/threads.json` and projects to `.data/projects.json` (gitignored). Creating a thread also saves its folder as a project. Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
 
 | Environment variable | Purpose                                                             |
 | -------------------- | ------------------------------------------------------------------- |

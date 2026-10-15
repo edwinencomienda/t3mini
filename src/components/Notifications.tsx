@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bell, CircleAlert, CircleCheck, CircleStop, ShieldAlert, X } from 'lucide-react'
+import {
+  Bell,
+  CircleAlert,
+  CircleCheck,
+  CircleStop,
+  Monitor,
+  Moon,
+  ShieldAlert,
+  Sun,
+  X,
+} from 'lucide-react'
+import { themeLabels, themes, type Theme } from '../theme'
+import type { Bootstrap } from '../types'
+import { playChime } from '../sound'
 import {
   desktopPermission,
   eventText,
@@ -140,10 +153,16 @@ function Toggle({
 
 export function SettingsDialog({
   preferences,
+  providers,
+  theme,
+  onThemeChange,
   onChange,
   onClose,
 }: {
   preferences: NotificationPreferences
+  providers?: Bootstrap['providers']
+  theme: Theme
+  onThemeChange: (theme: Theme) => void
   onChange: (preferences: NotificationPreferences) => void
   onClose: () => void
 }) {
@@ -179,6 +198,60 @@ export function SettingsDialog({
           </button>
         </div>
         <section className="settings-section">
+          <h3>Appearance</h3>
+          <div className="setting-row">
+            <div>
+              <strong>Theme</strong>
+              <small>System follows your computer’s light or dark setting.</small>
+            </div>
+            <div className="segmented" role="radiogroup" aria-label="Theme">
+              {themes.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="radio"
+                  aria-checked={theme === item}
+                  onClick={() => onThemeChange(item)}
+                >
+                  {item === 'light' ? (
+                    <Sun size={12} />
+                  ) : item === 'dark' ? (
+                    <Moon size={12} />
+                  ) : (
+                    <Monitor size={12} />
+                  )}
+                  {themeLabels[item]}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+        <section className="settings-section">
+          <h3>Agents</h3>
+          {(['claude', 'codex'] as const).map((provider) => {
+            const health = providers?.[provider]
+            return (
+              <div className="setting-row" key={provider}>
+                <div>
+                  <strong>{provider === 'claude' ? 'Claude Code' : 'Codex'}</strong>
+                  <small>
+                    {!health
+                      ? 'Checking…'
+                      : health.installed
+                        ? health.version || 'CLI installed'
+                        : `Install the ${provider} CLI and sign in, then restart the server.`}
+                  </small>
+                </div>
+                <span
+                  className={`cli-status ${health?.installed ? 'ok' : health ? 'missing' : ''}`}
+                >
+                  {!health ? '…' : health.installed ? 'Installed' : 'Not found'}
+                </span>
+              </div>
+            )
+          })}
+        </section>
+        <section className="settings-section">
           <h3>Notifications</h3>
           <div className="setting-row">
             <div>
@@ -207,6 +280,20 @@ export function SettingsDialog({
               label="In-app notifications"
               checked={preferences.inApp}
               onChange={(inApp) => onChange({ ...preferences, inApp })}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Sound</strong>
+              <small>Play a short chime when a thread finishes.</small>
+            </div>
+            <Toggle
+              label="Sound"
+              checked={preferences.sound}
+              onChange={(sound) => {
+                if (sound) playChime()
+                onChange({ ...preferences, sound })
+              }}
             />
           </div>
         </section>

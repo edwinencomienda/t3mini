@@ -4,8 +4,15 @@ import { isAbsolute, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import { isActive, type Bootstrap, type Provider, type Thread, type ThreadSummary } from '../types'
-import { ThreadStore, defaultStorePath } from './store'
+import {
+  isActive,
+  type Bootstrap,
+  type ProjectSummary,
+  type Provider,
+  type Thread,
+  type ThreadSummary,
+} from '../types'
+import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import type { Runner } from './providers/types'
@@ -28,6 +35,7 @@ const createSchema = z.object({
   effort: settingsSchema.shape.effort.default(''),
   permissionMode: settingsSchema.shape.permissionMode.optional(),
 })
+const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
 const promptSchema = z.object({ text: z.string().trim().min(1).max(100_000) })
 const exec = promisify(execFile)
 const summary = ({ id, title, provider, cwd, status, updatedAt }: Thread): ThreadSummary => ({
@@ -38,6 +46,20 @@ const summary = ({ id, title, provider, cwd, status, updatedAt }: Thread): Threa
   status,
   updatedAt,
 })
+// Expands ~, requires an absolute path, and resolves symlinks to the real directory.
+async function resolveFolder(input: string) {
+  const expanded =
+    input === '~' ? homedir() : input.startsWith('~/') ? join(homedir(), input.slice(2)) : input
+  if (!isAbsolute(expanded))
+    throw new HttpError(400, 'Use an absolute project folder path, or start with ~/ .')
+  try {
+    const path = await realpath(expanded)
+    if (!(await stat(path)).isDirectory()) throw new Error()
+    return path
+  } catch {
+    throw new HttpError(400, 'That project folder does not exist on this machine.')
+  }
+}
 type Run = {
   controller: AbortController
   approvals: Map<string, (allow: boolean) => void>
@@ -53,11 +75,63 @@ export class AgentService {
   constructor(
     readonly store: ThreadStore,
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
+    readonly projectStore = new ProjectStore(projectStorePath(store.path)),
   ) {}
   list() {
     return [...this.store.threads.values()]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(summary)
+  }
+  // Saved projects plus any folder that has threads, most recently active first.
+  projects(): ProjectSummary[] {
+    const projects = new Map<string, ProjectSummary>()
+    for (const project of this.projectStore.projects.values())
+      projects.set(project.path, {
+        path: project.path,
+        lastActiveAt: project.addedAt,
+        threadCount: 0,
+      })
+    for (const thread of this.store.threads.values()) {
+      const project = projects.get(thread.cwd) ?? {
+        path: thread.cwd,
+        lastActiveAt: thread.updatedAt,
+        threadCount: 0,
+      }
+      project.threadCount++
+      if (thread.updatedAt > project.lastActiveAt) project.lastActiveAt = thread.updatedAt
+      projects.set(thread.cwd, project)
+    }
+    return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+  }
+  async addProject(input: unknown) {
+    const path = await resolveFolder(projectSchema.parse(input).path)
+    if (!this.projectStore.projects.has(path)) {
+      this.projectStore.projects.set(path, { path, addedAt: new Date().toISOString() })
+      try {
+        await this.projectStore.save()
+      } catch {
+        this.projectStore.projects.delete(path)
+        throw new HttpError(500, 'Could not save the project.')
+      }
+      this.notify()
+    }
+    return this.projects().find((project) => project.path === path)!
+  }
+  async removeProject(input: unknown) {
+    const { path } = projectSchema.parse(input)
+    if ([...this.store.threads.values()].some((thread) => thread.cwd === path))
+      throw new HttpError(409, 'Delete this project’s threads before removing it.')
+    const project = this.projectStore.projects.get(path)
+    if (!project) throw new HttpError(404, 'Project not found.')
+    this.projectStore.projects.delete(path)
+    try {
+      await this.projectStore.save()
+    } catch {
+      this.projectStore.projects.set(path, project)
+      throw new HttpError(500, 'Could not remove the project.')
+    }
+    this.notify()
+    return { ok: true }
   }
   get(id: string) {
     const thread = this.store.threads.get(id)
@@ -89,6 +163,7 @@ export class AgentService {
   snapshot(id?: string) {
     return {
       threads: this.list(),
+      projects: this.projects(),
       thread: id ? (this.store.threads.get(id) ?? null) : null,
       persistenceError: this.persistenceError,
     }
@@ -107,25 +182,16 @@ export class AgentService {
       }
     }
     const [codex, claude] = await Promise.all([check('codex'), check('claude')])
-    return { threads: this.list(), providers: { codex, claude }, defaultCwd: homedir() }
+    return {
+      threads: this.list(),
+      projects: this.projects(),
+      providers: { codex, claude },
+      defaultCwd: homedir(),
+    }
   }
   async create(input: unknown) {
     const data = createSchema.parse(input)
-    const expanded =
-      data.cwd === '~'
-        ? homedir()
-        : data.cwd.startsWith('~/')
-          ? join(homedir(), data.cwd.slice(2))
-          : data.cwd
-    if (!isAbsolute(expanded))
-      throw new HttpError(400, 'Use an absolute project folder path, or start with ~/ .')
-    let cwd: string
-    try {
-      cwd = await realpath(expanded)
-      if (!(await stat(cwd)).isDirectory()) throw new Error()
-    } catch {
-      throw new HttpError(400, 'That project folder does not exist on this machine.')
-    }
+    const cwd = await resolveFolder(data.cwd)
     try {
       await validateEffort(data.provider, cwd, data)
     } catch (error) {
@@ -154,6 +220,12 @@ export class AgentService {
       this.store.threads.delete(thread.id)
       throw new HttpError(500, 'Could not save the new thread.')
     }
+    if (!this.projectStore.projects.has(cwd)) {
+      // Keep the folder in the sidebar even after its threads are deleted. Best effort:
+      // the thread already exists, and the folder still appears while it has threads.
+      this.projectStore.projects.set(cwd, { path: cwd, addedAt: now })
+      await this.projectStore.save().catch(() => this.projectStore.projects.delete(cwd))
+    }
     this.notify()
     return thread
   }
@@ -164,20 +236,27 @@ export class AgentService {
         409,
         'Wait until the current operation finishes before changing agent settings.',
       )
-    const data = settingsSchema.parse(input)
+    const { provider = thread.provider, ...data } = settingsSchema
+      .extend({ provider: z.enum(['codex', 'claude']).optional() })
+      .parse(input)
+    // A provider session can't move to another agent, so switching is only allowed before
+    // the first message.
+    if (provider !== thread.provider && (thread.messages.length || thread.sessionId))
+      throw new HttpError(409, 'Start a new thread to use a different agent.')
     this.settingsUpdates.add(id)
     try {
       try {
-        await validateEffort(thread.provider, thread.cwd, data)
+        await validateEffort(provider, thread.cwd, data)
       } catch (error) {
         throw new HttpError(400, error instanceof Error ? error.message : 'Invalid effort level.')
       }
       const previous = {
+        provider: thread.provider,
         model: thread.model,
         effort: thread.effort,
         permissionMode: thread.permissionMode,
       }
-      Object.assign(thread, data)
+      Object.assign(thread, data, { provider })
       try {
         await this.store.save()
       } catch {
@@ -375,6 +454,8 @@ export function getService() {
   return (globals.t3MiniService ??= (async () => {
     const store = new ThreadStore(defaultStorePath())
     await store.load()
-    return new AgentService(store)
+    const service = new AgentService(store)
+    await service.projectStore.load()
+    return service
   })())
 }

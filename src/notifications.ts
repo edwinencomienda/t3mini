@@ -9,12 +9,19 @@ export type NotificationPreferences = {
   // Desktop notifications are on only when the user enabled them here and the browser granted permission.
   desktop: boolean
   inApp: boolean
+  // Chime when a thread finishes.
+  sound: boolean
   // Set once the first-visit prompt was answered, so it never nags again.
   prompted: boolean
 }
 
 const key = 't3-mini:notifications'
-const defaults: NotificationPreferences = { desktop: false, inApp: true, prompted: false }
+const defaults: NotificationPreferences = {
+  desktop: false,
+  inApp: true,
+  sound: true,
+  prompted: false,
+}
 
 export const eventText: Record<ThreadEvent['kind'], string> = {
   completed: 'Finished',
@@ -54,6 +61,7 @@ export function loadNotificationPreferences(): NotificationPreferences {
     return {
       desktop: saved.desktop === true,
       inApp: saved.inApp !== false,
+      sound: saved.sound !== false,
       prompted: saved.prompted === true,
     }
   } catch {
@@ -80,5 +88,23 @@ export async function requestDesktopPermission(): Promise<DesktopPermission> {
     return await Notification.requestPermission()
   } catch {
     return desktopPermission()
+  }
+}
+
+// Threads that finished while you weren't looking, so the sidebar can mark them until opened.
+const unreadKey = 't3-mini:unread'
+export function loadUnread(): Set<string> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(unreadKey) || '[]')
+    return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+export function saveUnread(ids: Set<string>) {
+  try {
+    localStorage.setItem(unreadKey, JSON.stringify([...ids]))
+  } catch {
+    // Without storage the indicator still works until reload.
   }
 }

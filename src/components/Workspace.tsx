@@ -4,29 +4,38 @@ import {
   Check,
   ChevronRight,
   Circle,
+  Copy,
   Folder,
+  FolderPlus,
   FolderOpen,
   LoaderCircle,
   Menu,
+  Monitor,
+  Moon,
+  Pencil,
   Plus,
   Search,
   Settings,
   ShieldAlert,
   Square,
+  Sun,
   SquarePen,
   Terminal,
   Trash2,
+  TriangleAlert,
   X,
 } from 'lucide-react'
-import Markdown from 'react-markdown'
+import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { AgentSettingsControls } from './AgentSettingsControls'
+import { AgentSettingsControls, Picker, ProviderMark } from './AgentSettingsControls'
 import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
 import {
   desktopPermission,
   eventText,
   loadNotificationPreferences,
+  loadUnread,
+  saveUnread,
   requestDesktopPermission,
   saveNotificationPreferences,
   threadEvents,
@@ -34,11 +43,14 @@ import {
   type ThreadEvent,
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
-import { ThreadMenu, type ThreadMenuState } from './ThreadMenu'
+import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
+import { playChime, unlockSound } from '../sound'
+import { loadTheme, nextTheme, saveTheme, themeLabels, type Theme } from '../theme'
 import remarkGfm from 'remark-gfm'
 import {
   isActive,
   type Bootstrap,
+  type ProjectSummary,
   type Provider,
   type Status,
   type Thread,
@@ -69,6 +81,21 @@ const starters = [
     text: 'Help me plan a new feature for this project. First, explore the code and ask me what I want to build.',
   },
 ]
+// Links in agent replies open in a new tab so the conversation stays put. noopener/noreferrer
+// stops the opened page from controlling this tab or seeing its URL. react-markdown's default
+// URL filter still drops unsafe schemes such as javascript:.
+const markdownComponents: Components = {
+  a: ({ node: _node, href, children, ...props }) =>
+    href?.startsWith('#') ? (
+      <a href={href} {...props}>
+        {children}
+      </a>
+    ) : (
+      <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+        {children}
+      </a>
+    ),
+}
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
@@ -88,6 +115,15 @@ function duration(start: string, end: string) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
+// The last agent used, else Claude (or Codex when only Codex is installed).
+function defaultAgent(bootstrap: Bootstrap, preferences = loadPreferences()): Provider {
+  return (
+    preferences.provider ??
+    (bootstrap.providers.claude.installed || !bootstrap.providers.codex.installed
+      ? 'claude'
+      : 'codex')
+  )
+}
 async function api<T>(
   path: string,
   method = 'GET',
@@ -104,20 +140,16 @@ async function api<T>(
   if (!response.ok) throw new Error(data.error || 'Request failed.')
   return data as T
 }
-function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
-  return (
-    <span
-      className={`provider-mark ${provider}`}
-      style={{ width: size + 6, height: size + 6, fontSize: size - 1 }}
-      aria-hidden
-    >
-      {provider === 'claude' ? '✳' : <Terminal size={size - 3} />}
-    </span>
-  )
-}
-function StatusDot({ status }: { status: Status }) {
+function StatusDot({ status, unread = false }: { status: Status; unread?: boolean }) {
   if (status === 'starting' || status === 'working')
     return <LoaderCircle size={12} className="status-spinner" aria-label={labels[status]} />
+  if (unread && status !== 'waiting')
+    return (
+      <span
+        className={`status-dot unread ${status}`}
+        title={`${labels[status]} · not viewed yet`}
+      />
+    )
   return <span className={`status-dot ${status}`} title={labels[status]} />
 }
 function StatusBadge({ status }: { status: Status }) {
@@ -139,7 +171,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -153,7 +184,23 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const composer = useRef<HTMLTextAreaElement>(null)
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [menu, setMenu] = useState<ThreadMenuState | null>(null)
+  // 'system' on the server render; the saved choice is read after mount (already applied by the head script).
+  const [theme, setTheme] = useState<Theme>('system')
+  useEffect(() => setTheme(loadTheme()), [])
+  function changeTheme(next: Theme) {
+    setTheme(next)
+    saveTheme(next)
+  }
+  const [menu, setMenu] = useState<
+    | { kind: 'thread'; id: string; position: MenuPosition }
+    | { kind: 'project'; path: string; position: MenuPosition }
+    | null
+  >(null)
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  // Where the new-thread dialog starts; null while closed.
+  const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
+  // Add project can return to the new-thread dialog with the added folder selected.
+  const [addProject, setAddProject] = useState<null | 'sidebar' | 'new-thread'>(null)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
   const [toasts, setToasts] = useState<ThreadEvent[]>([])
@@ -162,6 +209,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [notify, setNotify] = useState<NotificationPreferences>({
     desktop: false,
     inApp: true,
+    sound: true,
     prompted: true,
   })
   const notifyRef = useRef(notify)
@@ -179,6 +227,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       .then((data) => {
         setBootstrap(data)
         setThreads(data.threads)
+        setProjects(data.projects ?? [])
       })
       .catch((error: Error) => {
         if (!controller.signal.aborted) setError(error.message)
@@ -205,9 +254,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
     events.onmessage = (event) => {
       const data = JSON.parse(event.data) as {
         threads: ThreadSummary[]
+        // Optional: a server started before projects existed omits it until restarted.
+        projects?: ProjectSummary[]
         thread: Thread | null
         persistenceError?: string
       }
+      setProjects(data.projects ?? [])
       announce(threadEvents(statuses.current, data.threads))
       statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
       setThreads(data.threads)
@@ -229,13 +281,58 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setShowPrompt(!saved.prompted && (permission === 'default' || permission === 'granted'))
   }, [])
   useEffect(() => {
-    // Opening a thread clears its toasts.
-    if (activeId) setToasts((current) => current.filter((item) => item.thread.id !== activeId))
+    // Opening a thread clears its toasts and its unread mark.
+    if (!activeId) return
+    setToasts((current) => current.filter((item) => item.thread.id !== activeId))
+    markRead(activeId)
   }, [activeId])
+  const [unread, setUnread] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    // The thread open on page load counts as seen.
+    const saved = loadUnread()
+    if (selectedId.current && saved.delete(selectedId.current)) saveUnread(saved)
+    setUnread(saved)
+  }, [])
+  function markRead(id: string) {
+    setUnread((current) => {
+      if (!current.has(id)) return current
+      const next = new Set(current)
+      next.delete(id)
+      saveUnread(next)
+      return next
+    })
+  }
+  useEffect(() => {
+    // Coming back to the window counts as seeing the thread that's open.
+    const onFocus = () => {
+      if (selectedId.current && document.visibilityState === 'visible') markRead(selectedId.current)
+    }
+    // Audio needs a prior user gesture; arm it on the first interaction.
+    window.addEventListener('pointerdown', unlockSound, { once: true })
+    window.addEventListener('keydown', unlockSound, { once: true })
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => {
+      window.removeEventListener('pointerdown', unlockSound)
+      window.removeEventListener('keydown', unlockSound)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+    }
+  }, [])
   function announce(events: ThreadEvent[]) {
     if (!events.length) return
     const focused = document.visibilityState === 'visible' && document.hasFocus()
     const preferences = notifyRef.current
+    const finished = events.filter((event) => event.kind === 'completed' || event.kind === 'failed')
+    if (preferences.sound && events.some((event) => event.kind === 'completed')) playChime()
+    const unseen = finished.filter((event) => !(focused && event.thread.id === selectedId.current))
+    if (unseen.length)
+      setUnread((current) => {
+        const next = new Set(current)
+        for (const event of unseen) next.add(event.thread.id)
+        saveUnread(next)
+        return next
+      })
     for (const event of events) {
       const viewing = focused && event.thread.id === selectedId.current
       if (preferences.inApp && !viewing)
@@ -274,7 +371,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'o') {
         event.preventDefault()
-        if (bootstrap) setCreateOpen(true)
+        if (bootstrap) openNewThreadRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -285,7 +382,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // just start typing (or dictating) anywhere in the chat.
     const canRedirect = (target: EventTarget | null) => {
       const element = composer.current
-      if (!element || element.disabled || createOpen) return false
+      if (!element || element.disabled || newThreadProject !== null || addProject) return false
       if (!(target instanceof HTMLElement)) return true
       return !target.closest('input, textarea, select, [contenteditable], dialog, [role="menu"]')
     }
@@ -319,7 +416,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('paste', onPaste)
     }
-  }, [createOpen, activeId])
+  }, [newThreadProject, addProject, activeId])
   useLayoutEffect(() => {
     const element = composer.current
     if (!element) return
@@ -349,12 +446,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setDraft(activeId ? drafts.current.get(activeId) || '' : '')
     stickToBottom.current = true
   }, [activeId])
-  async function updateSettings(settings: AgentSettings) {
+  async function updateSettings(settings: AgentSettings, provider = thread?.provider) {
     if (!activeId || !thread || busy) return
     setBusy(true)
     setError('')
     try {
-      const updated = await api<Thread>(`threads/${activeId}/settings`, 'POST', settings)
+      const updated = await api<Thread>(`threads/${activeId}/settings`, 'POST', {
+        ...settings,
+        provider,
+      })
       rememberChoice(updated.provider, settings)
       if (selectedId.current === activeId) setThread(updated)
     } catch (error) {
@@ -367,7 +467,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // One-click thread in an existing project, using the last provider and settings.
     if (busy) return
     const preferences = loadPreferences()
-    const provider = preferences.provider ?? 'claude'
+    const provider = bootstrap ? defaultAgent(bootstrap, preferences) : 'claude'
     setBusy(true)
     setError('')
     try {
@@ -424,6 +524,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     try {
       await api(`threads/${target.id}`, 'DELETE', {})
       drafts.current.delete(target.id)
+      markRead(target.id)
       setToasts((current) => current.filter((item) => item.thread.id !== target.id))
       if (target.id === activeId) {
         void navigate({ to: '/' })
@@ -436,6 +537,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setBusy(false)
     }
   }
+  // Opens the new-thread dialog on the project you were last active in: the open thread's
+  // project, else the most recently active project. With no projects yet, add one first.
+  function openNewThread(path?: string) {
+    if (!bootstrap) return
+    const initial = path ?? thread?.cwd ?? projects[0]?.path
+    if (!initial) return setAddProject('new-thread')
+    setNewThreadProject(initial)
+  }
+  const openNewThreadRef = useRef(openNewThread)
+  openNewThreadRef.current = openNewThread
+  async function removeProject(path: string) {
+    try {
+      await api('projects', 'DELETE', { path })
+      setProjects((current) => current.filter((project) => project.path !== path))
+    } catch (error) {
+      setError((error as Error).message)
+    }
+  }
+  const copyPath = (path: string) => void navigator.clipboard?.writeText(path).catch(() => {})
   const committedRename = useRef<typeof renaming>(null)
   async function rename() {
     // Enter commits and unmounts the input, which can also fire blur; save only once.
@@ -463,13 +583,27 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const visibleThreads = threads.filter((item) =>
     `${item.title} ${item.cwd}`.toLowerCase().includes(query),
   )
-  // Group by project folder, most recently active project first (threads arrive newest first).
-  const projects = new Map<string, ThreadSummary[]>()
-  for (const item of visibleThreads)
-    projects.set(item.cwd, [...(projects.get(item.cwd) || []), item])
+  // Projects arrive most recently active first; threads within them newest first. A thread
+  // created a moment ago may arrive before its project does, so fall back to thread folders.
+  const projectPaths = [
+    ...new Set([
+      ...threads
+        .map((item) => item.cwd)
+        .filter((cwd) => !projects.some((project) => project.path === cwd)),
+      ...projects.map((project) => project.path),
+    ]),
+  ]
+  const groups = projectPaths
+    .map((path) => ({ path, items: visibleThreads.filter((item) => item.cwd === path) }))
+    .filter((group) => !query || group.items.length || group.path.toLowerCase().includes(query))
   const active = thread ? isActive(thread.status) : false
   const folder = thread ? folderName(thread.cwd) : undefined
   const runningCount = threads.filter((item) => isActive(item.status)).length
+  const missingClis = bootstrap
+    ? (['claude', 'codex'] as const)
+        .filter((provider) => !bootstrap.providers[provider].installed)
+        .map((provider) => names[provider])
+    : []
   const lastUser = thread ? thread.messages.map((message) => message.role).lastIndexOf('user') : -1
   const workLog = thread?.activities.length ? (
     <section className={`work-log ${workLogOpen ? 'open' : ''}`}>
@@ -524,29 +658,46 @@ export function Workspace({ threadId }: { threadId?: string }) {
             <span className="brand-mark">t3</span>
             <span>mini</span>
           </Link>
+        </div>
+        <div className="sidebar-actions">
           <button
-            className="icon-button"
-            onClick={() => setCreateOpen(true)}
+            className="sidebar-action"
+            onClick={() => openNewThread()}
             disabled={!bootstrap}
-            aria-label="New thread"
             title={`New thread (${isMac ? '⌘⇧O' : 'Ctrl+Shift+O'})`}
           >
-            <SquarePen size={16} />
+            <SquarePen size={14} />
+            New thread
+          </button>
+          <button
+            className="sidebar-action"
+            onClick={() => setAddProject('sidebar')}
+            disabled={!bootstrap}
+            title="Add a project folder"
+          >
+            <FolderPlus size={14} />
+            Add project
           </button>
         </div>
         <label className="search">
           <Search size={14} />
           <input
-            aria-label="Search threads"
-            placeholder="Search threads"
+            aria-label="Search threads and projects"
+            placeholder="Search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
         <nav className="thread-list" aria-label="Threads">
-          {[...projects].map(([cwd, items]) => (
+          {groups.map(({ path: cwd, items }) => (
             <section className="project" key={cwd}>
-              <div className="project-header">
+              <div
+                className="project-header"
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  setMenu({ kind: 'project', path: cwd, position: menuPosition(event) })
+                }}
+              >
                 <button
                   className="project-toggle"
                   onClick={() => setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })}
@@ -570,7 +721,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 ? items.map((item) =>
                     renaming?.id === item.id ? (
                       <div className="thread-row selected renaming" key={item.id}>
-                        <StatusDot status={item.status} />
+                        <StatusDot status={item.status} unread={unread.has(item.id)} />
                         <input
                           className="thread-rename"
                           aria-label="Thread name"
@@ -598,7 +749,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         key={item.id}
                         to="/threads/$threadId"
                         params={{ threadId: item.id }}
-                        className={`thread-row ${activeId === item.id ? 'selected' : ''}`}
+                        className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''}`}
                         onClick={(event) => {
                           if (busy) {
                             event.preventDefault()
@@ -615,14 +766,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         }}
                         onContextMenu={(event) => {
                           event.preventDefault()
-                          const rect = event.currentTarget.getBoundingClientRect()
-                          // Keyboard-opened menus (Shift+F10) report 0,0; anchor them to the row.
-                          const fromKeyboard = event.clientX === 0 && event.clientY === 0
-                          setMenu({
-                            id: item.id,
-                            x: fromKeyboard ? rect.left + 24 : event.clientX,
-                            y: fromKeyboard ? rect.bottom : event.clientY,
-                          })
+                          setMenu({ kind: 'thread', id: item.id, position: menuPosition(event) })
                         }}
                         onDoubleClick={(event) => {
                           event.preventDefault()
@@ -631,7 +775,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         aria-disabled={busy}
                         aria-current={activeId === item.id ? 'page' : undefined}
                       >
-                        <StatusDot status={item.status} />
+                        <StatusDot status={item.status} unread={unread.has(item.id)} />
                         <span className="thread-title">{item.title}</span>
                         <span className="thread-time">
                           {item.status === 'waiting'
@@ -642,36 +786,61 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     ),
                   )
                 : null}
+              {!collapsed[cwd] && !items.length && !query ? (
+                <button
+                  className="thread-row empty-project"
+                  disabled={busy}
+                  onClick={() => openNewThread(cwd)}
+                >
+                  <Plus size={12} />
+                  Start a thread
+                </button>
+              ) : null}
             </section>
           ))}
-          {!visibleThreads.length ? (
+          {!groups.length ? (
             <div className="empty-sidebar">
-              {search ? 'No matching threads.' : bootstrap ? 'No threads yet.' : 'Loading…'}
+              {search
+                ? 'Nothing matches your search.'
+                : bootstrap
+                  ? 'Add a project folder to get started.'
+                  : 'Loading…'}
             </div>
           ) : null}
         </nav>
         <div className="sidebar-footer">
-          {(['claude', 'codex'] as const).map((provider) => (
-            <div
-              className="agent-health"
-              key={provider}
-              title={
-                bootstrap?.providers[provider].installed
-                  ? `${names[provider]} CLI ${bootstrap.providers[provider].version || 'installed'}`
-                  : `${names[provider]} CLI not found`
-              }
-            >
-              <ProviderMark provider={provider} size={12} />
-              <span>{names[provider]}</span>
-              <span
-                className={`health-dot ${bootstrap?.providers[provider].installed ? 'available' : ''}`}
-              />
-            </div>
-          ))}
-          <div className="connection" title={connected ? 'Connected' : 'Connecting…'}>
+          <div
+            className="connection"
+            role="status"
+            title={connected ? 'Connected to the local server' : 'Reconnecting to the local server'}
+          >
             <span className={`health-dot ${connected ? 'available' : ''}`} />
-            {runningCount ? `${runningCount} running` : connected ? 'Local' : 'Offline'}
+            {runningCount ? `${runningCount} running` : connected ? 'Connected' : 'Connecting…'}
           </div>
+          {missingClis.length ? (
+            <button
+              className="icon-button footer-warning"
+              aria-label={`${missingClis.join(' and ')} CLI not found. Open settings`}
+              title={`${missingClis.join(' and ')} CLI not found`}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <TriangleAlert size={14} />
+            </button>
+          ) : null}
+          <button
+            className="icon-button"
+            aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme(theme)]}`}
+            title={`Theme: ${themeLabels[theme]}`}
+            onClick={() => changeTheme(nextTheme(theme))}
+          >
+            {theme === 'light' ? (
+              <Sun size={14} />
+            ) : theme === 'dark' ? (
+              <Moon size={14} />
+            ) : (
+              <Monitor size={14} />
+            )}
+          </button>
           <button
             className="icon-button"
             aria-label="Settings"
@@ -701,7 +870,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             ) : null}
             {thread ? (
               <span className="chip">
-                <ProviderMark provider={thread.provider} size={11} />
+                <ProviderMark provider={thread.provider} size={12} />
                 {names[thread.provider]}
               </span>
             ) : null}
@@ -737,7 +906,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             <section className="empty-state">
               {thread ? (
                 <>
-                  <ProviderMark provider={thread.provider} size={22} />
+                  <ProviderMark provider={thread.provider} size={28} />
                   <h1>What should we build in {folder}?</h1>
                   <p>
                     {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
@@ -761,16 +930,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 <>
                   <span className="brand-mark large">t3</span>
                   <h1>Your coding agents, one quiet place.</h1>
-                  <p>Pick a project folder and start a thread with Codex or Claude.</p>
-                  <button
-                    className="primary"
-                    disabled={!bootstrap}
-                    onClick={() => setCreateOpen(true)}
-                  >
-                    <SquarePen size={15} />
-                    New thread
-                    <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
-                  </button>
+                  <p>Pick a project folder and start a thread with Claude or Codex.</p>
+                  <div className="empty-actions">
+                    <button
+                      className="primary"
+                      disabled={!bootstrap}
+                      onClick={() => openNewThread()}
+                    >
+                      <SquarePen size={15} />
+                      New thread
+                      <kbd>{isMac ? '⌘⇧O' : 'Ctrl+Shift+O'}</kbd>
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={!bootstrap}
+                      onClick={() => setAddProject('sidebar')}
+                    >
+                      <FolderPlus size={15} />
+                      Add project
+                    </button>
+                  </div>
                 </>
               )}
             </section>
@@ -783,7 +962,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <div className="user-bubble">{message.text}</div>
                     ) : (
                       <div className="markdown">
-                        <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
+                        <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {message.text}
+                        </Markdown>
                       </div>
                     )}
                     <time dateTime={message.createdAt}>
@@ -897,6 +1078,22 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     }}
                     onChange={(settings) => void updateSettings(settings)}
                     disabled={active || busy || !connected}
+                    agent={
+                      bootstrap
+                        ? {
+                            installed: {
+                              claude: bootstrap.providers.claude.installed,
+                              codex: bootstrap.providers.codex.installed,
+                            },
+                            locked: thread.messages.length > 0 || Boolean(thread.sessionId),
+                            // Switching agents brings back that agent's last-used settings.
+                            onChange: (provider) => {
+                              if (provider !== thread.provider)
+                                void updateSettings(settingsFor(provider), provider)
+                            },
+                          }
+                        : undefined
+                    }
                   />
                   {active ? (
                     <button
@@ -947,16 +1144,60 @@ export function Workspace({ threadId }: { threadId?: string }) {
       </div>
       {menu
         ? (() => {
-            const target = threads.find((item) => item.id === menu.id)
-            if (!target) return null
+            let items: MenuItem[] = []
+            if (menu.kind === 'thread') {
+              const target = threads.find((item) => item.id === menu.id)
+              if (!target) return null
+              items = [
+                {
+                  label: 'Rename',
+                  icon: <Pencil size={14} />,
+                  onSelect: () => setRenaming({ id: target.id, title: target.title }),
+                },
+                {
+                  label: 'Copy project path',
+                  icon: <Copy size={14} />,
+                  onSelect: () => copyPath(target.cwd),
+                },
+                'separator',
+                {
+                  label: 'Delete',
+                  icon: <Trash2 size={14} />,
+                  danger: true,
+                  disabled: isActive(target.status) || busy,
+                  title: isActive(target.status)
+                    ? 'Stop the agent before deleting this thread.'
+                    : undefined,
+                  onSelect: () => void remove(target),
+                },
+              ]
+            } else {
+              const path = menu.path
+              const hasThreads = threads.some((item) => item.cwd === path)
+              items = [
+                {
+                  label: 'New thread here',
+                  icon: <SquarePen size={14} />,
+                  onSelect: () => openNewThread(path),
+                },
+                { label: 'Copy path', icon: <Copy size={14} />, onSelect: () => copyPath(path) },
+                'separator',
+                {
+                  label: 'Remove project',
+                  icon: <Trash2 size={14} />,
+                  danger: true,
+                  disabled: hasThreads,
+                  title: hasThreads ? 'Delete this project’s threads first.' : undefined,
+                  onSelect: () => void removeProject(path),
+                },
+              ]
+            }
             return (
-              <ThreadMenu
-                menu={menu}
-                canDelete={!isActive(target.status) && !busy}
+              <ContextMenu
+                position={menu.position}
+                label={menu.kind === 'thread' ? 'Thread actions' : 'Project actions'}
+                items={items}
                 onClose={closeMenu}
-                onRename={() => setRenaming({ id: target.id, title: target.title })}
-                onCopyPath={() => void navigator.clipboard?.writeText(target.cwd).catch(() => {})}
-                onDelete={() => void remove(target)}
               />
             )
           })()
@@ -964,6 +1205,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
       {settingsOpen ? (
         <SettingsDialog
           preferences={notify}
+          providers={bootstrap?.providers}
+          theme={theme}
+          onThemeChange={changeTheme}
           onChange={(preferences) => {
             updateNotify(preferences)
             if (preferences.prompted) setShowPrompt(false)
@@ -971,14 +1215,36 @@ export function Workspace({ threadId }: { threadId?: string }) {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
-      {createOpen && bootstrap ? (
+      {newThreadProject !== null && bootstrap ? (
         <NewThread
           bootstrap={bootstrap}
-          onClose={() => setCreateOpen(false)}
+          projects={projectPaths}
+          initialProject={newThreadProject}
+          onAddProject={() => {
+            setNewThreadProject(null)
+            setAddProject('new-thread')
+          }}
+          onClose={() => setNewThreadProject(null)}
           onCreated={(created) => {
-            setCreateOpen(false)
+            setNewThreadProject(null)
             setThreads((current) => [created, ...current])
             select(created.id)
+          }}
+        />
+      ) : null}
+      {addProject && bootstrap ? (
+        <AddProject
+          initialPath={loadPreferences().cwd || bootstrap.defaultCwd}
+          onClose={() => setAddProject(null)}
+          onAdded={(project) => {
+            setProjects((current) => [
+              project,
+              ...current.filter((item) => item.path !== project.path),
+            ])
+            setCollapsed((current) => ({ ...current, [project.path]: false }))
+            // From the new-thread dialog, go back to it with the new project selected.
+            if (addProject === 'new-thread') setNewThreadProject(project.path)
+            setAddProject(null)
           }}
         />
       ) : null}
@@ -987,23 +1253,124 @@ export function Workspace({ threadId }: { threadId?: string }) {
 }
 function NewThread({
   bootstrap,
+  projects,
+  initialProject,
+  onAddProject,
   onClose,
   onCreated,
 }: {
   bootstrap: Bootstrap
+  projects: string[]
+  initialProject: string
+  onAddProject: () => void
   onClose: () => void
   onCreated: (thread: Thread) => void
 }) {
-  // Start from the user's last choices; fall back to an installed provider.
-  const [preferences] = useState(loadPreferences)
-  const [provider, setProvider] = useState<Provider>(
-    preferences.provider ??
-      (bootstrap.providers.claude.installed || !bootstrap.providers.codex.installed
-        ? 'claude'
-        : 'codex'),
+  const [cwd, setCwd] = useState(initialProject)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    dialog.current?.showModal()
+  }, [])
+  async function create(event: FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      // Agent, model, effort, and permissions start from your last choices; change them in the
+      // composer before sending.
+      const preferences = loadPreferences()
+      const provider = defaultAgent(bootstrap, preferences)
+      const settings = settingsFor(provider, preferences)
+      const created = await api<Thread>('threads', 'POST', { provider, cwd, ...settings })
+      rememberChoice(provider, settings, created.cwd)
+      onCreated(created)
+    } catch (error) {
+      setError((error as Error).message)
+      setBusy(false)
+    }
+  }
+  const options = (projects.includes(cwd) ? projects : [cwd, ...projects]).map((path) => ({
+    value: path,
+    label: folderName(path),
+    description: path,
+  }))
+  return (
+    <dialog
+      ref={dialog}
+      className="new-dialog"
+      onCancel={(e) => {
+        e.preventDefault()
+        if (!busy) onClose()
+      }}
+      onClick={(e) => {
+        if (e.target === dialog.current && !busy) onClose()
+      }}
+    >
+      <form onSubmit={create}>
+        <div className="dialog-top">
+          <h2>New thread</h2>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close new thread"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="field project-field">
+          <span className="field-label">Project</span>
+          <Picker
+            label="Project"
+            icon={<Folder size={14} />}
+            text={folderName(cwd)}
+            value={cwd}
+            options={options}
+            disabled={busy}
+            placement="down"
+            onSelect={setCwd}
+            footer={
+              <button type="button" className="picker-footer-action" onClick={onAddProject}>
+                <FolderPlus size={14} />
+                Add project…
+              </button>
+            }
+          />
+          <small className="field-hint" title={cwd}>
+            {cwd}
+          </small>
+        </div>
+        {error ? (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        ) : null}
+        <div className="dialog-actions">
+          <button className="secondary" type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary" autoFocus disabled={busy}>
+            {busy ? 'Creating…' : 'Create thread'}
+          </button>
+        </div>
+      </form>
+    </dialog>
   )
-  const [cwd, setCwd] = useState(preferences.cwd || bootstrap.defaultCwd)
-  const [settings, setSettings] = useState<AgentSettings>(() => settingsFor(provider, preferences))
+}
+function AddProject({
+  initialPath,
+  onClose,
+  onAdded,
+}: {
+  initialPath: string
+  onClose: () => void
+  onAdded: (project: ProjectSummary) => void
+}) {
+  const [path, setPath] = useState(initialPath)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -1015,23 +1382,21 @@ function NewThread({
     setPicking(true)
     setError('')
     try {
-      const result = await api<{ path: string | null }>('folders/pick', 'POST', { cwd })
-      if (result.path) setCwd(result.path)
+      const result = await api<{ path: string | null }>('folders/pick', 'POST', { cwd: path })
+      if (result.path) setPath(result.path)
     } catch (error) {
       setError((error as Error).message)
     } finally {
       setPicking(false)
     }
   }
-  async function create(event: FormEvent) {
+  async function add(event: FormEvent) {
     event.preventDefault()
-    if (picking || busy) return
+    if (busy || picking) return
     setBusy(true)
     setError('')
     try {
-      const created = await api<Thread>('threads', 'POST', { provider, cwd, ...settings })
-      rememberChoice(provider, settings, created.cwd)
-      onCreated(created)
+      onAdded(await api<ProjectSummary>('projects', 'POST', { path }))
     } catch (error) {
       setError((error as Error).message)
       setBusy(false)
@@ -1049,44 +1414,18 @@ function NewThread({
         if (e.target === dialog.current && !busy && !picking) onClose()
       }}
     >
-      <form onSubmit={create}>
+      <form onSubmit={add}>
         <div className="dialog-top">
-          <h2>New thread</h2>
+          <h2>Add project</h2>
           <button
             className="icon-button"
             type="button"
-            aria-label="Close new thread"
+            aria-label="Close add project"
             disabled={busy || picking}
             onClick={onClose}
           >
             <X size={16} />
           </button>
-        </div>
-        <div className="field">
-          <span className="field-label">Agent</span>
-          <div className="provider-options" role="radiogroup" aria-label="Choose provider">
-            {(['claude', 'codex'] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="radio"
-                aria-checked={provider === item}
-                className={provider === item ? 'chosen' : ''}
-                onClick={() => {
-                  setProvider(item)
-                  setSettings(settingsFor(item, preferences))
-                }}
-              >
-                <ProviderMark provider={item} size={14} />
-                <span>{names[item]}</span>
-                {!bootstrap.providers[item].installed ? (
-                  <small>Not installed</small>
-                ) : provider === item ? (
-                  <Check size={14} />
-                ) : null}
-              </button>
-            ))}
-          </div>
         </div>
         <div className="field">
           <label className="field-label" htmlFor="project-folder">
@@ -1096,8 +1435,8 @@ function NewThread({
             <input
               id="project-folder"
               autoFocus
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
               placeholder="~/Code/my-project"
               disabled={busy || picking}
               required
@@ -1107,17 +1446,11 @@ function NewThread({
               {picking ? 'Choosing…' : 'Browse'}
             </button>
           </div>
-        </div>
-        <div className="field">
-          <span className="field-label">Settings</span>
-          <AgentSettingsControls
-            provider={provider}
-            cwd={cwd}
-            value={settings}
-            onChange={setSettings}
-            disabled={busy || picking}
-            placement="down"
-          />
+          <small className="field-hint">
+            {picking
+              ? 'Choose a folder in the macOS window, or cancel to return.'
+              : 'An absolute path or ~/… on this machine. Agents can edit files in this folder.'}
+          </small>
         </div>
         {error ? (
           <div className="error-banner" role="alert">
@@ -1128,8 +1461,8 @@ function NewThread({
           <button className="secondary" type="button" onClick={onClose} disabled={busy || picking}>
             Cancel
           </button>
-          <button className="primary" disabled={busy || picking || !cwd.trim()}>
-            {busy ? 'Creating…' : 'Create thread'}
+          <button className="primary" disabled={busy || picking || !path.trim()}>
+            {busy ? 'Adding…' : 'Add project'}
           </button>
         </div>
       </form>

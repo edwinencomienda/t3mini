@@ -34,9 +34,13 @@ export type ThreadSummary = Pick<
   Thread,
   'id' | 'title' | 'provider' | 'cwd' | 'status' | 'updatedAt'
 >
+// A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
+export type Project = { path: string; addedAt: string }
+export type ProjectSummary = { path: string; lastActiveAt: string; threadCount: number }
 export type ProviderHealth = { installed: boolean; version?: string }
 export type Bootstrap = {
   threads: ThreadSummary[]
+  projects: ProjectSummary[]
   providers: Record<Provider, ProviderHealth>
   defaultCwd: string
 }

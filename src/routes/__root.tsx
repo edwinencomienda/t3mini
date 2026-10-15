@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router'
 import styles from '../styles.css?url'
+import { themeScript } from '../theme'
 export const Route = createRootRoute({
   head: () => ({
     meta: [
@@ -13,8 +14,10 @@ export const Route = createRootRoute({
     ],
   }),
   component: () => (
-    <html lang="en">
+    // The theme script sets data-theme before React hydrates, so allow that attribute to differ.
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <HeadContent />
       </head>
       <body>

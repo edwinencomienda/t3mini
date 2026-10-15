@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, Gauge, Lock, LockOpen, RefreshCw, Sparkles } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  Gauge,
+  Lock,
+  LockOpen,
+  RefreshCw,
+  Sparkles,
+  Terminal,
+} from 'lucide-react'
 import {
   effortLabel,
   permissionModes,
@@ -7,10 +16,23 @@ import {
   type ModelCatalog,
 } from '../agent-settings'
 import type { Provider } from '../types'
+import { ProviderIcon } from './ProviderIcon'
 
 type Option = { value: string; label: string; description?: string }
 
-function Picker({
+export const providerNames: Record<Provider, string> = { codex: 'Codex', claude: 'Claude' }
+export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
+  return <ProviderIcon provider={provider} size={size} />
+}
+// Agent choice for a thread. It can change until the first message; after that the
+// provider session belongs to that agent.
+export type AgentChoice = {
+  installed: Record<Provider, boolean>
+  locked: boolean
+  onChange: (provider: Provider) => void
+}
+
+export function Picker({
   label,
   icon,
   text,
@@ -112,7 +134,9 @@ export function AgentSettingsControls({
   onChange,
   disabled = false,
   placement = 'up',
+  agent,
 }: {
+  agent?: AgentChoice
   provider: Provider
   cwd: string
   value: AgentSettings
@@ -177,6 +201,24 @@ export function AgentSettingsControls({
     : model?.label || value.model || 'Default model'
   return (
     <div className="agent-settings" aria-label="Agent settings" role="group">
+      {agent ? (
+        <span title={agent.locked ? 'Start a new thread to use a different agent.' : undefined}>
+          <Picker
+            label="Agent"
+            icon={<ProviderMark provider={provider} size={14} />}
+            text={providerNames[provider]}
+            value={provider}
+            options={(['claude', 'codex'] as const).map((item) => ({
+              value: item,
+              label: providerNames[item],
+              description: agent.installed[item] ? undefined : 'CLI not found',
+            }))}
+            disabled={disabled || agent.locked}
+            placement={placement}
+            onSelect={(selected) => agent.onChange(selected as Provider)}
+          />
+        </span>
+      ) : null}
       <Picker
         label="Model"
         icon={<Sparkles size={13} />}

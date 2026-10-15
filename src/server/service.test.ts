@@ -185,3 +185,48 @@ it('renames a thread, trims the title, and rejects empty names', async () => {
   await service.send(created.id, { text: 'This should not replace a custom title' })
   expect(service.get(created.id).title).toBe('Release prep')
 })
+it('saves projects, lists them by recent activity, and only removes empty ones', async () => {
+  const { mkdir, realpath } = await import('node:fs/promises')
+  await mkdir(join(directory, 'other-project'))
+  // The server stores resolved paths (on macOS, /var resolves to /private/var).
+  const other = await realpath(join(directory, 'other-project'))
+  const created = await thread()
+  // Make the added project strictly newer than the thread so the order is deterministic.
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const added = await service.addProject({ path: other })
+  expect(added).toMatchObject({ path: other, threadCount: 0 })
+  expect(service.projects().map((project) => project.path)).toEqual([other, created.cwd])
+  const saved = JSON.parse(await readFile(join(directory, 'projects.json'), 'utf8'))
+  expect(saved.map((project: { path: string }) => project.path).sort()).toEqual(
+    [created.cwd, other].sort(),
+  )
+  await expect(service.addProject({ path: join(directory, 'missing') })).rejects.toThrow(
+    'does not exist',
+  )
+  await expect(service.removeProject({ path: created.cwd })).rejects.toThrow('threads')
+  await service.removeProject({ path: other })
+  expect(service.projects().map((project) => project.path)).toEqual([created.cwd])
+})
+it('switches agents only before the first message', async () => {
+  const created = await thread()
+  const switched = await service.updateSettings(created.id, {
+    provider: 'claude',
+    model: '',
+    effort: '',
+    permissionMode: 'full-access',
+  })
+  expect(switched.provider).toBe('claude')
+  await service.send(created.id, { text: 'Hello' })
+  await started
+  finish()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await expect(
+    service.updateSettings(created.id, {
+      provider: 'codex',
+      model: '',
+      effort: '',
+      permissionMode: 'full-access',
+    }),
+  ).rejects.toThrow('new thread')
+  expect(service.get(created.id).provider).toBe('claude')
+})

@@ -45,6 +45,12 @@ export async function handleApi(request: Request) {
         })
       }
     }
+    if (parts[0] === 'projects' && !parts[1]) {
+      if (request.method === 'POST')
+        return Response.json(await service.addProject(await request.json()), { status: 201 })
+      if (request.method === 'DELETE')
+        return Response.json(await service.removeProject(await request.json()))
+    }
     if (parts[0] === 'bootstrap' && request.method === 'GET')
       return Response.json(await service.bootstrap())
     if (parts[0] === 'events' && request.method === 'GET') {
