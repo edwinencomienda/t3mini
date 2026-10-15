@@ -5,6 +5,15 @@ import { getModels } from './models'
 import { dirname, join } from 'node:path'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
+import {
+  clearDictationKey,
+  dictationAvailable,
+  dictationStatus,
+  loadDictationKey,
+  maxAudioBytes,
+  saveDictationKey,
+  transcribe,
+} from './dictation'
 
 // This application launches local agents. Keep every endpoint loopback-only and same-origin.
 export function checkRequest(request: Request) {
@@ -28,7 +37,9 @@ export function checkRequest(request: Request) {
 export function isHttpError(error: unknown): error is HttpError {
   return (
     error instanceof Error &&
-    (error.name === 'HttpError' || error.constructor.name === 'HttpError') &&
+    ['HttpError', 'DictationError'].some(
+      (name) => error.name === name || error.constructor.name === name,
+    ) &&
     typeof (error as { status?: unknown }).status === 'number'
   )
 }
@@ -42,6 +53,23 @@ export async function handleApi(request: Request) {
     const remote = request.headers.get(remoteHeader) === '1'
     const macOnly = (what: string) => {
       if (remote) throw new HttpError(403, `${what} is only available on the Mac running t3 mini.`)
+    }
+    const secretsPath = join(dirname(service.store.path), 'secrets.json')
+    await loadDictationKey(secretsPath)
+    // The Deepgram key is managed from the Mac only, and never returned.
+    if (parts[0] === 'dictation' && !parts[1]) {
+      macOnly('Managing the dictation key')
+      if (request.method === 'GET') return Response.json(dictationStatus())
+      if (request.method === 'POST')
+        return Response.json(await saveDictationKey(secretsPath, await request.json()))
+      if (request.method === 'DELETE') return Response.json(await clearDictationKey(secretsPath))
+    }
+    if (parts[0] === 'transcribe' && !parts[1] && request.method === 'POST') {
+      // base64 + JSON overhead on top of the audio limit; refuse bigger bodies before reading.
+      const length = Number(request.headers.get('content-length') || 0)
+      if (length > Math.ceil(maxAudioBytes * 1.4))
+        throw new HttpError(413, 'The recording is too long.')
+      return Response.json(await transcribe(await request.json()))
     }
     if (parts[0] === 'remote') {
       macOnly('Managing phone access')
@@ -136,7 +164,12 @@ export async function handleApi(request: Request) {
     if (parts[0] === 'bootstrap' && request.method === 'GET') {
       const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))
       // remote: this page runs on a paired phone, so Mac-only actions are hidden.
-      return Response.json({ ...(await service.bootstrap()), remote, phoneAccess: access.enabled })
+      return Response.json({
+        ...(await service.bootstrap()),
+        remote,
+        phoneAccess: access.enabled,
+        dictation: dictationAvailable(),
+      })
     }
     if (parts[0] === 'events' && request.method === 'GET') {
       const id = url.searchParams.get('thread') || undefined

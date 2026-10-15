@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Bell,
+  Bot,
+  Mic,
+  Palette,
+  Smartphone,
   CircleAlert,
   CircleCheck,
   CircleStop,
@@ -14,6 +18,7 @@ import { themeLabels, themes, type Theme } from '../theme'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
+import { DictationSettings } from './DictationSettings'
 import {
   desktopPermission,
   eventText,
@@ -152,6 +157,18 @@ function Toggle({
   )
 }
 
+// Settings is split into tabs so each page stays short. The last tab is remembered while the
+// page is open; Mac-only tabs are hidden on a paired phone.
+type SettingsTab = 'appearance' | 'notifications' | 'dictation' | 'phone' | 'agents'
+const settingsTabs: { id: SettingsTab; label: string; icon: ReactNode; macOnly?: boolean }[] = [
+  { id: 'appearance', label: 'Appearance', icon: <Palette size={14} /> },
+  { id: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
+  { id: 'dictation', label: 'Dictation', icon: <Mic size={14} />, macOnly: true },
+  { id: 'phone', label: 'Phone access', icon: <Smartphone size={14} />, macOnly: true },
+  { id: 'agents', label: 'Agents', icon: <Bot size={14} /> },
+]
+let lastTab: SettingsTab = 'appearance'
+
 export function SettingsDialog({
   preferences,
   providers,
@@ -161,11 +178,13 @@ export function SettingsDialog({
   onClose,
   remote = false,
   onPhoneAccessChange,
+  onDictationChange,
 }: {
   preferences: NotificationPreferences
   providers?: Bootstrap['providers']
   remote?: boolean
   onPhoneAccessChange?: (enabled: boolean) => void
+  onDictationChange?: (configured: boolean) => void
   theme: Theme
   onThemeChange: (theme: Theme) => void
   onChange: (preferences: NotificationPreferences) => void
@@ -183,6 +202,13 @@ export function SettingsDialog({
     onChange({ ...preferences, desktop: result === 'granted', prompted: true })
   }
   const desktopOn = preferences.desktop && permission === 'granted'
+  const [tab, setTab] = useState<SettingsTab>(() =>
+    remote && (lastTab === 'dictation' || lastTab === 'phone') ? 'appearance' : lastTab,
+  )
+  const selectTab = (next: SettingsTab) => {
+    lastTab = next
+    setTab(next)
+  }
   return (
     <dialog
       ref={dialog}
@@ -202,132 +228,168 @@ export function SettingsDialog({
             <X size={16} />
           </button>
         </div>
-        <section className="settings-section">
-          <h3>Appearance</h3>
-          <div className="setting-row">
-            <div>
-              <strong>Theme</strong>
-              <small>System follows your computer’s light or dark setting.</small>
-            </div>
-            <div className="segmented" role="radiogroup" aria-label="Theme">
-              {themes.map((item) => (
+        <div className="settings-layout">
+          <nav
+            className="settings-tabs"
+            role="tablist"
+            aria-label="Settings"
+            aria-orientation="vertical"
+          >
+            {settingsTabs
+              .filter((item) => !(remote && item.macOnly))
+              .map((item) => (
                 <button
-                  key={item}
+                  key={item.id}
                   type="button"
-                  role="radio"
-                  aria-checked={theme === item}
-                  onClick={() => onThemeChange(item)}
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  onClick={() => selectTab(item.id)}
                 >
-                  {item === 'light' ? (
-                    <Sun size={12} />
-                  ) : item === 'dark' ? (
-                    <Moon size={12} />
-                  ) : (
-                    <Monitor size={12} />
-                  )}
-                  {themeLabels[item]}
+                  {item.icon}
+                  {item.label}
                 </button>
               ))}
-            </div>
-          </div>
-        </section>
-        {/* Phone access is managed only from the Mac itself. */}
-        {!remote ? <PhoneAccess onChange={(enabled) => onPhoneAccessChange?.(enabled)} /> : null}
-        <section className="settings-section">
-          <h3>Agents</h3>
-          {(['claude', 'codex'] as const).map((provider) => {
-            const health = providers?.[provider]
-            return (
-              <div className="setting-row" key={provider}>
-                <div>
-                  <strong>{provider === 'claude' ? 'Claude Code' : 'Codex'}</strong>
-                  <small>
-                    {!health
-                      ? 'Checking…'
-                      : health.installed
-                        ? health.version || 'CLI installed'
-                        : `Install the ${provider} CLI and sign in, then restart the server.`}
-                  </small>
+          </nav>
+          <div className="settings-panel" role="tabpanel">
+            {tab === 'appearance' ? (
+              <section className="settings-section">
+                <h3>Appearance</h3>
+                <div className="setting-row">
+                  <div>
+                    <strong>Theme</strong>
+                    <small>System follows your computer’s light or dark setting.</small>
+                  </div>
+                  <div className="segmented" role="radiogroup" aria-label="Theme">
+                    {themes.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        role="radio"
+                        aria-checked={theme === item}
+                        onClick={() => onThemeChange(item)}
+                      >
+                        {item === 'light' ? (
+                          <Sun size={12} />
+                        ) : item === 'dark' ? (
+                          <Moon size={12} />
+                        ) : (
+                          <Monitor size={12} />
+                        )}
+                        {themeLabels[item]}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <span
-                  className={`cli-status ${health?.installed ? 'ok' : health ? 'missing' : ''}`}
-                >
-                  {!health ? '…' : health.installed ? 'Installed' : 'Not found'}
-                </span>
-              </div>
-            )
-          })}
-        </section>
-        <section className="settings-section">
-          <h3>Notifications</h3>
-          <div className="setting-row">
-            <div>
-              <strong>Desktop notifications</strong>
-              <small>
-                {permission === 'unsupported'
-                  ? 'This browser does not support desktop notifications.'
-                  : permission === 'denied'
-                    ? 'Blocked by your browser. Allow notifications for this site in your browser’s site settings, then reload.'
-                    : 'Alert me when a thread finishes or needs approval while this window is in the background.'}
-              </small>
-            </div>
-            <Toggle
-              label="Desktop notifications"
-              checked={desktopOn}
-              disabled={permission === 'unsupported' || permission === 'denied'}
-              onChange={(enabled) => void setDesktop(enabled)}
-            />
-          </div>
-          <div className="setting-row">
-            <div>
-              <strong>In-app notifications</strong>
-              <small>Show a toast for finished threads. Click one to open the thread.</small>
-            </div>
-            <Toggle
-              label="In-app notifications"
-              checked={preferences.inApp}
-              onChange={(inApp) => onChange({ ...preferences, inApp })}
-            />
-          </div>
-          <div className="setting-row">
-            <div>
-              <strong>Sound</strong>
-              <small>Play a sound when a thread finishes.</small>
-            </div>
-            <Toggle
-              label="Sound"
-              checked={preferences.sound}
-              onChange={(sound) => {
-                if (sound) playSound(preferences.soundName)
-                onChange({ ...preferences, sound })
-              }}
-            />
-          </div>
-          {preferences.sound ? (
-            <div className="setting-row sound-choice">
-              <div>
-                <strong>Sound style</strong>
-                <small>Click one to hear it.</small>
-              </div>
-              <div className="segmented" role="radiogroup" aria-label="Sound style">
-                {sounds.map((sound) => (
-                  <button
-                    key={sound.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={preferences.soundName === sound.value}
-                    onClick={() => {
-                      playSound(sound.value)
-                      onChange({ ...preferences, soundName: sound.value })
+              </section>
+            ) : null}
+            {tab === 'notifications' ? (
+              <section className="settings-section">
+                <h3>Notifications</h3>
+                <div className="setting-row">
+                  <div>
+                    <strong>Desktop notifications</strong>
+                    <small>
+                      {permission === 'unsupported'
+                        ? 'This browser does not support desktop notifications.'
+                        : permission === 'denied'
+                          ? 'Blocked by your browser. Allow notifications for this site in your browser’s site settings, then reload.'
+                          : 'Alert me when a thread finishes or needs approval while this window is in the background.'}
+                    </small>
+                  </div>
+                  <Toggle
+                    label="Desktop notifications"
+                    checked={desktopOn}
+                    disabled={permission === 'unsupported' || permission === 'denied'}
+                    onChange={(enabled) => void setDesktop(enabled)}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>In-app notifications</strong>
+                    <small>Show a toast for finished threads. Click one to open the thread.</small>
+                  </div>
+                  <Toggle
+                    label="In-app notifications"
+                    checked={preferences.inApp}
+                    onChange={(inApp) => onChange({ ...preferences, inApp })}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>Sound</strong>
+                    <small>Play a sound when a thread finishes.</small>
+                  </div>
+                  <Toggle
+                    label="Sound"
+                    checked={preferences.sound}
+                    onChange={(sound) => {
+                      if (sound) playSound(preferences.soundName)
+                      onChange({ ...preferences, sound })
                     }}
-                  >
-                    {sound.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </section>
+                  />
+                </div>
+                {preferences.sound ? (
+                  <div className="setting-row sound-choice">
+                    <div>
+                      <strong>Sound style</strong>
+                      <small>Click one to hear it.</small>
+                    </div>
+                    <div className="segmented" role="radiogroup" aria-label="Sound style">
+                      {sounds.map((sound) => (
+                        <button
+                          key={sound.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={preferences.soundName === sound.value}
+                          onClick={() => {
+                            playSound(sound.value)
+                            onChange({ ...preferences, soundName: sound.value })
+                          }}
+                        >
+                          {sound.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+            {/* Dictation and phone access are managed only on the Mac. */}
+            {tab === 'dictation' && !remote ? (
+              <DictationSettings onChange={(configured) => onDictationChange?.(configured)} />
+            ) : null}
+            {tab === 'phone' && !remote ? (
+              <PhoneAccess onChange={(enabled) => onPhoneAccessChange?.(enabled)} />
+            ) : null}
+            {tab === 'agents' ? (
+              <section className="settings-section">
+                <h3>Agents</h3>
+                {(['claude', 'codex'] as const).map((provider) => {
+                  const health = providers?.[provider]
+                  return (
+                    <div className="setting-row" key={provider}>
+                      <div>
+                        <strong>{provider === 'claude' ? 'Claude Code' : 'Codex'}</strong>
+                        <small>
+                          {!health
+                            ? 'Checking…'
+                            : health.installed
+                              ? health.version || 'CLI installed'
+                              : `Install the ${provider} CLI and sign in, then restart the server.`}
+                        </small>
+                      </div>
+                      <span
+                        className={`cli-status ${health?.installed ? 'ok' : health ? 'missing' : ''}`}
+                      >
+                        {!health ? '…' : health.installed ? 'Installed' : 'Not found'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </section>
+            ) : null}
+          </div>
+        </div>
       </div>
     </dialog>
   )

@@ -61,6 +61,7 @@ import {
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { DiffPanel } from './DiffPanel'
+import { DictationButton, dictationSupported } from './Dictation'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -1752,6 +1753,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         />
                       </div>
                       <div className="composer-actions">
+                        {bootstrap?.dictation && dictationSupported() ? (
+                          <DictationButton
+                            onText={(text) => {
+                              const element = composer.current
+                              const before =
+                                element?.value.slice(0, element.selectionStart ?? 0) ?? ''
+                              insertText((before && !/\s$/.test(before) ? ' ' : '') + text)
+                            }}
+                            onError={setError}
+                          />
+                        ) : null}
                         {active ? (
                           <button
                             className="stop-button"
@@ -1907,6 +1919,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
           preferences={notify}
           providers={bootstrap?.providers}
           remote={Boolean(bootstrap?.remote)}
+          onDictationChange={(dictation) =>
+            setBootstrap((current) => (current ? { ...current, dictation } : current))
+          }
           onPhoneAccessChange={(phoneAccess) =>
             setBootstrap((current) => (current ? { ...current, phoneAccess } : current))
           }

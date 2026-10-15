@@ -58,6 +58,9 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
     ['remote/pair', 'POST'],
     ['folders/pick', 'POST'],
     ['threads/some-thread/open-editor', 'POST'],
+    ['dictation', 'GET'],
+    ['dictation', 'POST'],
+    ['dictation', 'DELETE'],
   ] as const)
     expect((await remote(path, method)).status).toBe(403)
   const bootstrap = await handleApi(

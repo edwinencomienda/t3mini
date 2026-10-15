@@ -70,6 +70,8 @@ export type Bootstrap = {
   // Set by the API: this page is on a paired phone; and whether phone access is switched on.
   remote?: boolean
   phoneAccess?: boolean
+  // A Deepgram key is configured, so the composer can offer dictation.
+  dictation?: boolean
   defaultCwd: string
 }
 export const isActive = (status: Status) => ['starting', 'working', 'waiting'].includes(status)

@@ -75,6 +75,18 @@ The **Browse…** chooser opens on the Mac running the server. Cancel leaves the
 
 This first version runs on one local Node process. It binds to loopback and rejects foreign hosts and cross-origin API requests. Phone access (below) is the only way in from another device. There are no tunnels, worktree isolation, checkpoint rollback, or interactive provider question forms. Use a project folder or worktree you intend the agent to edit. Decline unsupported requests or stop the turn and answer with a follow-up message.
 
+## Dictation
+
+The 🎤 button in the composer records your voice and types the transcript at the cursor: click to record, click again to stop (recordings stop on their own after 5 minutes). Transcription uses [Deepgram](https://deepgram.com) (`nova-3` with smart formatting); new Deepgram accounts get free credit, then it's pay-as-you-go.
+
+1. Create an API key at [console.deepgram.com](https://console.deepgram.com).
+2. In t3 mini, open **Settings → Dictation**, paste the key, and click **Save**. The server checks it with Deepgram first.
+3. Optionally pick a **Microphone** in the same tab (after allowing microphone access once, so the browser shows device names). The choice is remembered per browser and falls back to the system default if that microphone is unplugged.
+
+The key is stored on the Mac in `.data/secrets.json` (owner-only, gitignored) and is never sent back to the browser; Settings shows only its last four characters. Alternatively set `DEEPGRAM_API_KEY` in the environment or in a `.env` file (see `.env.example`), which takes priority. The key can only be viewed or changed on the Mac, not from a paired phone. Audio goes from the browser to the t3 mini server and from there to Deepgram, with Deepgram's model-improvement program opted out (`mip_opt_out=true`).
+
+Browsers only allow the microphone on secure pages, so the button appears on the Mac (`localhost`) but not over plain-HTTP phone access; use your phone keyboard's dictation there.
+
 ## Phone access (local network)
 
 Use t3 mini from your phone's browser on the same Wi-Fi. It's off by default and **turns off whenever the server restarts**.
@@ -103,8 +115,10 @@ Conversations are atomically saved to `.data/threads.json`, projects to `.data/p
 | `PORT`               | Production server port; defaults to `4310`.                         |
 | `VSCODE_BIN`         | Optional `code` executable used by the Open in VS Code button.      |
 | `T3_MINI_PHONE_PORT` | Port for phone access on your local network; defaults to `4311`.    |
+| `DEEPGRAM_API_KEY`   | Deepgram key for dictation; overrides the one saved in Settings.    |
+| `DEEPGRAM_MODEL`     | Deepgram model for dictation; defaults to `nova-3`.                 |
 
-Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
+`npm run dev` and `npm start` load a `.env` file if present. Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
 
 ## Production and checks
 

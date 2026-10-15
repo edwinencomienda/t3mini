@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 4310",
+    "dev": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4310",
     "build": "vite build",
-    "start": "node server.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "format": "prettier --write ."
