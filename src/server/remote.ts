@@ -4,17 +4,31 @@ import http from 'node:http'
 import net from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { dirname } from 'node:path'
+import {
+  serveGateway,
+  stopServingGateway,
+  stopServingGatewayNow,
+  tailscalePort,
+  tailscaleStatus,
+  type TailscaleStatus,
+} from './tailscale'
 
-// Phone access over the local network. A gateway listens on the LAN only while switched on
-// (never across restarts), lets in only paired devices, and forwards their requests to the
-// loopback-only app, marked so the app knows they're remote.
+// Phone access. A gateway runs only while switched on (never across restarts), lets in only
+// paired devices, and forwards their requests to the loopback-only app, marked so the app knows
+// they're remote. Two ways in:
+// - Local network (plain HTTP): the gateway listens on the LAN.
+// - Tailscale (HTTPS): the gateway listens on loopback only, and `tailscale serve` puts it
+//   behind HTTPS on this Mac's tailnet name. Nothing is exposed on the LAN in this mode.
 //
 // Pairing: the Mac shows a QR code with a one-time code (5 minutes). The phone trades it for a
 // session cookie that lasts 30 days. Only hashes of codes and session tokens are kept.
 
 export const sessionDays = 30
 const pairingMs = 5 * 60_000
-const cookieName = 't3m_session'
+const lanCookie = 't3m_session'
+// HTTPS sessions use their own Secure cookie (the __Host- prefix requires it), so plain-HTTP
+// and HTTPS sessions never mix.
+const httpsCookie = '__Host-t3m_session'
 export const remoteHeader = 'x-t3-remote'
 
 export type Device = {
@@ -26,11 +40,31 @@ export type Device = {
   expiresAt: string
 }
 export type DeviceInfo = Omit<Device, 'tokenHash'>
+export type PhoneMode = 'lan' | 'tailscale'
 export type RemoteStatus = {
   enabled: boolean
+  mode: PhoneMode
   port: number
+  // What a phone connects to: LAN addresses, or the tailnet name.
   addresses: string[]
+  // Tailscale mode: the HTTPS address, e.g. https://macbook.tail1234.ts.net:8443.
+  url?: string
   devices: DeviceInfo[]
+}
+// What the gateway needs from Tailscale; tests pass a stand-in.
+export type TailscaleControl = {
+  status: () => Promise<TailscaleStatus>
+  serve: (gatewayPort: number) => Promise<void>
+  stopServe: (gatewayPort: number) => Promise<void>
+  stopServeNow: () => void
+  port: () => number
+}
+const tailscale: TailscaleControl = {
+  status: tailscaleStatus,
+  serve: serveGateway,
+  stopServe: stopServingGateway,
+  stopServeNow: stopServingGatewayNow,
+  port: tailscalePort,
 }
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -41,6 +75,8 @@ export function isPrivateAddress(address: string | undefined) {
   const ip = (address ?? '').replace(/^::ffff:/, '')
   return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.)/.test(ip)
 }
+const isLoopback = (address: string | undefined) =>
+  ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')
 // This machine's IPv4 addresses on private networks, e.g. your Wi-Fi address.
 export function lanAddresses() {
   return Object.values(networkInterfaces())
@@ -90,10 +126,24 @@ export class RemoteAccess {
   private upstreamPort = 0
   private sockets = new Map<string, Set<net.Socket>>()
   private lastSaved = 0
+  private mode: PhoneMode = 'lan'
+  // Tailscale mode: the Host phones use, e.g. "macbook.tail1234.ts.net:8443".
+  private tailscaleHost?: string
+  private exitHooked = false
   constructor(
     readonly path: string,
-    private options: { port?: number; addresses?: () => string[] } = {},
+    private options: {
+      port?: number
+      addresses?: () => string[]
+      tailscale?: TailscaleControl
+    } = {},
   ) {}
+  private get tailscale() {
+    return this.options.tailscale ?? tailscale
+  }
+  private get cookieName() {
+    return this.mode === 'tailscale' ? httpsCookie : lanCookie
+  }
   get port() {
     return this.options.port ?? (Number(process.env.T3_MINI_PHONE_PORT) || 4311)
   }
@@ -114,6 +164,8 @@ export class RemoteAccess {
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
     }
+    // Off on restart: a serve entry left behind by a crash is removed (only if it's ours).
+    void this.tailscale.stopServe(this.port).catch(() => {})
   }
   private async save() {
     this.lastSaved = Date.now()
@@ -123,10 +175,13 @@ export class RemoteAccess {
   }
 
   status(): RemoteStatus {
+    const tailnet = this.mode === 'tailscale' && this.tailscaleHost
     return {
       enabled: this.enabled,
+      mode: this.mode,
       port: this.port,
-      addresses: this.enabled ? this.addresses() : [],
+      addresses: !this.enabled ? [] : tailnet ? [this.tailscaleHost!] : this.addresses(),
+      ...(this.enabled && tailnet ? { url: `https://${this.tailscaleHost}` } : {}),
       devices: [...this.devices.values()]
         .map(({ tokenHash: _hash, ...device }) => device)
         .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
@@ -143,9 +198,12 @@ export class RemoteAccess {
     return {
       code,
       expiresAt: new Date(expiresAt).toISOString(),
-      urls: this.addresses().map(
-        (address) => `http://${address}:${this.port}/pair?code=${encodeURIComponent(code)}`,
-      ),
+      urls:
+        this.mode === 'tailscale' && this.tailscaleHost
+          ? [`https://${this.tailscaleHost}/pair?code=${encodeURIComponent(code)}`]
+          : this.addresses().map(
+              (address) => `http://${address}:${this.port}/pair?code=${encodeURIComponent(code)}`,
+            ),
     }
   }
   // Trades a pairing code for a session token. Codes work once and expire.
@@ -169,7 +227,7 @@ export class RemoteAccess {
     return { token: session, device }
   }
   authenticate(cookieHeader: string | undefined) {
-    const session = cookies(cookieHeader)[cookieName]
+    const session = cookies(cookieHeader)[this.cookieName]
     if (!session) return null
     const hash = sha256(session)
     const device = [...this.devices.values()].find((item) => item.tokenHash === hash)
@@ -195,23 +253,54 @@ export class RemoteAccess {
     await this.save()
   }
 
-  async enable(upstreamPort: number) {
+  // Starts the gateway: on the LAN, or (Tailscale) on loopback behind `tailscale serve`.
+  // Switching modes restarts it, which drops open connections.
+  async enable(upstreamPort: number, mode: PhoneMode = 'lan') {
     this.upstreamPort = upstreamPort
-    if (this.enabled) return
+    if (this.enabled && this.mode === mode) return
+    if (this.enabled) await this.disable()
+    let host: string | undefined
+    if (mode === 'tailscale') {
+      const status = await this.tailscale.status()
+      if (!status.running || !status.dnsName)
+        throw new Error(status.problem ?? 'Tailscale is not connected.')
+      const port = this.tailscale.port()
+      host = port === 443 ? status.dnsName : `${status.dnsName}:${port}`
+    }
     const server = http.createServer((request, response) => void this.handle(request, response))
     server.on('upgrade', (request, socket, head) =>
       this.upgrade(request, socket as net.Socket, head),
     )
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
-      server.listen(this.port, '0.0.0.0', () => resolve())
+      // Tailscale's serve connects from this Mac, so the gateway needn't face the network.
+      server.listen(this.port, mode === 'tailscale' ? '127.0.0.1' : '0.0.0.0', () => resolve())
     })
+    if (mode === 'tailscale') {
+      try {
+        await this.tailscale.serve(this.port)
+      } catch (error) {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+        throw error
+      }
+      // Never let the tailnet address outlive t3 mini (off on restart).
+      if (!this.exitHooked) {
+        this.exitHooked = true
+        process.once('exit', () => {
+          if (this.mode === 'tailscale' && this.enabled) this.tailscale.stopServeNow()
+        })
+      }
+    }
+    this.mode = mode
+    this.tailscaleHost = host
     this.server = server
   }
   async disable() {
     const server = this.server
+    const wasTailscale = this.mode === 'tailscale' && Boolean(server)
     this.server = undefined
     this.codes.clear()
+    if (wasTailscale) await this.tailscale.stopServe(this.port).catch(() => {})
     for (const sockets of this.sockets.values()) for (const socket of sockets) socket.destroy()
     this.sockets.clear()
     if (!server) return
@@ -221,12 +310,22 @@ export class RemoteAccess {
 
   // Shared checks for HTTP and WebSocket requests: the address you used must be one of this
   // Mac's LAN addresses, the request must come from a private network, and any Origin must be
-  // this gateway itself (no other site can drive it).
+  // this gateway itself (no other site can drive it). Over Tailscale: the tailnet name, from
+  // `tailscale serve` on this Mac, with an https origin.
   private allowed(request: http.IncomingMessage) {
+    const origin = request.headers.origin
+    if (this.mode === 'tailscale') {
+      const host = this.tailscaleHost
+      return (
+        Boolean(host) &&
+        request.headers.host === host &&
+        isLoopback(request.socket.remoteAddress) &&
+        (!origin || origin === `https://${host}`)
+      )
+    }
     const hosts = this.addresses().map((address) => `${address}:${this.port}`)
     const host = request.headers.host ?? ''
     if (!hosts.includes(host) || !isPrivateAddress(request.socket.remoteAddress)) return false
-    const origin = request.headers.origin
     return !origin || origin === `http://${host}`
   }
   private track(device: Device, socket: net.Socket) {
@@ -239,14 +338,21 @@ export class RemoteAccess {
   // client sent can claim otherwise, and the session cookie stays here.
   private forwardHeaders(request: http.IncomingMessage) {
     const headers: http.OutgoingHttpHeaders = {}
+    // Tailscale's identity headers aren't used: being on the tailnet isn't authentication here.
     for (const [key, value] of Object.entries(request.headers))
-      if (!key.startsWith('x-t3-') && key !== 'referer') headers[key] = value
+      if (!key.startsWith('x-t3-') && !key.startsWith('tailscale-') && key !== 'referer')
+        headers[key] = value
     const local = `127.0.0.1:${this.upstreamPort}`
     headers.host = local
     if (request.headers.origin) headers.origin = `http://${local}`
     const rest = (request.headers.cookie ?? '')
       .split(';')
-      .filter((part) => part.trim() && !part.trim().startsWith(`${cookieName}=`))
+      .filter(
+        (part) =>
+          part.trim() &&
+          !part.trim().startsWith(`${lanCookie}=`) &&
+          !part.trim().startsWith(`${httpsCookie}=`),
+      )
       .join(';')
     if (rest) headers.cookie = rest
     else delete headers.cookie
@@ -279,7 +385,7 @@ export class RemoteAccess {
       response
         .writeHead(302, {
           Location: '/',
-          'Set-Cookie': `${cookieName}=${result.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionDays * 86_400}`,
+          'Set-Cookie': `${this.cookieName}=${result.token}; HttpOnly;${this.mode === 'tailscale' ? ' Secure;' : ''} SameSite=Lax; Path=/; Max-Age=${sessionDays * 86_400}`,
           'Cache-Control': 'no-store',
         })
         .end()

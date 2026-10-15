@@ -10,7 +10,7 @@ it('accepts the local app opening the dictation stream', () => {
   for (const host of ['127.0.0.1:4310', 'localhost:4310', '[::1]:4310'])
     expect(allowedUpgrade(upgrade({ host, origin: `http://${host}` }))).toBe(true)
 })
-it('refuses other origins, hosts, paths, missing origins, and paired phones', () => {
+it('refuses other origins, hosts, paths, and missing origins', () => {
   const host = '127.0.0.1:4310'
   expect(allowedUpgrade(upgrade({ host, origin: 'http://evil.example' }))).toBe(false)
   expect(allowedUpgrade(upgrade({ host }))).toBe(false)
@@ -18,10 +18,11 @@ it('refuses other origins, hosts, paths, missing origins, and paired phones', ()
     allowedUpgrade(upgrade({ host: '192.168.1.5:4310', origin: 'http://192.168.1.5:4310' })),
   ).toBe(false)
   expect(allowedUpgrade(upgrade({ host, origin: `http://${host}` }, '/api/other'))).toBe(false)
-  // The phone-access gateway rewrites host and origin to local ones but marks the request.
-  expect(allowedUpgrade(upgrade({ host, origin: `http://${host}`, 'x-t3-remote': '1' }))).toBe(
-    false,
-  )
+})
+it('lets paired phones dictate through the gateway (it already authenticated them)', () => {
+  // The gateway rewrites Host and Origin to the app's own and marks the request as remote.
+  const host = '127.0.0.1:4310'
+  expect(allowedUpgrade(upgrade({ host, origin: `http://${host}`, 'x-t3-remote': '1' }))).toBe(true)
 })
 it('answers a refused upgrade with an HTTP error and never opens a stream', async () => {
   const socket = new PassThrough()

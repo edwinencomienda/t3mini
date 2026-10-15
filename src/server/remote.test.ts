@@ -2,8 +2,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { RemoteAccess, isPrivateAddress } from './remote'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RemoteAccess, isPrivateAddress, type TailscaleControl } from './remote'
+import type { TailscaleStatus } from './tailscale'
 
 let directory: string
 let upstream: http.Server
@@ -11,6 +12,25 @@ let upstreamPort: number
 let access: RemoteAccess
 let port: number
 let seen: http.IncomingHttpHeaders
+// A stand-in for the Tailscale CLI: what it reports, and which serve calls it got.
+let tailnet: TailscaleStatus
+let served: string[]
+let serveFails: string | undefined
+const fakeTailscale: TailscaleControl = {
+  status: async () => tailnet,
+  serve: async (gateway) => {
+    if (serveFails) throw new Error(serveFails)
+    served.push(`serve ${gateway}`)
+  },
+  stopServe: async (gateway) => {
+    served.push(`stop ${gateway}`)
+  },
+  stopServeNow: () => {
+    served.push('stop now')
+  },
+  port: () => 8443,
+}
+const tailnetHost = 'mac.tail1234.ts.net:8443'
 
 const freePort = () =>
   new Promise<number>((resolve) => {
@@ -56,9 +76,13 @@ beforeEach(async () => {
   await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
   upstreamPort = (upstream.address() as { port: number }).port
   port = await freePort()
+  tailnet = { available: true, running: true, dnsName: 'mac.tail1234.ts.net' }
+  served = []
+  serveFails = undefined
   access = new RemoteAccess(join(directory, 'devices.json'), {
     port,
     addresses: () => ['127.0.0.1'],
+    tailscale: fakeTailscale,
   })
 })
 afterEach(async () => {
@@ -150,4 +174,88 @@ it('accepts only private network addresses', () => {
     expect(isPrivateAddress(ip)).toBe(true)
   for (const ip of ['8.8.8.8', '172.32.0.1', '100.64.0.1', undefined])
     expect(isPrivateAddress(ip)).toBe(false)
+})
+
+describe('over Tailscale (HTTPS)', () => {
+  const pairOverTailnet = async () => {
+    const { code } = access.createPairing()
+    const response = await request(`/pair?code=${encodeURIComponent(code)}`, {
+      host: tailnetHost,
+      'user-agent': 'Mozilla/5.0 (iPhone) Safari/604.1',
+    })
+    return { response, cookie: String(response.headers['set-cookie']?.[0] ?? '').split(';')[0]! }
+  }
+
+  it('serves the gateway on the tailnet name and pairs with an HTTPS link', async () => {
+    await access.enable(upstreamPort, 'tailscale')
+    expect(served).toEqual([`serve ${port}`])
+    expect(access.status()).toMatchObject({
+      enabled: true,
+      mode: 'tailscale',
+      url: `https://${tailnetHost}`,
+      addresses: [tailnetHost],
+    })
+    expect(access.createPairing().urls).toEqual([
+      expect.stringMatching(/^https:\/\/mac\.tail1234\.ts\.net:8443\/pair\?code=/),
+    ])
+    const { response, cookie } = await pairOverTailnet()
+    expect(response.status).toBe(302)
+    // A Secure, host-only session cookie, separate from the plain-HTTP one.
+    expect(String(response.headers['set-cookie'])).toMatch(
+      /^__Host-t3m_session=[\w-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,
+    )
+    const forwarded = await request('/api/bootstrap', {
+      host: tailnetHost,
+      cookie,
+      origin: `https://${tailnetHost}`,
+      'tailscale-user-login': 'someone@example.com',
+    })
+    expect(forwarded).toMatchObject({ status: 200, body: 'ok from app' })
+    expect(seen['x-t3-remote']).toBe('1')
+    expect(seen.cookie).toBeUndefined()
+    // Being on the tailnet isn't authentication: Tailscale's identity headers aren't passed on.
+    expect(seen['tailscale-user-login']).toBeUndefined()
+  })
+
+  it('refuses LAN addresses, http origins, and plain-HTTP cookies in this mode', async () => {
+    await access.enable(upstreamPort, 'tailscale')
+    const { cookie } = await pairOverTailnet()
+    expect((await request('/api/bootstrap', { cookie })).status).toBe(403)
+    expect(
+      (
+        await request('/api/bootstrap', {
+          host: tailnetHost,
+          cookie,
+          origin: `http://${tailnetHost}`,
+        })
+      ).status,
+    ).toBe(403)
+    const lanCookie = cookie.replace('__Host-t3m_session', 't3m_session')
+    expect((await request('/api/bootstrap', { host: tailnetHost, cookie: lanCookie })).status).toBe(
+      401,
+    )
+  })
+
+  it('only starts when Tailscale is connected, and cleans up on failure and when switched off', async () => {
+    tailnet = { available: true, running: false, problem: 'Tailscale is not connected.' }
+    await expect(access.enable(upstreamPort, 'tailscale')).rejects.toThrow('not connected')
+    expect(access.enabled).toBe(false)
+    tailnet = { available: true, running: true, dnsName: 'mac.tail1234.ts.net' }
+    serveFails = 'Turn on HTTPS (Serve) for your tailnet first'
+    await expect(access.enable(upstreamPort, 'tailscale')).rejects.toThrow('Turn on HTTPS')
+    expect(access.enabled).toBe(false)
+    serveFails = undefined
+    await access.enable(upstreamPort, 'tailscale')
+    await access.disable()
+    expect(served).toEqual([`serve ${port}`, `stop ${port}`])
+    expect(access.enabled).toBe(false)
+  })
+
+  it('switches back to the local network on request', async () => {
+    await access.enable(upstreamPort, 'tailscale')
+    await access.enable(upstreamPort, 'lan')
+    expect(access.status()).toMatchObject({ mode: 'lan', addresses: ['127.0.0.1'] })
+    expect(access.status().url).toBeUndefined()
+    expect(served).toContain(`stop ${port}`)
+  })
 })

@@ -3,7 +3,6 @@ import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { deepgramParams, dictationKey, maxAudioBytes } from './dictation'
 import { getService } from './service'
-import { remoteHeader } from './remote'
 
 // Live dictation: the browser streams microphone audio over a WebSocket to this server, which
 // relays it to Deepgram's streaming API and sends back only the transcript text. The Deepgram
@@ -19,8 +18,9 @@ const deepgramUrl = (keyterms: string[]) =>
   `wss://api.deepgram.com/v1/listen?${deepgramParams(keyterms, { interim_results: 'true' })}`
 
 // Same rules as the HTTP API (checkRequest): loopback host and same origin only. Browsers always
-// send Origin on WebSockets, so it's required. Paired phones arrive through the phone-access
-// gateway (marked with the remote header) and can't dictate, so they're refused too.
+// send Origin on WebSockets, so it's required. Paired phones reach it through the phone-access
+// gateway, which has already authenticated them and rewritten Host/Origin to the app's own
+// (a phone can only use the microphone over HTTPS, i.e. Tailscale).
 export function allowedUpgrade(request: IncomingMessage) {
   const host = request.headers.host ?? ''
   let url: URL
@@ -32,7 +32,6 @@ export function allowedUpgrade(request: IncomingMessage) {
   return (
     url.pathname === streamPath &&
     ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
-    !request.headers[remoteHeader] &&
     request.headers.origin === `http://${host}`
   )
 }

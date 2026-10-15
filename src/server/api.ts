@@ -6,6 +6,7 @@ import { getModels } from './models'
 import { dirname, join } from 'node:path'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
+import { tailscaleStatus } from './tailscale'
 import {
   clearDictationKey,
   dictationAvailable,
@@ -107,19 +108,25 @@ export async function handleApi(request: Request) {
     if (parts[0] === 'remote') {
       macOnly('Managing phone access')
       const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))
-      if (!parts[1] && request.method === 'GET') return Response.json(access.status())
+      // Status plus whether Tailscale can be used (installed, signed in, its tailnet name).
+      const status = async () => ({ ...access.status(), tailscale: await tailscaleStatus() })
+      if (!parts[1] && request.method === 'GET') return Response.json(await status())
       if (!parts[1] && request.method === 'POST') {
-        const { enabled } = z.object({ enabled: z.boolean() }).parse(await request.json())
+        const { enabled, mode } = z
+          .object({ enabled: z.boolean(), mode: z.enum(['lan', 'tailscale']).default('lan') })
+          .parse(await request.json())
         try {
-          if (enabled) await access.enable(Number(url.port) || 80)
+          if (enabled) await access.enable(Number(url.port) || 80, mode)
           else await access.disable()
-        } catch {
+        } catch (error) {
           throw new HttpError(
             500,
-            `Could not start phone access on port ${access.port}. Is another app using it?`,
+            (error as NodeJS.ErrnoException).code === 'EADDRINUSE' || !(error instanceof Error)
+              ? `Could not start phone access on port ${access.port}. Is another app using it?`
+              : error.message,
           )
         }
-        return Response.json(access.status())
+        return Response.json(await status())
       }
       if (parts[1] === 'pair' && request.method === 'POST') {
         let pairing
@@ -139,7 +146,7 @@ export async function handleApi(request: Request) {
       if (parts[1] === 'devices' && request.method === 'DELETE') {
         const { id } = z.object({ id: z.string().optional() }).parse(await request.json())
         await access.revoke(id)
-        return Response.json(access.status())
+        return Response.json(await status())
       }
     }
     // Provider CLI updates change software on the Mac, so they're never offered to a phone.

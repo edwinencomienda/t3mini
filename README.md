@@ -96,36 +96,40 @@ The key is stored on the Mac in `.data/secrets.json` (owner-only, gitignored) an
 
 Browsers only allow the microphone on secure pages, so the button appears on the Mac (`localhost`) but not over plain-HTTP phone access; use your phone keyboard's dictation there.
 
-## Phone access (local network)
+## Phone access
 
-Use t3 mini from your phone's browser on the same Wi-Fi. It's off by default and **turns off whenever the server restarts**.
+Use t3 mini from your phone's browser, either on the same Wi-Fi (**Local network**) or from anywhere over **Tailscale (HTTPS)**. It's off by default and **turns off whenever the server restarts**.
 
-1. On the Mac, open **Settings → Phone access** and turn on **Allow phones on this network**. A phone icon appears in the sidebar footer while it's on.
+1. On the Mac, open **Settings → Phone access**, pick a **Connection**, and turn on **Allow phones**. A phone icon appears in the sidebar footer while it's on.
 2. Click **Connect a phone** and scan the QR code with the phone's camera. The code works once and expires after 5 minutes.
 3. The phone stays paired for 30 days. Revoke one device or all of them in the same section; revoking cuts open connections immediately.
 
 Phones see the same threads live, and can send, steer, approve, stop, and view changes. Mac-only actions (Browse for a folder, Open in VS Code, managing phone access) are hidden on the phone and refused by the server.
 
-How it works: a gateway listens on port `4311` (set `T3_MINI_PHONE_PORT` to change it) only while phone access is on. It accepts requests only for this Mac's own local-network address, only from private network addresses, only with a paired session cookie (`HttpOnly`, `SameSite=Lax`), and only from its own origin, then forwards them to the loopback-only app marked as remote. Session tokens and pairing codes are stored only as SHA-256 hashes in `.data/devices.json`.
+**Local network** (plain HTTP): a gateway listens on port `4311` (set `T3_MINI_PHONE_PORT` to change it) only while phone access is on. It accepts requests only for this Mac's own local-network address, only from private network addresses, only with a paired session cookie (`HttpOnly`, `SameSite=Lax`), and only from its own origin, then forwards them to the loopback-only app marked as remote. Traffic isn't encrypted, so use it only on a network you trust (such as home Wi-Fi), never on public or shared Wi-Fi: anyone who can watch the traffic could take over a paired session, and with it agents that can run commands on this Mac. macOS may ask once whether to allow incoming connections for `node`.
+
+**Tailscale (HTTPS)**: encrypted, and works from anywhere (cellular included) without opening ports. Install [Tailscale](https://tailscale.com) on the Mac and the phone, sign both in to the same tailnet, and turn on MagicDNS and HTTPS certificates in the Tailscale admin console (if HTTPS isn't on yet, Settings shows the link to enable it). t3 mini then runs `tailscale serve` to publish the gateway at `https://<this Mac>.<tailnet>.ts.net:8443` (set `T3_MINI_TAILSCALE_PORT` to change the port) to **your tailnet only**; it never uses Tailscale Funnel, so nothing is on the public internet. In this mode the gateway listens on loopback only, so nothing is exposed on your Wi-Fi either, and the serve entry is removed when phone access turns off or t3 mini stops. Phones still pair with a QR code: being on the tailnet isn't enough on its own. Over HTTPS the phone can also use the microphone for **dictation** and the clipboard. Set `TAILSCALE_BIN` if the `tailscale` command isn't on your PATH or in `/Applications/Tailscale.app`.
+
+Session tokens and pairing codes are stored only as SHA-256 hashes in `.data/devices.json`. Phones get in-app toasts and sound for finished threads; system notifications on phones would need a home-screen web app with push, which t3 mini doesn't do yet.
 
 Developer details (architecture, security invariants, pitfalls, tests): [docs/phone-access.md](docs/phone-access.md).
-
-**Security:** traffic is plain HTTP, so use this only on a network you trust (such as home Wi-Fi), never on public or shared Wi-Fi. Anyone on the network who can watch traffic could take over a paired session, and with it agents that can run commands on this Mac. Desktop notifications need HTTPS, so phones get in-app toasts and sound only. macOS may ask once whether to allow incoming connections for `node`. An encrypted HTTPS mode over Tailscale is planned (not built yet); the design is in [docs/phone-access.md](docs/phone-access.md#future-https-with-tailscale-not-built-yet).
 
 ## Data and configuration
 
 Conversations are atomically saved to `.data/threads.json`, projects to `.data/projects.json`, and attachments under `.data/attachments/` (all gitignored). Deleting a thread does not delete its attachments. Creating a thread also saves its folder as a project. Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
 
-| Environment variable | Purpose                                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `T3_MINI_DATA_DIR`   | Override the `.data` directory.                                                                                                                |
-| `CODEX_BIN`          | Codex executable path; defaults to `codex` on PATH.                                                                                            |
-| `CLAUDE_BIN`         | Claude Code executable for the SDK, CLI check, and updates; defaults to `claude` on PATH or in `~/.local/bin`, else the SDK's bundled runtime. |
-| `PORT`               | Production server port; defaults to `4310`.                                                                                                    |
-| `VSCODE_BIN`         | Optional `code` executable used by the Open in VS Code button.                                                                                 |
-| `T3_MINI_PHONE_PORT` | Port for phone access on your local network; defaults to `4311`.                                                                               |
-| `DEEPGRAM_API_KEY`   | Deepgram key for dictation; overrides the one saved in Settings.                                                                               |
-| `DEEPGRAM_MODEL`     | Deepgram model for dictation; defaults to `nova-3`.                                                                                            |
+| Environment variable     | Purpose                                                                                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `T3_MINI_DATA_DIR`       | Override the `.data` directory.                                                                                                                |
+| `CODEX_BIN`              | Codex executable path; defaults to `codex` on PATH.                                                                                            |
+| `CLAUDE_BIN`             | Claude Code executable for the SDK, CLI check, and updates; defaults to `claude` on PATH or in `~/.local/bin`, else the SDK's bundled runtime. |
+| `PORT`                   | Production server port; defaults to `4310`.                                                                                                    |
+| `VSCODE_BIN`             | Optional `code` executable used by the Open in VS Code button.                                                                                 |
+| `T3_MINI_PHONE_PORT`     | Port for phone access on your local network; defaults to `4311`.                                                                               |
+| `T3_MINI_TAILSCALE_PORT` | HTTPS port for phone access over Tailscale; defaults to `8443`.                                                                                |
+| `TAILSCALE_BIN`          | Tailscale CLI path; defaults to `tailscale` on PATH, then the one inside `/Applications/Tailscale.app`.                                        |
+| `DEEPGRAM_API_KEY`       | Deepgram key for dictation; overrides the one saved in Settings.                                                                               |
+| `DEEPGRAM_MODEL`         | Deepgram model for dictation; defaults to `nova-3`.                                                                                            |
 
 `bun run dev` and `bun run start` load a `.env` file if present. Use one server process per data directory. Runtime credentials and environment variables are never sent to the browser. Conversations and tool inputs may contain project information, so keep the data directory private.
 

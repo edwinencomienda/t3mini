@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, ShieldAlert, Smartphone, Trash2 } from 'lucide-react'
+import { Lock, RefreshCw, ShieldAlert, Smartphone, Trash2 } from 'lucide-react'
 import { Segmented, Toggle } from './ui'
 
 type Device = { id: string; name: string; createdAt: string; lastSeenAt: string; expiresAt: string }
-type Status = { enabled: boolean; port: number; addresses: string[]; devices: Device[] }
+type Mode = 'lan' | 'tailscale'
+type Status = {
+  enabled: boolean
+  mode: Mode
+  port: number
+  addresses: string[]
+  url?: string
+  devices: Device[]
+  tailscale: { available: boolean; running: boolean; dnsName?: string; problem?: string }
+}
 type Pairing = { expiresAt: string; links: { url: string; qr: string }[] }
 
 async function call<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -24,9 +33,30 @@ const ago = (iso: string) => {
   return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
 }
 
-// Settings section for opening t3 mini to your phone over the local network.
+// Tailscale's "approve Serve/HTTPS" link in an error becomes clickable (only that site).
+function withTailscaleLink(message: string) {
+  const link = message.match(/https:\/\/login\.tailscale\.com\/\S+/)?.[0]
+  if (!link) return message
+  const [before, after] = message.split(link)
+  return (
+    <>
+      {before}
+      <a href={link} target="_blank" rel="noopener noreferrer">
+        Open the Tailscale admin page
+      </a>
+      {after} (then turn Allow phones on again)
+    </>
+  )
+}
+
+// Settings section for opening t3 mini to your phone: over the local network (plain HTTP), or
+// over Tailscale (HTTPS, from anywhere on your tailnet).
 export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void }) {
   const [status, setStatus] = useState<Status | null>(null)
+  // The connection to use: what's running, else Tailscale when it's ready, else the network.
+  const [mode, setMode] = useState<Mode | null>(null)
+  const shownMode: Mode =
+    mode ?? (status?.enabled ? status.mode : status?.tailscale.running ? 'tailscale' : 'lan')
   const [pairing, setPairing] = useState<Pairing | null>(null)
   const [selected, setSelected] = useState(0)
   const [error, setError] = useState('')
@@ -57,13 +87,20 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
       setBusy(false)
     }
   }
-  const toggle = (enabled: boolean) =>
+  const apply = (enabled: boolean, next: Mode = shownMode) =>
     run(async () => {
-      const next = await call<Status>('remote', 'POST', { enabled })
-      setStatus(next)
+      const updated = await call<Status>('remote', 'POST', { enabled, mode: next })
+      setStatus(updated)
       setPairing(null)
-      onChange(next.enabled)
+      onChange(updated.enabled)
     })
+  const choose = (next: Mode) => {
+    setMode(next)
+    // Already on: switch the running gateway over (old QR codes stop working).
+    if (status?.enabled && status.mode !== next) void apply(true, next)
+  }
+  const recheck = () => run(async () => setStatus(await call<Status>('remote')))
+  const tailscaleBlocked = shownMode === 'tailscale' && !status?.tailscale.running
   const newCode = () =>
     run(async () => {
       setPairing(await call<Pairing>('remote/pair', 'POST', {}))
@@ -80,29 +117,71 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
       <h3>Phone access</h3>
       <div className="setting-row">
         <div>
-          <strong>Allow phones on this network</strong>
+          <strong>Connection</strong>
           <small>
-            Use t3 mini from your phone's browser over your local Wi-Fi. Turns off whenever the
-            server restarts.
+            {shownMode === 'tailscale'
+              ? 'Encrypted (HTTPS) and works from anywhere: the phone needs the Tailscale app, signed in to the same tailnet.'
+              : 'Plain HTTP on your local Wi-Fi: the phone must be on the same network.'}
+          </small>
+        </div>
+        <Segmented
+          label="Connection"
+          value={shownMode}
+          onChange={choose}
+          options={[
+            { value: 'lan', label: 'Local network' },
+            { value: 'tailscale', label: 'Tailscale (HTTPS)' },
+          ]}
+        />
+      </div>
+      {tailscaleBlocked && status ? (
+        <p className="phone-note phone-tailscale-problem">
+          <span>{status.tailscale.problem ?? 'Tailscale is not connected.'}</span>
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => void recheck()}
+          >
+            <RefreshCw size={13} />
+            Check again
+          </button>
+        </p>
+      ) : null}
+      <div className="setting-row">
+        <div>
+          <strong>Allow phones</strong>
+          <small>
+            Use t3 mini from your phone's browser. Turns off whenever the server restarts.
           </small>
         </div>
         <Toggle
-          label="Allow phones on this network"
+          label="Allow phones"
           checked={Boolean(status?.enabled)}
-          disabled={!status || busy}
-          onChange={(enabled) => void toggle(enabled)}
+          disabled={!status || busy || (!status.enabled && tailscaleBlocked)}
+          onChange={(enabled) => void apply(enabled)}
         />
       </div>
       {status?.enabled ? (
         <>
-          <p className="phone-warning">
-            <ShieldAlert size={14} />
-            <span>
-              Only on a network you trust, like home Wi-Fi. Traffic isn't encrypted, so anyone on
-              the same network who can see it could take over a paired phone and control agents on
-              this Mac.
-            </span>
-          </p>
+          {status.mode === 'tailscale' ? (
+            <p className="phone-secure">
+              <Lock size={14} />
+              <span>
+                Encrypted, and only devices on your tailnet can reach it: <code>{status.url}</code>.
+                Phones still pair with a code below.
+              </span>
+            </p>
+          ) : (
+            <p className="phone-warning">
+              <ShieldAlert size={14} />
+              <span>
+                Only on a network you trust, like home Wi-Fi. Traffic isn't encrypted, so anyone on
+                the same network who can see it could take over a paired phone and control agents on
+                this Mac. Tailscale (HTTPS) avoids this.
+              </span>
+            </p>
+          )}
           {!status.addresses.length ? (
             <p className="phone-note">No local network address found. Connect to Wi-Fi first.</p>
           ) : pairing && link ? (
@@ -195,7 +274,7 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
           ))}
         </div>
       ) : null}
-      {error ? <p className="phone-error">{error}</p> : null}
+      {error ? <p className="phone-error">{withTailscaleLink(error)}</p> : null}
     </section>
   )
 }
