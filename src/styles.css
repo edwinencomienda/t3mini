@@ -132,7 +132,9 @@ textarea::placeholder {
   outline-offset: 2px;
 }
 code,
-pre,
+pre {
+  font-family: var(--font-mono);
+}
 
 /* Buttons */
 .primary,
