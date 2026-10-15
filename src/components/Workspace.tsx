@@ -61,7 +61,10 @@ import {
   droppedPaths,
   formatPath,
   hasFiles,
+  copyText,
   isAttachableImage,
+  prepareImage,
+  randomId,
   uploadFile,
   type PendingAttachment,
 } from '../attachments'
@@ -591,7 +594,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       // Pasted files (screenshots, copied images) attach from anywhere, including the composer.
       if (files.length && (inComposer || canRedirect(event.target))) {
         event.preventDefault()
-        void handleFilesRef.current(files, [])
+        attachFilesRef.current(files, [])
         return
       }
       if (!canRedirect(event.target)) return
@@ -625,7 +628,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       depth = 0
       setDragging(false)
       if (!canAttach()) return
-      void handleFilesRef.current(
+      attachFilesRef.current(
         [...(event.dataTransfer?.files || [])],
         droppedPaths(event.dataTransfer),
       )
@@ -673,7 +676,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const images = files.filter(isAttachableImage)
     const others = files.filter((file) => !isAttachableImage(file))
     const added = images.map((file) => ({
-      key: crypto.randomUUID(),
+      key: randomId(),
       name: file.name || 'image',
       previewUrl: URL.createObjectURL(file),
       status: 'uploading' as const,
@@ -693,7 +696,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const uploads = images.map(async (file, index) => {
       const item = added[index]!
       try {
-        const uploaded = await uploadFile(file, 'image')
+        const prepared = await prepareImage(file)
+        if (!prepared) throw new Error(`${file.name} couldn't be read as an image.`)
+        const uploaded = await uploadFile(prepared, 'image')
         if (uploaded.kind === 'image') update(item.key, { status: 'ready', id: uploaded.id })
       } catch (error) {
         URL.revokeObjectURL(item.previewUrl)
@@ -727,8 +732,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
     await Promise.all(uploads)
   }
-  const handleFilesRef = useRef(handleFiles)
-  handleFilesRef.current = handleFiles
+  // Every attach path goes through here, so a failure always shows instead of doing nothing.
+  function attachFiles(files: File[], paths: string[]) {
+    handleFiles(files, paths).catch((error: unknown) =>
+      setError(error instanceof Error ? error.message : 'Could not attach these files.'),
+    )
+  }
+  const attachFilesRef = useRef(attachFiles)
+  attachFilesRef.current = attachFiles
   function removePending(key: string) {
     if (!activeId) return
     setPending((current) => ({
@@ -912,7 +923,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setError((error as Error).message)
     }
   }
-  const copyPath = (path: string) => void navigator.clipboard?.writeText(path).catch(() => {})
+  const copyPath = (path: string) => void copyText(path).catch(() => {})
   const committedRename = useRef<typeof renaming>(null)
   async function rename() {
     // Enter commits and unmounts the input, which can also fire blur; save only once.
@@ -1580,17 +1591,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       }}
                       rows={1}
                     />
-                    <input
-                      ref={filePicker}
-                      type="file"
-                      multiple
-                      hidden
-                      onChange={(event) => {
-                        const files = [...(event.target.files || [])]
-                        event.target.value = ''
-                        if (files.length) void handleFiles(files, [])
-                      }}
-                    />
                     <div className="composer-toolbar">
                       <AgentSettingsControls
                         key={thread.id}
@@ -1622,16 +1622,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         }
                       />
                       <div className="composer-actions">
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label="Attach images or files"
+                        {/* The file input covers the button so a tap opens the picker natively;
+                            iOS Safari won't open a hidden input from a script click. */}
+                        <label
+                          className={`icon-button attach-button ${busy ? 'disabled' : ''}`}
                           title="Attach images or files (or paste / drop them)"
-                          disabled={busy}
-                          onClick={() => filePicker.current?.click()}
                         >
                           <Paperclip size={15} />
-                        </button>
+                          <input
+                            ref={filePicker}
+                            type="file"
+                            multiple
+                            aria-label="Attach images or files"
+                            disabled={busy}
+                            onChange={(event) => {
+                              const files = [...(event.target.files || [])]
+                              event.target.value = ''
+                              if (files.length) attachFiles(files, [])
+                            }}
+                          />
+                        </label>
                         {active ? (
                           <button
                             className="stop-button"

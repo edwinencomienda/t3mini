@@ -2137,3 +2137,44 @@ body.resizing {
   font-size: 11.5px;
   color: var(--muted-foreground);
 }
+
+/* Attach button: a real file input stretched over the icon (reliable on iOS). */
+.attach-button {
+  position: relative;
+  /* Keep the invisible input strictly inside the icon so it can't catch taps meant for Send. */
+  overflow: hidden;
+  cursor: pointer;
+}
+.attach-button input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.attach-button:focus-within {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.attach-button.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Touch screens: finger-sized composer buttons with room between them. */
+@media (pointer: coarse) {
+  .composer-actions {
+    gap: 0.6rem;
+  }
+  .composer-actions .icon-button,
+  .send-button,
+  .stop-button {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+  .composer-actions .icon-button svg {
+    width: 18px;
+    height: 18px;
+  }
+}

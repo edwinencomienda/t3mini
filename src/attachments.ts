@@ -1,4 +1,29 @@
 // Client helpers for attaching images and turning dropped files into paths.
+
+// A random id that also works on plain-HTTP network addresses (phone access), where browsers
+// don't provide crypto.randomUUID because the page isn't a secure context.
+export const randomId = () =>
+  [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+
+// Copies text, falling back to a temporary textarea where the Clipboard API isn't available
+// (it needs a secure context, which phone access over HTTP isn't).
+export async function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.append(area)
+  area.select()
+  document.execCommand('copy')
+  area.remove()
+}
 export type PendingAttachment = {
   key: string
   name: string
@@ -7,7 +32,40 @@ export type PendingAttachment = {
   id?: string
 }
 export const imageMimeTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
-export const isAttachableImage = (file: File) => imageMimeTypes.includes(file.type)
+// Any image the browser can decode is attached; formats the server doesn't take (HEIC from
+// iPhones, AVIF, BMP…) are converted on the device first. SVG stays a file (it isn't a photo).
+export const isAttachableImage = (file: File) =>
+  (file.type.startsWith('image/') && file.type !== 'image/svg+xml') ||
+  /\.(heic|heif)$/i.test(file.name)
+
+// Keeps images within what agents accept and quick to upload from a phone: at most 2048px on
+// the long side and about 4 MB (Claude rejects images over ~5 MB). Small PNG/JPEG/GIF/WebP files
+// pass through untouched. Returns null when the browser can't decode the image.
+const maxSide = 2048
+const maxBytes = 4 * 1024 * 1024
+export async function prepareImage(file: File): Promise<File | null> {
+  if (imageMimeTypes.includes(file.type) && file.size <= maxBytes) return file
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    return null
+  }
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  const encode = (type: string, quality?: number) =>
+    new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality))
+  // Screenshots stay PNG when that's small enough; photos become JPEG.
+  let blob = file.type === 'image/png' ? await encode('image/png') : null
+  if (!blob || blob.size > maxBytes) blob = await encode('image/jpeg', 0.85)
+  if (!blob) return null
+  const name = file.name.replace(/\.[^.]+$/, '') + (blob.type === 'image/png' ? '.png' : '.jpg')
+  return new File([blob], name, { type: blob.type })
+}
 
 type Uploaded =
   | { kind: 'image'; id: string; name: string; mimeType: string }
