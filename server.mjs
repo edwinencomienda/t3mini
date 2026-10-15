@@ -62,4 +62,11 @@ const server = createServer(async (incoming, outgoing) => {
     outgoing.end('The server could not complete this request.')
   }
 })
+// Live dictation's WebSocket goes to the handler the app registered (src/server/dictation-stream.ts);
+// there are no other WebSockets in production.
+server.on('upgrade', (request, socket, head) => {
+  const handle = globalThis.t3MiniDictationUpgrade
+  if (request.url?.startsWith('/api/dictation/stream') && handle) handle(request, socket, head)
+  else socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+})
 server.listen(port, '127.0.0.1', () => console.log(`t3 mini → http://localhost:${port}`))

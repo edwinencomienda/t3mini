@@ -80,13 +80,13 @@ This first version runs on one local Node process. It binds to loopback and reje
 
 ## Dictation
 
-The 🎤 button in the composer records your voice and types the transcript at the cursor: click to record, click again to stop (recordings stop on their own after 5 minutes). Transcription uses [Deepgram](https://deepgram.com) (`nova-3` with smart formatting); new Deepgram accounts get free credit, then it's pay-as-you-go.
+The 🎤 button in the composer records your voice and types the transcript at the cursor: click to record, click again to stop (recordings stop on their own after 5 minutes). Transcription is live: while you speak, the words so far appear in the empty composer's placeholder, and when you stop, the final text is inserted at the cursor. A short sound plays when recording starts and stops; turn it off under **Settings → Dictation → Recording sounds**. Transcription uses [Deepgram](https://deepgram.com) (`nova-3` with smart formatting); new Deepgram accounts get free credit, then it's pay-as-you-go.
 
 1. Create an API key at [console.deepgram.com](https://console.deepgram.com).
 2. In t3 mini, open **Settings → Dictation**, paste the key, and click **Save**. The server checks it with Deepgram first.
 3. Optionally pick a **Microphone** in the same tab (after allowing microphone access once, so the browser shows device names). The choice is remembered per browser and falls back to the system default if that microphone is unplugged.
 
-The key is stored on the Mac in `.data/secrets.json` (owner-only, gitignored) and is never sent back to the browser; Settings shows only its last four characters. Alternatively set `DEEPGRAM_API_KEY` in the environment or in a `.env` file (see `.env.example`), which takes priority. The key can only be viewed or changed on the Mac, not from a paired phone. Audio goes from the browser to the t3 mini server and from there to Deepgram, with Deepgram's model-improvement program opted out (`mip_opt_out=true`).
+The key is stored on the Mac in `.data/secrets.json` (owner-only, gitignored) and is never sent back to the browser; Settings shows only its last four characters. Alternatively set `DEEPGRAM_API_KEY` in the environment or in a `.env` file (see `.env.example`), which takes priority. The key can only be viewed or changed on the Mac, not from a paired phone. Audio streams from the browser to the t3 mini server over a local WebSocket (`/api/dictation/stream`, same-origin only) and from there to Deepgram's live API, with Deepgram's model-improvement program opted out (`mip_opt_out=true`). Only the transcript text comes back to the browser. If streaming can't connect, the finished recording is sent to `/api/transcribe` instead, so dictation still works, just without the live preview.
 
 Browsers only allow the microphone on secure pages, so the button appears on the Mac (`localhost`) but not over plain-HTTP phone access; use your phone keyboard's dictation there.
 

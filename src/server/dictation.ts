@@ -37,6 +37,8 @@ const globals = globalThis as typeof globalThis & { t3MiniDeepgramKey?: string }
 const envKey = () => process.env.DEEPGRAM_API_KEY?.trim() || ''
 const currentKey = () => envKey() || globals.t3MiniDeepgramKey || ''
 export const dictationAvailable = () => Boolean(currentKey())
+// For the live-dictation relay (server side only; never send it to the browser).
+export const dictationKey = () => currentKey()
 
 type Secrets = { deepgramApiKey?: string }
 async function readSecrets(path: string): Promise<Secrets> {

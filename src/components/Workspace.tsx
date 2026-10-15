@@ -1188,6 +1188,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
         `${group.path} ${projectName(group.path)}`.toLowerCase().includes(query),
     )
   const active = thread ? isActive(thread.status) : false
+  const composerPlaceholder = !thread
+    ? ''
+    : active
+      ? `${names[thread.provider]} is working… send a message to steer it`
+      : `Chat with ${names[thread.provider]}`
   const folder = thread ? projectName(thread.cwd) : undefined
   const runningCount = threads.filter((item) => isActive(item.status)).length
   const missingClis = bootstrap
@@ -1811,11 +1816,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     <textarea
                       ref={composer}
                       aria-label="Message your agent"
-                      placeholder={
-                        active
-                          ? `${names[thread.provider]} is working… send a message to steer it`
-                          : `Chat with ${names[thread.provider]}`
-                      }
+                      placeholder={composerPlaceholder}
                       defaultValue={draftText.current}
                       onChange={(e) => draftChanged(e.target.value)}
                       onKeyDown={(e) => {
@@ -1894,6 +1895,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               const before =
                                 element?.value.slice(0, element.selectionStart ?? 0) ?? ''
                               insertText((before && !/\s$/.test(before) ? ' ' : '') + text)
+                            }}
+                            // Live words go straight onto the placeholder (no re-render per word).
+                            onPreview={(words) => {
+                              const element = composer.current
+                              if (element) element.placeholder = words || composerPlaceholder
                             }}
                             onError={setError}
                           />

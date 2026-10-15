@@ -1,13 +1,22 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Check, ChevronsUpDown, Mic } from 'lucide-react'
 import { Select } from '@base-ui/react/select'
-import { dictationSupported, loadMicrophone, saveMicrophone } from './Dictation'
+import {
+  dictationSupported,
+  loadDictationSounds,
+  loadMicrophone,
+  saveDictationSounds,
+  saveMicrophone,
+} from './Dictation'
+import { Toggle } from './ui'
+import { playCue } from '../sound'
 
 // Which microphone dictation records from. Browsers only reveal device names after the page
 // has had microphone permission once, so until then this offers to ask.
 function MicrophonePicker() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selected, setSelected] = useState(loadMicrophone)
+  const [sounds, setSounds] = useState(loadDictationSounds)
   const [error, setError] = useState('')
   const refresh = () =>
     navigator.mediaDevices
@@ -101,6 +110,21 @@ function MicrophonePicker() {
             Allow microphone access
           </button>
         )}
+      </div>
+      <div className="setting-row">
+        <div>
+          <strong>Recording sounds</strong>
+          <small>Play a short sound when dictation starts and stops.</small>
+        </div>
+        <Toggle
+          label="Recording sounds"
+          checked={sounds}
+          onChange={(on) => {
+            saveDictationSounds(on)
+            setSounds(on)
+            if (on) playCue('start')
+          }}
+        />
       </div>
       {error ? <p className="phone-error">{error}</p> : null}
     </>

@@ -93,18 +93,32 @@ const voices: Record<SoundName, (audio: AudioContext, output: AudioNode, at: num
   },
 }
 
-export function playSound(name: SoundName = 'chime') {
+// Plays something through a gentle low-pass that takes the edge off the highest overtones.
+function play(voice: (audio: AudioContext, output: AudioNode, at: number) => void) {
   unlockSound()
   if (!context) return
   try {
     if (context.state === 'suspended') void context.resume().catch(() => {})
-    // A gentle low-pass takes the edge off the highest overtones.
     const filter = context.createBiquadFilter()
     filter.type = 'lowpass'
     filter.frequency.value = 3200
     filter.connect(context.destination)
-    voices[name](context, filter, context.currentTime + 0.02)
+    voice(context, filter, context.currentTime + 0.02)
   } catch {
     // Audio is a nice-to-have; ignore devices or browsers that refuse to play.
   }
+}
+
+export function playSound(name: SoundName = 'chime') {
+  play(voices[name])
+}
+
+// Dictation cues: two quick soft notes, rising (E5 → B5) when recording starts and falling when
+// it stops, short enough not to get in the way of speaking.
+export function playCue(kind: 'start' | 'stop') {
+  const [first, second] = kind === 'start' ? [659.25, 987.77] : [987.77, 659.25]
+  play((audio, output, at) => {
+    strike(audio, output, { frequency: first, at, volume: 0.07, decay: 0.12 })
+    strike(audio, output, { frequency: second, at: at + 0.07, volume: 0.07, decay: 0.18 })
+  })
 }

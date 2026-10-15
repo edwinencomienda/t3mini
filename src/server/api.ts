@@ -14,6 +14,11 @@ import {
   saveDictationKey,
   transcribe,
 } from './dictation'
+import { registerDictationStream } from './dictation-stream'
+
+// Live dictation is a WebSocket, which the HTTP servers route to this module (see vite.config.ts
+// and server.mjs).
+registerDictationStream()
 
 // This application launches local agents. Keep every endpoint loopback-only and same-origin.
 export function checkRequest(request: Request) {

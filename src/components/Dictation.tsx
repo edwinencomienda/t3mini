@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, Mic, Square } from 'lucide-react'
+import { playCue } from '../sound'
 
-// Click to record, click again to stop; the audio goes to /api/transcribe (Deepgram on the
-// server) and the text comes back through onText. Browsers only allow the microphone on secure
-// pages, so this isn't offered over plain-HTTP phone access.
+// Click to record, click again to stop. While you speak, the audio streams to the server's
+// /api/dictation/stream WebSocket (relayed to Deepgram's live API) and the words so far come back
+// through onPreview; on stop the final text goes through onText. If streaming can't be used, the
+// whole recording is sent to /api/transcribe instead. Browsers only allow the microphone on
+// secure pages, so this isn't offered over plain-HTTP phone access.
 const maxSeconds = 5 * 60
+// How often the recorder hands over audio while streaming.
+const chunkMs = 250
+// How long to wait for Deepgram's last words after stopping before using the fallback.
+const finishTimeoutMs = 8_000
 const preferredTypes = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -29,6 +36,26 @@ export function saveMicrophone(deviceId: string) {
     // The choice still applies until reload.
   }
 }
+// Start/stop sounds, per browser (on unless turned off in Settings → Dictation).
+const soundsKey = 't3-mini:dictation-sounds'
+export function loadDictationSounds() {
+  try {
+    return localStorage.getItem(soundsKey) !== 'off'
+  } catch {
+    return true
+  }
+}
+export function saveDictationSounds(on: boolean) {
+  try {
+    localStorage.setItem(soundsKey, on ? 'on' : 'off')
+  } catch {
+    // The choice still applies until reload.
+  }
+}
+const cue = (kind: 'start' | 'stop') => {
+  if (loadDictationSounds()) playCue(kind)
+}
+
 // Opens the chosen microphone, falling back to the system default if it's gone (unplugged).
 async function openMicrophone() {
   const deviceId = loadMicrophone()
@@ -57,12 +84,89 @@ function toBase64(blob: Blob) {
   })
 }
 
+// Sends a finished recording in one piece: the fallback when streaming isn't available.
+async function transcribeRecording(audio: Blob) {
+  const response = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mimeType: audio.type, data: await toBase64(audio) }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || 'Dictation failed.')
+  return String(data.text ?? '')
+}
+
+// A live-transcription session over the server's WebSocket relay.
+function openStream(onWords: (text: string) => void) {
+  const socket = new WebSocket(
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/dictation/stream`,
+  )
+  const finals: string[] = []
+  let interim = ''
+  let failed = false
+  const closed = new Promise<void>((resolve) => socket.addEventListener('close', () => resolve()))
+  const words = () => [...finals, interim].filter(Boolean).join(' ')
+  socket.addEventListener('error', () => {
+    failed = true
+  })
+  socket.addEventListener('message', (event) => {
+    let message: { type?: string; text?: string; final?: boolean }
+    try {
+      message = JSON.parse(String(event.data))
+    } catch {
+      return
+    }
+    if (message.type === 'error') failed = true
+    if (message.type !== 'transcript') return
+    if (message.final) {
+      if (message.text) finals.push(message.text)
+      interim = ''
+    } else interim = message.text ?? ''
+    onWords(words())
+  })
+  return {
+    send(chunk: Blob) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(chunk)
+    },
+    // Sends everything recorded so far once connected (the first chunk carries the audio header).
+    onOpen(send: () => void) {
+      socket.addEventListener('open', send)
+    },
+    get ready() {
+      return socket.readyState === WebSocket.OPEN
+    },
+    // Asks for the last words and waits for the server to close; null means "use the fallback".
+    async finish() {
+      if (failed || socket.readyState !== WebSocket.OPEN) {
+        socket.close()
+        return null
+      }
+      socket.send(JSON.stringify({ type: 'stop' }))
+      const timedOut = await Promise.race([
+        closed.then(() => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(true), finishTimeoutMs)),
+      ])
+      if (timedOut || failed) {
+        socket.close()
+        return null
+      }
+      return words().trim()
+    },
+    cancel() {
+      socket.close()
+    },
+  }
+}
+
 export function DictationButton({
   onText,
+  onPreview,
   onError,
   disabled = false,
 }: {
   onText: (text: string) => void
+  // The words so far while recording ('' when done), e.g. for the composer placeholder.
+  onPreview?: (text: string) => void
   onError: (message: string) => void
   disabled?: boolean
 }) {
@@ -72,8 +176,8 @@ export function DictationButton({
   const stream = useRef<MediaStream | null>(null)
   const cancelled = useRef(false)
   // Callbacks change on every render; read the latest when the recording finishes.
-  const handlers = useRef({ onText, onError })
-  handlers.current = { onText, onError }
+  const handlers = useRef({ onText, onPreview, onError })
+  handlers.current = { onText, onPreview, onError }
 
   const release = () => {
     stream.current?.getTracks().forEach((track) => track.stop())
@@ -94,7 +198,8 @@ export function DictationButton({
     return () => clearInterval(timer)
   }, [state])
   useEffect(() => {
-    if (state === 'recording' && seconds >= maxSeconds) recorder.current?.stop()
+    if (state === 'recording' && seconds >= maxSeconds) stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, seconds])
 
   async function start() {
@@ -108,42 +213,57 @@ export function DictationButton({
     }
     const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type))
     const media = new MediaRecorder(stream.current, mimeType ? { mimeType } : undefined)
+    // Every chunk is kept, so the fallback can still send the whole recording.
     const chunks: Blob[] = []
+    const live = openStream((words) => {
+      if (!cancelled.current) handlers.current.onPreview?.(words)
+    })
+    live.onOpen(() => chunks.forEach((chunk) => live.send(chunk)))
     media.ondataavailable = (event) => {
-      if (event.data.size) chunks.push(event.data)
+      if (!event.data.size) return
+      chunks.push(event.data)
+      if (live.ready) live.send(event.data)
     }
     media.onstop = async () => {
       release()
-      if (cancelled.current) return
+      if (cancelled.current) {
+        live.cancel()
+        return
+      }
       const audio = new Blob(chunks, { type: media.mimeType || mimeType || 'audio/webm' })
       if (!audio.size) {
+        live.cancel()
+        handlers.current.onPreview?.('')
         setState('idle')
         return
       }
       setState('transcribing')
       try {
-        const response = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mimeType: audio.type, data: await toBase64(audio) }),
-        })
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(data.error || 'Dictation failed.')
-        if (data.text) handlers.current.onText(data.text)
+        const text = (await live.finish()) ?? (await transcribeRecording(audio))
+        if (cancelled.current) return
+        if (text) handlers.current.onText(text)
         else handlers.current.onError('No speech was heard. Try again a bit closer to the mic.')
       } catch (error) {
         handlers.current.onError(error instanceof Error ? error.message : 'Dictation failed.')
       } finally {
-        if (!cancelled.current) setState('idle')
+        if (!cancelled.current) {
+          handlers.current.onPreview?.('')
+          setState('idle')
+        }
       }
     }
     recorder.current = media
     cancelled.current = false
     setSeconds(0)
-    media.start()
+    cue('start')
+    media.start(chunkMs)
     setState('recording')
   }
-  const stop = () => recorder.current?.stop()
+  function stop() {
+    if (recorder.current?.state !== 'recording') return
+    cue('stop')
+    recorder.current.stop()
+  }
 
   const recording = state === 'recording'
   const label =
