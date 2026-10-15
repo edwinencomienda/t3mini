@@ -146,6 +146,7 @@ export async function handleApi(request: Request) {
           return Response.json(await service.updateSettings(id, await request.json()))
         if (parts[2] === 'send')
           return Response.json(await service.send(id, await request.json()), { status: 202 })
+        if (parts[2] === 'open-editor') return Response.json(await service.openInEditor(id))
         if (parts[2] === 'rename')
           return Response.json(await service.rename(id, await request.json()))
         if (parts[2] === 'stop') return Response.json(await service.stop(id))

@@ -36,6 +36,7 @@ import {
 import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { AgentSettingsControls, Picker, ProviderMark } from './AgentSettingsControls'
+import { VSCodeIcon } from './ProviderIcon'
 import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
 import {
@@ -1289,6 +1290,20 @@ export function Workspace({ threadId }: { threadId?: string }) {
               {thread ? (
                 <>
                   <StatusBadge status={thread.status} />
+                  {bootstrap?.editors?.vscode ? (
+                    <button
+                      className="icon-button"
+                      aria-label="Open project in VS Code"
+                      title={`Open ${folder} in VS Code`}
+                      onClick={() =>
+                        void api(`threads/${thread.id}/open-editor`, 'POST', {}).catch(
+                          (error: Error) => setError(error.message),
+                        )
+                      }
+                    >
+                      <VSCodeIcon size={15} />
+                    </button>
+                  ) : null}
                   {git?.branch ? (
                     <button
                       className={`icon-button ${diffOpen ? 'active' : ''}`}

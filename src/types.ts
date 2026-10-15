@@ -65,6 +65,8 @@ export type Bootstrap = {
   threads: ThreadSummary[]
   projects: ProjectSummary[]
   providers: Record<Provider, ProviderHealth>
+  // Editors found on this machine that a project can be opened in.
+  editors: { vscode: boolean }
   defaultCwd: string
 }
 export const isActive = (status: Status) => ['starting', 'working', 'waiting'].includes(status)

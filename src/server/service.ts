@@ -17,6 +17,7 @@ import {
 import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
 import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
+import { openInVSCode, vscodeAvailable } from './editor'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import type { PromptImage, Runner, Steer } from './providers/types'
@@ -218,11 +219,16 @@ export class AgentService {
         return { installed: false }
       }
     }
-    const [codex, claude] = await Promise.all([check('codex'), check('claude')])
+    const [codex, claude, vscode] = await Promise.all([
+      check('codex'),
+      check('claude'),
+      vscodeAvailable(),
+    ])
     return {
       threads: this.list(),
       projects: this.projects(),
       providers: { codex, claude },
+      editors: { vscode },
       defaultCwd: homedir(),
     }
   }
@@ -709,6 +715,21 @@ export class AgentService {
     } catch {
       return { version: null }
     }
+  }
+  // Opens the thread's own project folder in VS Code (never a client-supplied path).
+  async openInEditor(id: string) {
+    const { cwd } = this.get(id)
+    try {
+      if (!(await stat(cwd)).isDirectory()) throw new Error()
+    } catch {
+      throw new HttpError(400, 'This project folder no longer exists.')
+    }
+    try {
+      await openInVSCode(cwd)
+    } catch {
+      throw new HttpError(500, 'Could not open VS Code. Check that it is installed.')
+    }
+    return { ok: true }
   }
   async rename(id: string, input: unknown) {
     const { title } = z.object({ title: z.string().trim().min(1).max(120) }).parse(input)

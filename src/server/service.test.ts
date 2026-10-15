@@ -460,3 +460,25 @@ describe('stopping and restarting with messages sent mid-turn', () => {
     expect(message?.queued).toBeUndefined()
   })
 })
+it('opens only the thread project folder in VS Code', async () => {
+  const { writeFile, chmod } = await import('node:fs/promises')
+  const script = join(directory, 'fake-code.sh')
+  const log = join(directory, 'opened.txt')
+  // Records the folder it was asked to open; answers --version like the real CLI.
+  await writeFile(
+    script,
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.0; exit 0; fi\nprintf '%s' "$1" > '${log}'\n`,
+  )
+  await chmod(script, 0o755)
+  const previous = process.env.VSCODE_BIN
+  process.env.VSCODE_BIN = script
+  try {
+    const created = await thread()
+    expect((await service.bootstrap()).editors.vscode).toBe(true)
+    await service.openInEditor(created.id)
+    expect(await readFile(log, 'utf8')).toBe(created.cwd)
+  } finally {
+    if (previous === undefined) delete process.env.VSCODE_BIN
+    else process.env.VSCODE_BIN = previous
+  }
+})
