@@ -1602,6 +1602,21 @@ kbd {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
+/* Settings → Agents: the signed-in account line, with a button to show the email. */
+.agent-account {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.agent-account > span {
+  overflow-wrap: anywhere;
+}
+.agent-email-toggle {
+  flex-shrink: 0;
+  width: 1.4rem;
+  height: 1.4rem;
+}
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
 import { tailscaleStatus } from './tailscale'
+import { providerAccount } from './accounts'
 import {
   clearDictationKey,
   dictationAvailable,
@@ -167,6 +168,15 @@ export async function handleApi(request: Request) {
     if (parts[0] === 'folders' && parts[1] === 'pick' && request.method === 'POST') {
       macOnly('Browsing folders')
       return Response.json(await pickProjectFolder(await request.json()))
+    }
+    // Who each agent is signed in as (email and plan), for Settings → Agents.
+    if (parts[0] === 'providers' && parts[1] === 'accounts' && request.method === 'GET') {
+      const refresh = url.searchParams.get('refresh') === '1'
+      const [claude, codex] = await Promise.all([
+        providerAccount('claude', refresh),
+        providerAccount('codex', refresh),
+      ])
+      return Response.json({ claude, codex })
     }
     if (parts[0] === 'models' && request.method === 'GET') {
       const provider = z.enum(['codex', 'claude']).parse(url.searchParams.get('provider'))

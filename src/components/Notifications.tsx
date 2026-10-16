@@ -12,6 +12,8 @@ import {
   Moon,
   ShieldAlert,
   Sun,
+  Eye,
+  EyeOff,
   MessageCircleQuestion,
   X,
 } from 'lucide-react'
@@ -148,6 +150,22 @@ export function NotificationPrompt({
   )
 }
 
+// "Signed in · Claude Team" (or with the email when it's shown), or how to sign in.
+type ProviderAccount = { signedIn: boolean; email?: string; plan?: string; error?: string }
+function accountLine(
+  provider: 'claude' | 'codex',
+  account: ProviderAccount | undefined,
+  showEmail: boolean,
+) {
+  if (!account) return 'Checking account…'
+  if (account.error) return account.error
+  if (!account.signedIn)
+    return `Not signed in. Run ${provider === 'claude' ? '`claude`' : '`codex login`'} in a terminal.`
+  return [account.email && showEmail ? `Signed in as ${account.email}` : 'Signed in', account.plan]
+    .filter(Boolean)
+    .join(' · ')
+}
+
 // Settings is split into tabs so each page stays short. The last tab is remembered while the
 // page is open; Mac-only tabs are hidden on a paired phone.
 type SettingsTab = 'appearance' | 'notifications' | 'dictation' | 'phone' | 'agents'
@@ -182,6 +200,10 @@ export function SettingsDialog({
   onClose: () => void
 }) {
   const [permission, setPermission] = useState<DesktopPermission>(desktopPermission)
+  // Account emails are hidden until you choose to show them (not remembered).
+  const [showEmails, setShowEmails] = useState(false)
+  // Who each agent is signed in as; loaded when the Agents tab opens.
+  const [accounts, setAccounts] = useState<Record<'claude' | 'codex', ProviderAccount> | null>(null)
   async function setDesktop(enabled: boolean) {
     if (!enabled) return onChange({ ...preferences, desktop: false, prompted: true })
     const result = permission === 'granted' ? 'granted' : await requestDesktopPermission()
@@ -196,6 +218,13 @@ export function SettingsDialog({
     lastTab = next
     setTab(next)
   }
+  useEffect(() => {
+    if (tab !== 'agents' || accounts) return
+    fetch('/api/providers/accounts')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => data && setAccounts(data))
+      .catch(() => {})
+  }, [tab, accounts])
   return (
     <Modal className="new-dialog settings-dialog" onClose={onClose}>
       <div className="settings-body">
@@ -339,6 +368,24 @@ export function SettingsDialog({
                               ? health.version || 'CLI installed'
                               : `Install the ${provider} CLI and sign in, then restart the server.`}
                         </small>
+                        {health?.installed ? (
+                          <small className="agent-account">
+                            <span>{accountLine(provider, accounts?.[provider], showEmails)}</span>
+                            {/* Emails stay hidden until asked for (e.g. while screen sharing). */}
+                            {accounts?.[provider]?.email ? (
+                              <button
+                                type="button"
+                                className="icon-button agent-email-toggle"
+                                aria-label={showEmails ? 'Hide email' : 'Show email'}
+                                aria-pressed={showEmails}
+                                title={showEmails ? 'Hide email' : 'Show email'}
+                                onClick={() => setShowEmails((value) => !value)}
+                              >
+                                {showEmails ? <EyeOff size={13} /> : <Eye size={13} />}
+                              </button>
+                            ) : null}
+                          </small>
+                        ) : null}
                       </div>
                       <span
                         className={`cli-status ${health?.installed ? 'ok' : health ? 'missing' : ''}`}

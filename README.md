@@ -35,7 +35,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude
 ```
 
-Claude runs through the Claude Agent SDK using your installed `claude` CLI (`CLAUDE_BIN`, else `claude` on PATH or in `~/.local/bin`), so updating Claude Code updates t3 mini too; without a CLI, the SDK's bundled runtime is used. Both agents use your local provider credentials. The **Settings → Agents** section (a warning icon appears in the sidebar footer when a CLI is missing) reports whether a standalone `claude` / `codex` command is available; it does not verify your login or account limits. Restart the server after installing a CLI or changing environment settings.
+Claude runs through the Claude Agent SDK using your installed `claude` CLI (`CLAUDE_BIN`, else `claude` on PATH or in `~/.local/bin`), so updating Claude Code updates t3 mini too; without a CLI, the SDK's bundled runtime is used. Both agents use your local provider credentials. The **Settings → Agents** section (a warning icon appears in the sidebar footer when a CLI is missing) reports whether a standalone `claude` / `codex` command is available, its version, and the account each agent is signed in with (e.g. “Signed in · Claude Team”, “· ChatGPT Pro 5x”; the email stays hidden until you click the eye button next to it), as the agents themselves report it (Claude's SDK account info, Codex's `account/read`; no AI call, no token read, cached for five minutes). It does not check account limits. Restart the server after installing a CLI or changing environment settings.
 
 ### Agent updates
 
