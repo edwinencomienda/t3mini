@@ -3,10 +3,17 @@ import { showImage } from './show-image'
 import { showDiagram } from './show-diagram'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
+import { browserTools } from './browser'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
 
 // Every tool agents can use. Add new tools here (one file each in this folder).
-export const tools: ToolDefinition<any>[] = [showImage, showDiagram, renameThread, ...processTools]
+export const tools: ToolDefinition<any>[] = [
+  showImage,
+  showDiagram,
+  renameThread,
+  ...processTools,
+  ...browserTools,
+]
 
 // Tools reach Claude through an in-process MCP server named "t3mini", so Claude sees them as
 // mcp__t3mini__<name>.
@@ -19,7 +26,7 @@ export async function runTool(
   definition: ToolDefinition<any>,
   context: ToolContext,
   rawInput: unknown,
-): Promise<{ ok: boolean; text: string }> {
+): Promise<{ ok: boolean; text: string; image?: { data: string; mimeType: string } }> {
   const input = z.object(definition.input).safeParse(rawInput ?? {})
   if (!input.success)
     return {
@@ -27,7 +34,15 @@ export async function runTool(
       text: `Invalid input for ${definition.name}: ${input.error.issues.map((issue) => `${issue.path.join('.') || 'input'} ${issue.message}`).join('; ')}`,
     }
   try {
-    return { ok: true, text: await definition.run(context, input.data) }
+    const result = await definition.run(context, input.data)
+    if (typeof result === 'string') return { ok: true, text: result }
+    return {
+      ok: true,
+      text: result.text,
+      ...(result.image
+        ? { image: { data: result.image.data.toString('base64'), mimeType: result.image.mimeType } }
+        : {}),
+    }
   } catch (error) {
     return {
       ok: false,

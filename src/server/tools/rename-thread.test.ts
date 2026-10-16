@@ -9,6 +9,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   attach: vi.fn(),
   saveImage: vi.fn(),
   processes: {} as never,
+  browser: {} as never,
   rename,
 })
 

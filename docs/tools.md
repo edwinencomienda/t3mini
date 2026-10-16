@@ -14,6 +14,7 @@ src/server/tools/
   show-diagram.ts  the show_diagram tool
   rename-thread.ts  the rename_thread tool
   processes.ts   the process tools (start_process…)
+  browser.ts     the browser tools (browser_open…, see docs/browser.md)
   index.ts       the registry: every tool, plus Claude naming helpers
 src/blocks.ts    Block types: rich content tools add to replies (shared with the client)
 src/diagrams.ts  Mermaid diagram type detection (shared by show_diagram and the client)

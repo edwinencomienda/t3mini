@@ -33,6 +33,7 @@ function context(prompt: string): ProviderContext {
       attach: vi.fn(),
       saveImage: vi.fn(),
       processes: {} as never,
+      browser: {} as never,
       rename: vi.fn(),
     },
     signal: new AbortController().signal,
@@ -170,6 +171,17 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'process_logs',
     'stop_process',
     'restart_process',
+    'browser_open',
+    'browser_snapshot',
+    'browser_click',
+    'browser_type',
+    'browser_press',
+    'browser_scroll',
+    'browser_screenshot',
+    'browser_console',
+    'browser_resize',
+    'browser_theme',
+    'browser_close',
   ])
   expect(started.thread.dynamicTools).toContainEqual(
     expect.objectContaining({
@@ -207,6 +219,7 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
       attach: vi.fn(),
       saveImage: vi.fn(async () => ({ id: 'saved.png' })),
       processes: {} as never,
+      browser: {} as never,
       rename: vi.fn(),
     }
     await runCodex(ctx)
@@ -252,6 +265,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'gen.png' })),
     processes: {} as never,
+    browser: {} as never,
     rename: vi.fn(),
   }
   await runCodex(ctx)
@@ -267,6 +281,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'x.png' })),
     processes: {} as never,
+    browser: {} as never,
     rename: vi.fn(),
   }
   await runCodex(outside)

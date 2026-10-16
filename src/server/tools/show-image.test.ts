@@ -28,6 +28,7 @@ beforeEach(async () => {
     attach,
     saveImage: (bytes) => uploads.saveImage(bytes),
     processes: {} as never,
+    browser: {} as never,
     rename: vi.fn(),
   }
 })

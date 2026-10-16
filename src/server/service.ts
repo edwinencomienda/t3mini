@@ -35,6 +35,7 @@ const noTitles: TitleWriter = {
   codex: async () => undefined,
   nameCodexThread: async () => {},
 }
+import { BrowserManager } from './browser'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
@@ -172,6 +173,8 @@ export class AgentService {
     readonly processes = new ProcessManager(),
     // Writes AI titles. Off unless given (tests never call a model); the app passes the real one.
     readonly titles: TitleWriter = noTitles,
+    // The agents' browser sessions (browser_* tools); nothing starts until a tool uses it.
+    readonly browsers = new BrowserManager(),
   ) {
     // Process status changes (started, URL found, exited) go out with the live updates.
     processes.subscribe(() => this.notify())
@@ -351,6 +354,7 @@ export class AgentService {
         for (const thread of owned) this.store.threads.set(thread.id, thread)
         throw new HttpError(500, 'Could not delete the project’s threads.')
       }
+      for (const thread of owned) void this.browsers.close(thread.id)
     }
     if (project) {
       this.projectStore.projects.delete(path)
@@ -760,6 +764,12 @@ export class AgentService {
       tools: {
         cwd: thread.cwd,
         processes: projectProcesses(this.processes, thread),
+        browser: {
+          page: () => this.browsers.page(thread.id),
+          openPage: () => this.browsers.openPage(thread.id),
+          takeLog: () => this.browsers.takeLog(thread.id),
+          close: () => this.browsers.close(thread.id),
+        },
         saveImage: (bytes) => this.uploads.saveImage(bytes),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
@@ -968,6 +978,7 @@ export class AgentService {
   async close() {
     await Promise.all([...this.runs.keys()].map((id) => this.stop(id)))
     await this.processes.stopAll()
+    await this.browsers.closeAll()
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = undefined
@@ -1253,6 +1264,7 @@ export class AgentService {
       throw new HttpError(500, 'Could not delete the thread.')
     }
     await this.keepProjectPlace(thread)
+    void this.browsers.close(id)
     this.notify()
     return { ok: true }
   }

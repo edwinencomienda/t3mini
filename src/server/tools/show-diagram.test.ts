@@ -12,6 +12,7 @@ const context = () => {
     attach,
     saveImage: vi.fn(),
     processes: {} as never,
+    browser: {} as never,
     rename: vi.fn(),
   }
   return { attach, value }

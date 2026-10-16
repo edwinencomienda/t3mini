@@ -130,7 +130,22 @@ export const runClaude: Runner = async (ctx) => {
         async (input) => {
           // Refusals (bad path, wrong file type…) go back to Claude as a readable error.
           const result = await runTool(definition, ctx.tools, input)
-          return { content: [{ type: 'text', text: result.text }], isError: !result.ok }
+          return {
+            content: [
+              { type: 'text' as const, text: result.text },
+              // A screenshot the agent asked for, so it can see the page.
+              ...(result.image
+                ? [
+                    {
+                      type: 'image' as const,
+                      data: result.image.data,
+                      mimeType: result.image.mimeType,
+                    },
+                  ]
+                : []),
+            ],
+            isError: !result.ok,
+          }
         },
         // Load up front, so Claude can call it directly instead of searching for it first.
         { alwaysLoad: true },

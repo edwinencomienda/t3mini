@@ -1,6 +1,18 @@
 import type { z } from 'zod'
 import type { Block } from '../../blocks'
+import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
+
+// A thread's own browser session (see ../browser.ts): one private page, local sites only.
+export type ThreadBrowser = {
+  // The page, opening the browser if needed.
+  page: () => Promise<Page>
+  // The page if it's already open.
+  openPage: () => Promise<Page | undefined>
+  // Errors, failed requests, dialogs, and blocked addresses since the last look.
+  takeLog: () => Promise<{ kind: string; text: string }[]>
+  close: () => Promise<void>
+}
 
 // A thread's view of the process manager: only its own project's processes.
 export type ProjectProcesses = {
@@ -27,7 +39,12 @@ export type ToolContext = {
   processes: ProjectProcesses
   // Renames this thread (never another one) and returns the saved title.
   rename: (title: string) => Promise<string>
+  // This thread's browser (browser_* tools).
+  browser: ThreadBrowser
 }
+// What a tool returns: text for the agent, optionally with an image it can look at (a
+// browser screenshot). The image goes to the agent only; showing it in the chat is attach().
+export type ToolResult = string | { text: string; image?: { data: Buffer; mimeType: string } }
 
 export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   name: string
@@ -41,7 +58,7 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   // The work-log summary for a call, e.g. the file name.
   summarize?: (input: z.infer<z.ZodObject<Shape>>) => string | undefined
   // Returns a short message for the agent. Throw ToolError for a clear refusal.
-  run: (context: ToolContext, input: z.infer<z.ZodObject<Shape>>) => Promise<string>
+  run: (context: ToolContext, input: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>
 }
 
 export class ToolError extends Error {

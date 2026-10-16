@@ -20,6 +20,7 @@
     "dompurify": "3.4.16",
     "lucide-react": "latest",
     "mermaid": "12.2.0",
+    "playwright-core": "1.63.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

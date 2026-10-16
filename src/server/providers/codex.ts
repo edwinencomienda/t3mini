@@ -124,8 +124,20 @@ export const runCodex: Runner = async (ctx) => {
   // Answers Codex's item/tool/call with the same runner the Claude adapter uses. Tools marked
   // 'approval' go through Allow once / Decline first.
   async function callTool(id: string | number, params: Record<string, unknown>) {
-    const reply = (success: boolean, text: string) =>
-      client.send({ id, result: { success, contentItems: [{ type: 'inputText', text }] } })
+    const reply = (success: boolean, text: string, image?: { data: string; mimeType: string }) =>
+      client.send({
+        id,
+        result: {
+          success,
+          contentItems: [
+            { type: 'inputText', text },
+            // A screenshot the agent asked for, so it can see the page.
+            ...(image
+              ? [{ type: 'inputImage', imageUrl: `data:${image.mimeType};base64,${image.data}` }]
+              : []),
+          ],
+        },
+      })
     const definition = findTool(string(params.tool))
     if (!definition) return reply(false, `Unknown tool: ${string(params.tool) || '(none)'}.`)
     // 'approval' tools ask first, unless the thread runs with full access (no prompts).
@@ -140,7 +152,7 @@ export const runCodex: Runner = async (ctx) => {
       if (!allowed) return reply(false, 'The user declined this tool request.')
     }
     const result = await runTool(definition, ctx.tools, params.arguments)
-    reply(result.ok, result.text)
+    reply(result.ok, result.text, result.image)
   }
   // Images Codex generates itself arrive as an imageGeneration item with the image data
   // (base64) and/or the file Codex saved under ~/.codex/generated_images. Only that folder is
