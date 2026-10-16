@@ -88,6 +88,30 @@ describe('buildTurns', () => {
     expect(kinds(turn!.work)).toEqual(['n1', 'step:old1', 'step:old2'])
   })
 
+  it('moves images from folded notes onto the final answer', () => {
+    const image = (id: string) => ({ type: 'image' as const, id })
+    const [turn] = buildTurns({
+      messages: [
+        user('q', 0),
+        { ...reply('n1', 3), blocks: [image('one'), image('two')] },
+        reply('n2', 5),
+        { ...reply('final', 9), blocks: [image('three')] },
+      ],
+      activities: [],
+      status: 'completed',
+      completedAt: at(10),
+    })
+    expect(turn!.answer?.id).toBe('final')
+    expect(turn!.blocks.map((block) => block.id)).toEqual(['one', 'two'])
+    // While the turn runs, images stay where they are.
+    const [live] = buildTurns({
+      messages: [user('q', 0), { ...reply('n1', 3), blocks: [image('one')] }],
+      activities: [],
+      status: 'working',
+    })
+    expect(live!.blocks).toEqual([])
+  })
+
   it('says when a run stopped or failed', () => {
     const [turn] = buildTurns({
       messages: [user('q', 0), reply('n1', 3), reply('partial', 70)],

@@ -1,3 +1,4 @@
+import type { Block } from './blocks'
 import type { Activity, Message, Status } from './types'
 
 // How a thread's conversation is laid out, one turn at a time: your message, the agent's work
@@ -6,6 +7,8 @@ import type { Activity, Message, Status } from './types'
 // - A finished turn folds its work into one line ("Worked for 2m · 12 steps"), leaving your
 //   message and the final answer in view.
 // Steps are only kept for the latest run, so older turns fold just their notes.
+// Images the agent showed you along the way are results, not working detail: when a turn
+// folds, they move from its notes to the final answer, so they stay in view.
 
 export type WorkItem =
   { kind: 'note'; message: Message; at: string } | { kind: 'step'; activity: Activity; at: string }
@@ -18,6 +21,8 @@ export type Turn = {
   work: WorkItem[]
   // The agent's last message, once the turn has finished.
   answer?: Message
+  // Images (and other tool content) from the folded notes, shown with the answer.
+  blocks: Block[]
   done: boolean
   steps: number
   // For the fold line: when the turn started and finished.
@@ -43,6 +48,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
         key: message.id,
         ...(message.role === 'user' ? { user: message } : {}),
         work: [],
+        blocks: [],
         done: true,
         steps: 0,
         ...(message.role === 'user' ? { startedAt: message.createdAt } : {}),
@@ -51,7 +57,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
       turns.at(-1)!.work.push({ kind: 'note', message, at: message.createdAt })
   }
   if (!turns.length && thread.activities.length)
-    turns.push({ key: 'work', work: [], done: true, steps: 0 })
+    turns.push({ key: 'work', work: [], blocks: [], done: true, steps: 0 })
   if (!turns.length) return turns
 
   // The turn the current run belongs to: the one started by your latest message that was sent
@@ -91,6 +97,9 @@ export function buildTurns(thread: ThreadState): Turn[] {
         turn.answer = last.message
         turn.work = turn.work.filter((item) => item !== last)
       }
+      turn.blocks = turn.work.flatMap((item) =>
+        item.kind === 'note' ? (item.message.blocks ?? []) : [],
+      )
     }
     const notes = turn.work.filter((item) => item.kind === 'note')
     turn.endedAt =

@@ -73,6 +73,7 @@ import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ProviderUpdates } from './ProviderUpdates'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
+import type { Block } from '../blocks'
 import { ProcessIndicator } from './Processes'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
@@ -227,7 +228,17 @@ const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }
 // content rather than identity; unchanged messages skip rendering entirely.
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
-  function MessageView({ message, meta = true }: { message: Message; meta?: boolean }) {
+  // blocks: tool content to show instead of the message's own (a finished turn gathers its
+  // images onto the final answer, and its folded notes show none).
+  function MessageView({
+    message,
+    meta = true,
+    blocks = message.blocks,
+  }: {
+    message: Message
+    meta?: boolean
+    blocks?: Block[]
+  }) {
     return (
       <article className={`message ${message.role}`}>
         {message.role === 'user' ? (
@@ -276,7 +287,7 @@ const MessageView = memo(
               </div>
             ) : null}
             {/* Images and other content added by tools during this reply. */}
-            {message.blocks?.length ? <Blocks blocks={message.blocks} /> : null}
+            {blocks?.length ? <Blocks blocks={blocks} /> : null}
           </>
         )}
         {/* Shown on hover (always on touch screens), like Claude Desktop: the time and a copy
@@ -309,7 +320,8 @@ const MessageView = memo(
     before.message.unsent === after.message.unsent &&
     before.message.createdAt === after.message.createdAt &&
     (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
-    (before.message.blocks?.length ?? 0) === (after.message.blocks?.length ?? 0),
+    (before.blocks ?? before.message.blocks)?.length ===
+      (after.blocks ?? after.message.blocks)?.length,
 )
 // "1 thread", "3 threads".
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -1624,11 +1636,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .reverse()
         .find((item) => item.status === 'running' && !item.agent)
     : undefined
-  const workList = (items: WorkItem[]) => (
+  // In a finished turn the notes' images live with the answer, so notes show just their text.
+  const workList = (items: WorkItem[], folded = false) => (
     <div className="work">
       {items.map((item) =>
         item.kind === 'note' ? (
-          <MessageView key={item.message.id} message={item.message} meta={false} />
+          folded && !item.message.text.trim() ? null : (
+            <MessageView
+              key={item.message.id}
+              message={item.message}
+              meta={false}
+              {...(folded ? { blocks: [] } : {})}
+            />
+          )
         ) : item.activity === liveStep ? null : (
           <StepRow key={item.activity.id} step={item.activity} />
         ),
@@ -2172,12 +2192,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               </span>
                               <ChevronRight size={13} className="chevron" />
                             </button>
-                            {openTurns.has(turn.key) ? workList(turn.work) : null}
+                            {openTurns.has(turn.key) ? workList(turn.work, true) : null}
                           </div>
                         ) : !turn.done && turn.work.length ? (
                           workList(turn.work)
                         ) : null}
-                        {turn.answer ? <MessageView message={turn.answer} /> : null}
+                        {turn.answer ? (
+                          <MessageView
+                            message={turn.answer}
+                            blocks={[...turn.blocks, ...(turn.answer.blocks ?? [])]}
+                          />
+                        ) : null}
                       </div>
                     ))}
                     {thread.approvals.map((approval) =>
