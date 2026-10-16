@@ -1109,6 +1109,48 @@ export function Workspace({ threadId }: { threadId?: string }) {
     void navigate({ to: '/threads/$threadId', params: { threadId: id } })
   }
   openThread.current = select
+  // After you send a message or start a thread, that thread moves to the top of the sidebar
+  // (it's sorted by your latest message). Bring it into view there even if the list was
+  // scrolled down. The reorder can arrive a moment later from the server, so it's watched
+  // for a few seconds; a list you scroll yourself in the meantime is left alone.
+  const threadList = useRef<HTMLElement>(null)
+  const reveal = useRef<{ id: string; until: number } | null>(null)
+  function revealThread(id: string) {
+    reveal.current = { id, until: Date.now() + 3000 }
+    revealNow()
+  }
+  function revealNow() {
+    const target = reveal.current
+    const list = threadList.current
+    if (!target || !list) return
+    if (Date.now() > target.until) {
+      reveal.current = null
+      return
+    }
+    const row = list.querySelector<HTMLElement>(`[data-thread-id="${CSS.escape(target.id)}"]`)
+    const group = row?.closest<HTMLElement>('.project')
+    if (!row || !group) return
+    const view = list.getBoundingClientRect()
+    const top = group.getBoundingClientRect().top - view.top + list.scrollTop
+    const bottom = row.getBoundingClientRect().bottom - view.top + list.scrollTop
+    // Show the project's header and the row; the first project scrolls all the way up.
+    const padding = 8
+    if (top - padding < list.scrollTop || bottom + padding > list.scrollTop + list.clientHeight)
+      list.scrollTo({ top: Math.max(0, top - padding), behavior: 'smooth' })
+  }
+  useLayoutEffect(revealNow, [threads, projects])
+  useEffect(() => {
+    // Scrolling the list yourself (wheel, touch, keys) cancels a pending reveal.
+    const list = threadList.current
+    if (!list) return
+    const stop = () => (reveal.current = null)
+    list.addEventListener('wheel', stop, { passive: true })
+    list.addEventListener('touchmove', stop, { passive: true })
+    return () => {
+      list.removeEventListener('wheel', stop)
+      list.removeEventListener('touchmove', stop)
+    }
+  }, [])
   useEffect(() => {
     setDraft(activeId ? drafts.current.get(activeId) || '' : '')
     stickToBottom.current = true
@@ -1145,6 +1187,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       })
       setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
       select(created.id)
+      revealThread(created.id)
     } catch (error) {
       setError((error as Error).message)
     } finally {
@@ -1220,6 +1263,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         text,
         attachments: attached.map((item) => ({ id: item.id, name: item.name })),
       })
+      revealThread(activeId)
       recalled.current = null
       setEditing(null)
       if (selectedId.current === activeId) setDraft('')
@@ -1711,7 +1755,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             })()}
           </div>
         ) : null}
-        <nav className="thread-list" aria-label="Threads">
+        <nav className="thread-list" aria-label="Threads" ref={threadList}>
           {groups.map(({ path: cwd, items }) => (
             <section className="project" key={cwd}>
               <div
@@ -1817,6 +1861,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             <Link
                               to="/threads/$threadId"
                               params={{ threadId: item.id }}
+                              data-thread-id={item.id}
                               className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
                               aria-selected={picked.size ? picked.has(item.id) : undefined}
                               onClick={(event) => {
@@ -2673,6 +2718,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             setNewThreadProject(null)
             setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
             select(created.id)
+            revealThread(created.id)
           }}
         />
       ) : null}
