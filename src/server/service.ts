@@ -92,6 +92,13 @@ const summary = (thread: Thread): ThreadSummary => ({
   status: thread.status,
   updatedAt: thread.updatedAt,
   lastMessageAt: lastMessageAt(thread),
+  ...(thread.status === 'waiting'
+    ? {
+        waitingFor: thread.approvals.some((item) => item.questions?.length)
+          ? ('question' as const)
+          : ('approval' as const),
+      }
+    : {}),
 })
 // What a thread's tools may do with processes: only its own project's, started inside it.
 function projectProcesses(manager: ProcessManager, thread: Thread) {

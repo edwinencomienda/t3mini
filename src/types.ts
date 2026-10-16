@@ -96,6 +96,8 @@ export type ThreadSummary = Pick<
   // When you last sent a message (or created the thread). The sidebar sorts by this, so
   // streaming agents don't keep reshuffling the list.
   lastMessageAt: string
+  // While waiting: on a yes/no approval, or on answers to the agent's question.
+  waitingFor?: 'approval' | 'question'
 }
 // A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
 // name: shown instead of the folder name; renaming never touches the folder on disk.

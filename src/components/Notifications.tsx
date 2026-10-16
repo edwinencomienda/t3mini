@@ -12,6 +12,7 @@ import {
   Moon,
   ShieldAlert,
   Sun,
+  MessageCircleQuestion,
   X,
 } from 'lucide-react'
 import { themeLabels, themes, type Theme } from '../theme'
@@ -24,7 +25,7 @@ import { Tabs } from '@base-ui/react/tabs'
 import { DictationSettings } from './DictationSettings'
 import {
   desktopPermission,
-  eventText,
+  eventLabel,
   requestDesktopPermission,
   type DesktopPermission,
   type NotificationPreferences,
@@ -70,11 +71,17 @@ function Toast({
       onMouseLeave={() => setPaused(false)}
     >
       <button className="toast-body" onClick={onOpen}>
-        <span className="toast-icon">{icons[event.kind]}</span>
+        <span className="toast-icon">
+          {event.kind === 'waiting' && event.thread.waitingFor === 'question' ? (
+            <MessageCircleQuestion size={16} />
+          ) : (
+            icons[event.kind]
+          )}
+        </span>
         <span className="toast-text">
           <strong>{event.thread.title}</strong>
           <small>
-            {project} · {agentNames[event.thread.provider]} {eventText[event.kind].toLowerCase()}
+            {project} · {agentNames[event.thread.provider]} {eventLabel(event).toLowerCase()}
           </small>
         </span>
       </button>

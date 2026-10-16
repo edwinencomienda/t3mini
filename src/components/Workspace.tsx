@@ -52,7 +52,7 @@ import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
 import {
   desktopPermission,
-  eventText,
+  eventLabel,
   forgetTab,
   isNotifyingTab,
   loadNotificationPreferences,
@@ -773,7 +773,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         try {
           // e.g. "t3-mini · Claude finished", with the thread's title underneath.
           const notification = new Notification(
-            `${projectLabel(projects, event.thread.cwd)} · ${names[event.thread.provider]} ${eventText[event.kind].toLowerCase()}`,
+            `${projectLabel(projects, event.thread.cwd)} · ${names[event.thread.provider]} ${eventLabel(event).toLowerCase()}`,
             { body: event.thread.title, tag: event.thread.id },
           )
           notification.onclick = () => {
@@ -1652,7 +1652,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           <span className="thread-title">{item.title}</span>
                           <span className="thread-time">
                             {item.status === 'waiting'
-                              ? 'Approval'
+                              ? item.waitingFor === 'question'
+                                ? 'Question'
+                                : 'Approval'
                               : relativeTime(item.updatedAt, now)}
                           </span>
                         </Link>

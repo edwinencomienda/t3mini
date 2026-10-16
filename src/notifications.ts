@@ -32,6 +32,12 @@ export const eventText: Record<ThreadEvent['kind'], string> = {
   interrupted: 'Stopped',
   waiting: 'Needs your approval',
 }
+// What happened, for toasts and notifications: a wait on the agent's question reads
+// "Has a question" rather than "Needs your approval".
+export const eventLabel = (event: ThreadEvent) =>
+  event.kind === 'waiting' && event.thread.waitingFor === 'question'
+    ? 'Has a question'
+    : eventText[event.kind]
 
 // Compares two snapshots of the thread list and reports threads that just finished a turn or
 // started waiting for approval. Threads seen for the first time are never reported, so loading

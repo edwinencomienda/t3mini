@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { notifyingTab, tabStaleMs, threadEvents } from './notifications'
+import { eventLabel, notifyingTab, tabStaleMs, threadEvents } from './notifications'
 import type { Status, ThreadSummary } from './types'
 
 const summary = (id: string, status: Status): ThreadSummary => ({
@@ -82,4 +82,18 @@ describe('notifyingTab', () => {
   it('has no answer without tabs, so each tab decides alone', () => {
     expect(notifyingTab({}, now)).toBeUndefined()
   })
+})
+
+it('says a thread has a question when it waits on one, else that it needs approval', () => {
+  const waiting = (waitingFor?: 'approval' | 'question') => ({
+    key: 'k',
+    kind: 'waiting' as const,
+    thread: { ...summary('a', 'waiting'), ...(waitingFor ? { waitingFor } : {}) },
+  })
+  expect(eventLabel(waiting('question'))).toBe('Has a question')
+  expect(eventLabel(waiting('approval'))).toBe('Needs your approval')
+  expect(eventLabel(waiting())).toBe('Needs your approval')
+  expect(eventLabel({ key: 'k', kind: 'completed', thread: summary('a', 'completed') })).toBe(
+    'Finished',
+  )
 })
