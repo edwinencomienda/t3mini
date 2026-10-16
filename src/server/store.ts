@@ -65,6 +65,9 @@ export class ProjectStore {
             path: project.path,
             addedAt: project.addedAt,
             ...(typeof project.name === 'string' && project.name ? { name: project.name } : {}),
+            ...(typeof project.lastActiveAt === 'string'
+              ? { lastActiveAt: project.lastActiveAt }
+              : {}),
           })
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error

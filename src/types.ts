@@ -146,7 +146,9 @@ export type MessageMatch = {
 }
 // A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
 // name: shown instead of the folder name; renaming never touches the folder on disk.
-export type Project = { path: string; addedAt: string; name?: string }
+// lastActiveAt: your latest message in a thread you've since deleted, so deleting threads
+// doesn't move the project down the sidebar.
+export type Project = { path: string; addedAt: string; name?: string; lastActiveAt?: string }
 export type ProjectSummary = {
   path: string
   name?: string

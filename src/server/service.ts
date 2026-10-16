@@ -197,7 +197,10 @@ export class AgentService {
       projects.set(project.path, {
         path: project.path,
         ...(project.name ? { name: project.name } : {}),
-        lastActiveAt: project.addedAt,
+        lastActiveAt:
+          project.lastActiveAt && project.lastActiveAt > project.addedAt
+            ? project.lastActiveAt
+            : project.addedAt,
         threadCount: 0,
       })
     for (const thread of this.store.threads.values()) {
@@ -212,6 +215,19 @@ export class AgentService {
       projects.set(thread.cwd, project)
     }
     return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+  }
+  // A saved project keeps its place in the sidebar after its threads are deleted: it remembers
+  // the deleted thread's latest message as its own last activity. Best effort.
+  private async keepProjectPlace(thread: Thread) {
+    const project = this.projectStore.projects.get(thread.cwd)
+    const sentAt = lastMessageAt(thread)
+    if (!project || sentAt <= (project.lastActiveAt ?? project.addedAt)) return
+    project.lastActiveAt = sentAt
+    try {
+      await this.projectStore.save()
+    } catch {
+      // Kept in memory until the next save; only the order is at stake.
+    }
   }
   async addProject(input: unknown) {
     const path = await resolveFolder(projectSchema.parse(input).path)
@@ -1221,6 +1237,7 @@ export class AgentService {
       this.store.threads.set(id, thread)
       throw new HttpError(500, 'Could not delete the thread.')
     }
+    await this.keepProjectPlace(thread)
     this.notify()
     return { ok: true }
   }

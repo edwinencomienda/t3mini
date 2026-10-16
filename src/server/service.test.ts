@@ -291,6 +291,29 @@ it('searches conversations for the command palette, one excerpt per thread', asy
   expect(() => service.searchMessages('a')).toThrow()
   expect(() => service.searchMessages('x'.repeat(201))).toThrow()
 })
+it('keeps a project’s place in the sidebar after its threads are deleted', async () => {
+  const { mkdir, realpath } = await import('node:fs/promises')
+  await mkdir(join(directory, 'older'))
+  await mkdir(join(directory, 'newer'))
+  const older = await realpath(join(directory, 'older'))
+  const newer = await realpath(join(directory, 'newer'))
+  await service.addProject({ path: older })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await service.addProject({ path: newer })
+  // Working in the older project moves it to the top…
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const created = await service.create({ provider: 'codex', cwd: older })
+  await service.send(created.id, { text: 'Hello' })
+  await started
+  await settle(created.id, finish)
+  expect(service.projects().map((project) => project.path)).toEqual([older, newer])
+  // …and deleting its only thread doesn't send it back down, even after a restart.
+  await service.remove(created.id)
+  expect(service.projects().map((project) => project.path)).toEqual([older, newer])
+  const store = new ProjectStore(join(directory, 'projects.json'))
+  await store.load()
+  expect(store.projects.get(older)?.lastActiveAt).toBeTruthy()
+})
 it('renames a project label without touching its folder, and resets it with an empty name', async () => {
   const created = await thread()
   const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })
