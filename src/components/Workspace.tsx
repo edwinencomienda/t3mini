@@ -376,8 +376,16 @@ async function api<T>(
   return data as T
 }
 function StatusDot({ status, unread = false }: { status: Status; unread?: boolean }) {
+  // Working: the same pulsing dots as the live line at the bottom of the chat.
   if (status === 'starting' || status === 'working')
-    return <LoaderCircle size={12} className="status-spinner" aria-label={labels[status]} />
+    return (
+      <span className="live-dots status-working" role="img" aria-label={labels[status]}>
+        <span />
+        <span />
+        <span />
+        <span />
+      </span>
+    )
   if (unread && status !== 'waiting')
     return (
       <span

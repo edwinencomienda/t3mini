@@ -1054,6 +1054,13 @@ kbd {
 .live-dots span:nth-child(3) {
   animation-delay: 0.9s;
 }
+/* The same dots as a thread's working mark (sidebar, palette, header), in the 12px slot. */
+.status-working {
+  width: 12px;
+  grid-template-columns: repeat(2, 4px);
+  gap: 3px;
+  justify-content: center;
+}
 .live-text {
   min-width: 0;
   overflow: hidden;
