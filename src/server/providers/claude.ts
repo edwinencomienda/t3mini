@@ -156,7 +156,9 @@ export const runClaude: Runner = async (ctx) => {
   // rather than failing the turn.
   const describe = (name: string, input: unknown) => {
     try {
-      return describeClaudeTool(name, input, ctx.thread.cwd)
+      return describeClaudeTool(name, input, ctx.thread.cwd, {
+        refName: (ref) => ctx.tools.browser?.refName(ref),
+      })
     } catch {
       return { label: name }
     }

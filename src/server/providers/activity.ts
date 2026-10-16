@@ -1,6 +1,7 @@
 // Turns provider tool calls into readable work-log steps: a short label ("Run", "Read"), a
 // one-line summary (the command or path), the full input for the expanded view, and output.
 import { findClaudeTool, findTool } from '../tools'
+import type { StepHints } from '../tools/types'
 
 export type ToolStep = {
   label: string
@@ -9,6 +10,8 @@ export type ToolStep = {
   title?: string
   // A to-do list call, shown as the checklist card instead of a step.
   todo?: boolean
+  // A browser tool call.
+  browser?: boolean
 }
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -27,7 +30,12 @@ const firstLine = (text: string, max = 160) => {
 export const relativePath = (path: string, cwd: string) =>
   path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path
 
-export function describeClaudeTool(name: string, rawInput: unknown, cwd: string): ToolStep {
+export function describeClaudeTool(
+  name: string,
+  rawInput: unknown,
+  cwd: string,
+  hints?: StepHints,
+): ToolStep {
   const input = object(rawInput)
   const path = relativePath(string(input.file_path) || string(input.notebook_path), cwd)
   switch (name) {
@@ -131,11 +139,16 @@ export function describeClaudeTool(name: string, rawInput: unknown, cwd: string)
     // The input may still be empty: the step is shown as soon as Claude starts the call.
     let summary: string | undefined
     try {
-      summary = own.summarize?.(input as never)
+      summary = own.summarize?.(input as never, hints)
     } catch {
       summary = undefined
     }
-    return { label: own.label, summary, detail: json(rawInput) }
+    return {
+      label: own.label,
+      summary,
+      detail: json(rawInput),
+      ...(own.kind === 'browser' ? { browser: true } : {}),
+    }
   }
   // MCP tools are named mcp__<server>__<tool>.
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name)
@@ -190,6 +203,7 @@ export function unwrapShell(command: string) {
 export function describeCodexItem(
   item: Record<string, unknown>,
   cwd: string,
+  hints?: StepHints,
 ): ToolStep & {
   output?: string
 } {
@@ -238,7 +252,7 @@ export function describeCodexItem(
       const own = findTool(string(item.tool))
       let summary: string | undefined
       try {
-        summary = own?.summarize?.(object(item.arguments) as never)
+        summary = own?.summarize?.(object(item.arguments) as never, hints)
       } catch {
         summary = undefined
       }
@@ -246,6 +260,7 @@ export function describeCodexItem(
         label: own?.label ?? (string(item.tool) || 'Use tool'),
         summary,
         detail: json(item.arguments),
+        ...(own?.kind === 'browser' ? { browser: true } : {}),
       }
     }
     case 'imageGeneration':

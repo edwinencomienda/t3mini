@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { BrowserManager, allowRequest, checkPageUrl } from './browser'
+import { BrowserManager, allowRequest, checkPageUrl, snapshotRefs } from './browser'
 import {
   browserClick,
   browserConsole,
@@ -41,6 +41,28 @@ describe('where the agent’s browser may go', () => {
     expect(allowRequest('http://localhost:4310/api/threads', t3)).toBe(false)
     expect(allowRequest('http://127.0.0.1:4311/', t3)).toBe(false)
     expect(allowRequest('http://app.localhost:4310/', t3)).toBe(false)
+  })
+})
+
+describe('readable names for snapshot refs', () => {
+  it('names each ref by its role and label', () => {
+    const refs = snapshotRefs(
+      [
+        '- heading "Hello" [level=1] [ref=e2]',
+        '- textbox "Name" [ref=e5]',
+        '- button "Say \\"hi\\"" [ref=e6]',
+        '- generic "Card" [ref=e7]',
+        '- list [ref=e8]',
+        '- text: no ref here',
+      ].join('\n'),
+    )
+    expect(Object.fromEntries(refs)).toEqual({
+      e2: "heading 'Hello'",
+      e5: "textbox 'Name'",
+      e6: `button 'Say "hi"'`,
+      e7: "'Card'",
+      e8: 'list',
+    })
   })
 })
 
@@ -106,6 +128,8 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       openPage: () => browsers.openPage(thread),
       takeLog: () => browsers.takeLog(thread),
       close: () => browsers.close(thread),
+      recordSnapshot: (snapshot) => browsers.recordSnapshot(thread, snapshot),
+      refName: (ref) => browsers.refName(thread, ref),
     },
   })
 
@@ -124,6 +148,15 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     expect(clicked.text).toContain('Hi Ada')
     const read = await runTool(browserSnapshot, tools, {})
     expect(read.text).toContain('Hi Ada')
+    // Steps can name what they act on, and the chip knows the open page.
+    expect(browsers.refName('thread-1', field!)).toBe("textbox 'Name'")
+    expect(browsers.list()).toContainEqual({
+      threadId: 'thread-1',
+      url: `${base}/`,
+      title: 'Demo app',
+    })
+    const preview = await browsers.preview('thread-1')
+    expect(preview?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]))
   }, 30_000)
 
   it('takes screenshots the agent can see, and shows them only when asked', async () => {
@@ -168,6 +201,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     expect(one.context()).not.toBe(two.context())
     await browsers.close('private-1')
     expect(one.isClosed()).toBe(true)
+    expect(browsers.list().some((item) => item.threadId === 'private-1')).toBe(false)
     expect(await browsers.openPage('private-1')).toBeUndefined()
   }, 30_000)
 })

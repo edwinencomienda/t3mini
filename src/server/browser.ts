@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import type { BrowserInfo } from '../types'
 import {
   chromium,
   type Browser,
@@ -145,18 +146,61 @@ export class BrowserError extends Error {
   readonly name = 'BrowserError'
 }
 
+// "button 'Save'" from an AI snapshot line like `- button "Save" [ref=e12]`, for each ref.
+export function snapshotRefs(snapshot: string) {
+  const refs = new Map<string, string>()
+  for (const line of snapshot.split('\n')) {
+    const match = /^\s*-\s*([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=(e\d+)\]/.exec(line)
+    if (!match) continue
+    const [, role, name, ref] = match
+    const text = (name ?? '').replace(/\\"/g, '"').trim()
+    refs.set(ref!, text ? `${role === 'generic' ? '' : `${role} `}'${text.slice(0, 60)}'` : role!)
+  }
+  return refs
+}
+
 export class BrowserManager {
   private browser?: Promise<Browser>
   private sessions = new Map<string, Promise<Session>>()
+  // Each thread's open page (for the composer's browser chip) and its snapshot refs.
+  private info = new Map<string, BrowserInfo>()
+  private refs = new Map<string, Map<string, string>>()
+  private listeners = new Set<() => void>()
   constructor(
     private readonly ports = blockedPorts(),
     private readonly executable: () => string | undefined = findBrowser,
   ) {}
 
+  subscribe(listener: () => void) {
+    this.listeners.add(listener)
+    return () => void this.listeners.delete(listener)
+  }
+  private changed() {
+    this.listeners.forEach((listener) => listener())
+  }
+  // Threads with an open page.
+  list(): BrowserInfo[] {
+    return [...this.info.values()]
+  }
+  recordSnapshot(threadId: string, snapshot: string) {
+    this.refs.set(threadId, snapshotRefs(snapshot))
+  }
+  refName(threadId: string, ref: string) {
+    const id = /^\[?(?:ref=)?(e\d+)\]?$/i.exec(ref.trim())?.[1]
+    return id ? this.refs.get(threadId)?.get(id) : undefined
+  }
+  // A small, fresh picture of the thread's page for the browser chip, if one is open.
+  async preview(threadId: string) {
+    const page = await this.openPage(threadId)
+    if (!page) return undefined
+    return page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', timeout: 5000 })
+  }
+
   // The thread's page, opening the browser and session if needed.
   async page(threadId: string): Promise<Page> {
     const session = await this.session(threadId)
-    if (!session.page || session.page.isClosed()) session.page = await this.newPage(session)
+    if (!session.page || session.page.isClosed())
+      session.page = await this.newPage(session, threadId)
     return session.page
   }
   // The thread's page if one is open (doesn't start anything).
@@ -176,6 +220,7 @@ export class BrowserManager {
     const session = this.sessions.get(threadId)
     if (!session) return
     this.sessions.delete(threadId)
+    this.forget(threadId)
     const value = await session.catch(() => undefined)
     if (value?.timer) clearTimeout(value.timer)
     await value?.context.close().catch(() => {})
@@ -186,6 +231,10 @@ export class BrowserManager {
     await this.shutdown()
   }
 
+  private forget(threadId: string) {
+    this.refs.delete(threadId)
+    if (this.info.delete(threadId)) this.changed()
+  }
   private async shutdown() {
     const browser = this.browser
     this.browser = undefined
@@ -216,6 +265,11 @@ export class BrowserManager {
         browser.on('disconnected', () => {
           this.browser = undefined
           this.sessions.clear()
+          this.refs.clear()
+          if (this.info.size) {
+            this.info.clear()
+            this.changed()
+          }
         }),
       )
     }
@@ -273,7 +327,7 @@ export class BrowserManager {
     })
     return session
   }
-  private async newPage(session: Session) {
+  private async newPage(session: Session, threadId: string) {
     session.opening = true
     const page = await session.context.newPage().finally(() => (session.opening = false))
     page.on('console', (message: ConsoleMessage) => {
@@ -301,8 +355,26 @@ export class BrowserManager {
       session.note({ kind: 'dialog', text: `${dialog.type()}: ${dialog.message()}` })
       void dialog.dismiss().catch(() => {})
     })
+    // The address and title the browser chip shows.
+    const update = () => {
+      if (page.isClosed() || page.url() === 'about:blank') return
+      void page
+        .title()
+        .catch(() => '')
+        .then((title) => {
+          const next = { threadId, url: page.url(), title }
+          const current = this.info.get(threadId)
+          if (current?.url === next.url && current.title === next.title) return
+          this.info.set(threadId, next)
+          this.changed()
+        })
+    }
+    page.on('load', update)
+    page.on('domcontentloaded', update)
+    page.on('close', () => this.forget(threadId))
     // A redirect that slipped past the request check still can't keep the page elsewhere.
     page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) update()
       if (frame !== page.mainFrame() || frame.url() === 'about:blank') return
       if (checkPageUrl(frame.url(), this.ports)) {
         session.note({ kind: 'blocked', text: `${frame.url()} (not a local site)` })

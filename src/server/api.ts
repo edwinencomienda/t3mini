@@ -297,6 +297,20 @@ export async function handleApi(request: Request) {
         return Response.json(await service.create(await request.json()), { status: 201 })
       const id = parts[1]
       if (id && !parts[2] && request.method === 'GET') return Response.json(service.get(id))
+      // The thread's agent browser: a fresh preview for the browser chip, or close it.
+      if (id && parts[2] === 'browser' && parts[3] === 'preview' && request.method === 'GET') {
+        service.get(id)
+        const image = await service.browsers.preview(id).catch(() => undefined)
+        if (!image) return Response.json({ error: 'No browser page is open.' }, { status: 404 })
+        return new Response(new Uint8Array(image), {
+          headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' },
+        })
+      }
+      if (id && parts[2] === 'browser' && parts[3] === 'close' && request.method === 'POST') {
+        service.get(id)
+        await service.browsers.close(id)
+        return Response.json({ ok: true })
+      }
       if (id && parts[2] === 'glance' && request.method === 'GET')
         return Response.json(service.glance(id))
       if (id && parts[2] === 'pull-request' && request.method === 'GET')

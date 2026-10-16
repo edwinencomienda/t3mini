@@ -1,5 +1,13 @@
 import { memo, useEffect, useState } from 'react'
-import { Check, ChevronRight, CircleCheck, CircleDashed, LoaderCircle, X } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  CircleCheck,
+  CircleDashed,
+  Globe,
+  LoaderCircle,
+  X,
+} from 'lucide-react'
 import type { Activity, Provider, Todo } from '../types'
 import { mascotLift, mascotSrc, useMascots, type Mood } from '../mascots'
 
@@ -30,6 +38,7 @@ export const StepRow = memo(function StepRow({ step }: { step: Activity }) {
             {step.agent}
           </span>
         ) : null}
+        {step.browser ? <Globe size={12} className="step-globe" aria-label="Browser" /> : null}
         <span className="step-title">{stepTitle(step)}</span>
         {step.status === 'failed' ? <span className="step-failed">Failed</span> : null}
         <ChevronRight size={13} className="chevron" aria-hidden />
@@ -102,6 +111,7 @@ export function StepGroup({ steps }: { steps: Activity[] }) {
             <Check size={12} />
           )}
         </span>
+        {latest.browser ? <Globe size={12} className="step-globe" aria-label="Browser" /> : null}
         <span className="step-title">{stepTitle(latest)}</span>
         <span className="step-count">
           {steps.length} steps
@@ -132,11 +142,14 @@ export function LiveLine({
   since,
   provider,
   mood = 'working',
+  site,
 }: {
   text: string
   since?: string
   provider?: Provider
   mood?: Mood
+  // While a browser step runs: the page's site, shown with a globe ("localhost:5173").
+  site?: string
 }) {
   const [now, setNow] = useState(() => Date.now())
   const mascots = useMascots()
@@ -163,7 +176,9 @@ export function LiveLine({
           <span />
         </span>
       )}
+      {site !== undefined ? <Globe size={13} className="live-globe" aria-label="Browser" /> : null}
       <span className="live-text">{text}</span>
+      {site ? <span className="live-site">{site}</span> : null}
       {since ? <span className="live-time">{elapsed(since, now)}</span> : null}
     </div>
   )

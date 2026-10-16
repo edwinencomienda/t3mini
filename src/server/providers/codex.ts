@@ -97,7 +97,9 @@ export const runCodex: Runner = async (ctx) => {
         ) {
           ctx.activity({
             id,
-            ...describeCodexItem(item, ctx.thread.cwd),
+            ...describeCodexItem(item, ctx.thread.cwd, {
+              refName: (ref) => ctx.tools.browser?.refName(ref),
+            }),
             status:
               packet.method === 'item/started'
                 ? 'running'

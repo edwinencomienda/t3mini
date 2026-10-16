@@ -3913,3 +3913,86 @@ body.resizing {
   /* The GIFs have padding; keep the line from growing much. */
   margin: -6px 0;
 }
+
+/* Browser steps and the agent's browser chip. */
+.step-globe,
+.live-globe {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.live-site {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+.live-site::before {
+  content: '· ';
+}
+.composer-meta-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.browser-chip {
+  max-width: 14rem;
+}
+.browser-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-chip svg {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.browser-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+}
+.browser-menu-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.browser-menu-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+.browser-menu-title strong,
+.browser-menu-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-menu-title small {
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.browser-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.browser-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 0.45rem;
+  border: 1px solid var(--border);
+  background: var(--muted);
+}
+.browser-preview-note {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11.5px;
+}

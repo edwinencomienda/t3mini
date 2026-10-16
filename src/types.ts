@@ -47,6 +47,8 @@ export type Activity = {
   startedAt?: string
   // A to-do list update: drawn as the checklist card instead of a step.
   todo?: boolean
+  // A browser tool step (browser_*): shown with a globe.
+  browser?: boolean
   // Full input for the expanded view (whole command, edit preview, arguments).
   detail?: string
   // What the step returned, trimmed.
@@ -136,6 +138,8 @@ export type ThreadGlance = Pick<
   // What it waits for, e.g. the approval's title.
   waitingOn?: string
 }
+// A thread's open browser page (the browser_* tools), for the composer's browser chip.
+export type BrowserInfo = { threadId: string; url: string; title: string }
 // A conversation that mentions what you searched for (command palette), with a short excerpt.
 export type MessageMatch = {
   threadId: string

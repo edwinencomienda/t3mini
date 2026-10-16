@@ -12,7 +12,13 @@ export type ThreadBrowser = {
   // Errors, failed requests, dialogs, and blocked addresses since the last look.
   takeLog: () => Promise<{ kind: string; text: string }[]>
   close: () => Promise<void>
+  // Remembers what the refs in a page snapshot (e12…) point to, for readable step names.
+  recordSnapshot: (snapshot: string) => void
+  // "button 'Save'" for a ref from the latest snapshot.
+  refName: (ref: string) => string | undefined
 }
+// What step summaries may look up while the call is still in progress.
+export type StepHints = { refName?: (ref: string) => string | undefined }
 
 // A thread's view of the process manager: only its own project's processes.
 export type ProjectProcesses = {
@@ -56,7 +62,9 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   // reaches the network should be 'approval' and go through Allow once / Decline.
   safety: 'safe' | 'approval'
   // The work-log summary for a call, e.g. the file name.
-  summarize?: (input: z.infer<z.ZodObject<Shape>>) => string | undefined
+  summarize?: (input: z.infer<z.ZodObject<Shape>>, hints?: StepHints) => string | undefined
+  // Browser tools are marked in the work log (a globe) and the live line.
+  kind?: 'browser'
   // Returns a short message for the agent. Throw ToolError for a clear refusal.
   run: (context: ToolContext, input: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>
 }

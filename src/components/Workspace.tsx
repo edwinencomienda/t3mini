@@ -75,6 +75,7 @@ import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
 import type { Block } from '../blocks'
 import { ProcessIndicator } from './Processes'
+import { BrowserChip } from './BrowserChip'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
@@ -117,6 +118,7 @@ import {
   isActive,
   type Activity,
   type Bootstrap,
+  type BrowserInfo,
   type GitInfo,
   type PullRequest,
   type Message,
@@ -376,6 +378,14 @@ async function api<T>(
     throw Object.assign(new Error(data.error || 'Request failed.'), { status: response.status })
   return data as T
 }
+// "localhost:5173" for a page address (empty when unknown).
+function siteOf(url?: string) {
+  try {
+    return url ? new URL(url).host : ''
+  } catch {
+    return ''
+  }
+}
 // Work items with each run of consecutive steps gathered into one array (when grouping).
 function groupSteps(items: WorkItem[], group: boolean) {
   const out: (WorkItem | Activity[])[] = []
@@ -570,6 +580,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const projectName = (path: string) => projectLabel(projects, path)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
+  // Threads whose agent has a browser page open (browser_* tools).
+  const [browsers, setBrowsers] = useState<BrowserInfo[]>([])
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   const [addProject, setAddProject] = useState(false)
@@ -670,10 +682,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
           projects?: ProjectSummary[]
           thread: Thread | null
           processes?: ProcessInfo[]
+          browsers?: BrowserInfo[]
           persistenceError?: string
         }
         setProjects(data.projects ?? [])
         setProcesses(data.processes ?? [])
+        setBrowsers(data.browsers ?? [])
         announce(threadEvents(statuses.current, data.threads), data.projects ?? [])
         statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
         setThreads(data.threads)
@@ -2298,6 +2312,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           since={liveStep.startedAt}
                           provider={thread.provider}
                           mood="working"
+                          // A browser step names the site it's on (opening one already does).
+                          {...(liveStep.browser
+                            ? {
+                                site:
+                                  liveStep.label === 'Open page'
+                                    ? ''
+                                    : siteOf(
+                                        browsers.find((item) => item.threadId === thread.id)?.url,
+                                      ),
+                              }
+                            : {})}
                         />
                       ) : currentTodo ? (
                         // Between steps, the checklist's current item in its "-ing" form.
@@ -2524,7 +2549,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   </form>
                 ) : null}
                 {thread &&
-                (git?.branch || processes.some((item) => item.project === thread.cwd)) ? (
+                (git?.branch ||
+                  processes.some((item) => item.project === thread.cwd) ||
+                  browsers.some((item) => item.threadId === thread.id)) ? (
                   <div className="composer-meta">
                     {/* Branch and its pull request stay together on the left. */}
                     <span className="git-info">
@@ -2562,8 +2589,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         </a>
                       ) : null}
                     </span>
-                    {/* Dev servers and other processes agents started in this project. */}
-                    <ProcessIndicator processes={processes} project={thread.cwd} />
+                    {/* The agent's open browser page, then dev servers and other processes. */}
+                    <span className="composer-meta-chips">
+                      <BrowserChip
+                        threadId={thread.id}
+                        browser={browsers.find((item) => item.threadId === thread.id)}
+                      />
+                      <ProcessIndicator processes={processes} project={thread.cwd} />
+                    </span>
                   </div>
                 ) : null}
               </footer>

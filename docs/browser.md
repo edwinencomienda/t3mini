@@ -32,6 +32,12 @@ src/server/tools/types.ts    ToolContext.browser (the thread's session) and Tool
 
 `approval` tools go through Allow once / Decline unless the thread runs with full access, like the process tools.
 
+## What you see
+
+- **Steps:** browser tools are marked `kind: 'browser'`, so their work-log steps (and the live line) show a globe. Click, type, and scroll name their element from the latest snapshot ("Click button 'Save'"): each snapshot's refs are recorded per thread (`snapshotRefs()`), and step summaries get a `refName` hint while the call is described.
+- **Live line:** a running browser step adds the page's site ("· localhost:5173").
+- **Browser chip:** the live snapshot carries `browsers` (thread, URL, title of each open page, updated on navigation and load). The composer shows a chip for the open thread; its popover has the title and URL, a preview from `GET /api/threads/:id/browser/preview` (a fresh JPEG, polled every 3 s while open), and Close browser (`POST /api/threads/:id/browser/close`). Both endpoints sit behind the usual same-origin checks and only act on that thread's session.
+
 ## Safety rules
 
 - **Local sites only.** The page itself (its top-level document) may only be `http(s)` on `localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`, or `*.localhost`. This is checked before opening, on every navigation request (links, forms, scripts), and again after any navigation (`framenavigated`), so redirects and popups can't take it elsewhere. Popups and new tabs are closed. Pages may still load their own assets (fonts, CDN scripts).

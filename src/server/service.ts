@@ -178,6 +178,8 @@ export class AgentService {
   ) {
     // Process status changes (started, URL found, exited) go out with the live updates.
     processes.subscribe(() => this.notify())
+    // An agent's browser opening, moving to another page, or closing shows in its chip.
+    browsers.subscribe(() => this.notify())
   }
   async upload(input: unknown) {
     try {
@@ -402,6 +404,7 @@ export class AgentService {
       projects: this.projects(),
       thread: id ? (this.store.threads.get(id) ?? null) : null,
       processes: this.processes.list(),
+      browsers: this.browsers.list(),
       persistenceError: this.persistenceError,
     }
   }
@@ -769,6 +772,8 @@ export class AgentService {
           openPage: () => this.browsers.openPage(thread.id),
           takeLog: () => this.browsers.takeLog(thread.id),
           close: () => this.browsers.close(thread.id),
+          recordSnapshot: (snapshot) => this.browsers.recordSnapshot(thread.id, snapshot),
+          refName: (ref) => this.browsers.refName(thread.id, ref),
         },
         saveImage: (bytes) => this.uploads.saveImage(bytes),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
