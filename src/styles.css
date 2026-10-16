@@ -340,6 +340,11 @@ kbd {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+.thread-retitling {
+  /* Same footprint as the status dot it replaces, so the title doesn't shift. */
+  width: 12px;
+  height: 12px;
+}
 .thread-row:has(.status-dot.waiting) .thread-time {
   color: var(--warning);
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentService } from './service'
 import { ProjectStore, ThreadStore } from './store'
+import type { TitleWriter } from './titles'
 import type { ProviderContext, Runner, Steer } from './providers/types'
 
 let directory: string
@@ -756,5 +757,111 @@ describe('editing the last message after a stop', () => {
       editService.edit(created.id, { messageId: sent.id, text: 'Mid-turn' }),
     ).rejects.toThrow('Stop the agent')
     await editService.stop(created.id)
+  })
+})
+
+describe('AI thread titles', () => {
+  const calls: string[] = []
+  const writer = (overrides: Partial<TitleWriter> = {}): TitleWriter => ({
+    claudeSession: async (sessionId) => {
+      calls.push(`claudeSession ${sessionId}`)
+      return 'Claude session title'
+    },
+    claude: async (conversation) => {
+      calls.push(`claude ${conversation.split('\n')[0]}`)
+      return 'Fresh Haiku title'
+    },
+    codex: async (conversation) => {
+      calls.push(`codex ${conversation.split('\n')[0]}`)
+      return 'Luna title'
+    },
+    nameCodexThread: async (threadId, name) => {
+      calls.push(`name ${threadId} ${name}`)
+    },
+    ...overrides,
+  })
+  let titled: AgentService
+  const make = (titles: TitleWriter) => {
+    calls.length = 0
+    titled = new AgentService(
+      new ThreadStore(join(directory, 'titled.json')),
+      { codex: runner, claude: runner },
+      undefined,
+      undefined,
+      undefined,
+      titles,
+    )
+  }
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20))
+  // Ends the fake turn and waits for this service (not the shared one) to see it finish.
+  const settleTitled = (id: string) =>
+    new Promise<void>((resolve) => {
+      const unsubscribe = titled.subscribe(() => {
+        if (!['starting', 'working', 'waiting'].includes(titled.get(id).status)) {
+          unsubscribe()
+          resolve()
+        }
+      })
+      finish()
+    })
+  afterEach(() => titled?.close())
+
+  it('names a Codex thread right after the first message, and in Codex too', async () => {
+    make(writer())
+    const created = await titled.create({ provider: 'codex', cwd: directory })
+    await titled.send(created.id, { text: 'Fix the overflowing code blocks' })
+    await started
+    await settled()
+    expect(titled.get(created.id)).toMatchObject({ title: 'Luna title', titleSource: 'ai' })
+    expect(calls).toEqual([
+      'codex User: Fix the overflowing code blocks',
+      'name native-session Luna title',
+    ])
+    await settleTitled(created.id)
+  })
+
+  it('uses Claude’s own session title once the first turn ends', async () => {
+    make(writer())
+    const created = await titled.create({ provider: 'claude', cwd: directory })
+    await titled.send(created.id, { text: 'Explain the tool system please' })
+    await started
+    expect(titled.get(created.id)).toMatchObject({
+      title: 'Explain the tool system please',
+      titleSource: 'message',
+    })
+    finish()
+    await new Promise<void>((resolve) => {
+      const unsubscribe = titled.subscribe(() => {
+        if (titled.get(created.id).title === 'Claude session title') {
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+    expect(calls).toEqual(['claudeSession native-session'])
+  })
+
+  it('never replaces a title you or the agent chose', async () => {
+    make(writer())
+    const created = await titled.create({ provider: 'codex', cwd: directory })
+    await titled.send(created.id, { text: 'Something' })
+    await titled.rename(created.id, { title: 'My own name' })
+    await settled()
+    expect(titled.get(created.id)).toMatchObject({ title: 'My own name', titleSource: 'custom' })
+    await settleTitled(created.id)
+  })
+
+  it('regenerates with Haiku for Claude and Luna for Codex, and keeps the title on failure', async () => {
+    make(writer({ codex: async () => undefined }))
+    const claude = await titled.create({ provider: 'claude', cwd: directory })
+    await expect(titled.regenerateTitle(claude.id)).rejects.toThrow('Send a message first')
+    claude.messages.push({ id: 'u', role: 'user', text: 'Plan the release', createdAt: '' })
+    await titled.regenerateTitle(claude.id)
+    expect(titled.get(claude.id).title).toBe('Fresh Haiku title')
+    const codex = await titled.create({ provider: 'codex', cwd: directory })
+    codex.messages.push({ id: 'u2', role: 'user', text: 'Ship it', createdAt: '' })
+    codex.title = 'Ship it'
+    await expect(titled.regenerateTitle(codex.id)).rejects.toThrow('Couldn’t write a title')
+    expect(titled.get(codex.id).title).toBe('Ship it')
   })
 })

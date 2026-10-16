@@ -8,8 +8,10 @@ export const renameThread = defineTool({
   label: 'Rename thread',
   description:
     'Rename the current t3 mini thread (the conversation the user sees in the sidebar). Use it ' +
-    'only when the user asks to rename or retitle this thread or session. Keep the title short ' +
-    '(a few words) and specific. It cannot rename other threads.',
+    'only when the user asks to rename, retitle, or regenerate the title of this thread or ' +
+    'session. If they give a name, use it as given. If they don’t (e.g. "give this a better ' +
+    'name"), write one yourself from the whole conversation: 2 to 6 words, specific, like a ' +
+    'subject line, no quotes. It cannot rename other threads.',
   input: {
     title: z
       .string()

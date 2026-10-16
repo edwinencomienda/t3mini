@@ -305,6 +305,7 @@ export async function handleApi(request: Request) {
         }
         if (parts[2] === 'rename')
           return Response.json(await service.rename(id, await request.json()))
+        if (parts[2] === 'title') return Response.json(await service.regenerateTitle(id))
         if (parts[2] === 'stop') return Response.json(await service.stop(id))
         if (parts[2] === 'approve') {
           const data = z

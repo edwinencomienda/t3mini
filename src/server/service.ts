@@ -23,6 +23,15 @@ import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
 import { githubBranchUrl, githubRepoUrl } from './github'
 import { commonWords, extractKeyterms } from './keyterms'
+import { titleWriter, type TitleWriter } from './titles'
+
+// No AI titles unless a writer is given (the app's real service gets one; tests don't).
+const noTitles: TitleWriter = {
+  claudeSession: async () => undefined,
+  claude: async () => undefined,
+  codex: async () => undefined,
+  nameCodexThread: async () => {},
+}
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
@@ -150,6 +159,8 @@ export class AgentService {
     readonly projectStore = new ProjectStore(projectStorePath(store.path)),
     readonly uploads = new Uploads(join(dirname(store.path), 'attachments')),
     readonly processes = new ProcessManager(),
+    // Writes AI titles. Off unless given (tests never call a model); the app passes the real one.
+    readonly titles: TitleWriter = noTitles,
   ) {
     // Process status changes (started, URL found, exited) go out with the live updates.
     processes.subscribe(() => this.notify())
@@ -414,14 +425,19 @@ export class AgentService {
     if (running) return this.steer(thread, running, message, images)
     const previous = structuredClone(thread)
     thread.messages.push(message)
-    if (thread.title === 'New thread')
+    const firstMessage = thread.title === 'New thread'
+    if (firstMessage) {
       thread.title = text.slice(0, 60) || attachments[0]?.name.slice(0, 60) || 'Image'
+      thread.titleSource = 'message'
+    }
     try {
       await this.startTurn(thread, text, images, message.id)
     } catch (error) {
       this.store.threads.set(id, previous)
       throw error
     }
+    // Codex doesn't name threads, so one is written right away; Claude's arrives with its reply.
+    if (firstMessage && thread.provider === 'codex') void this.autoTitle(id)
     return { accepted: true }
   }
   // Replaces the last message of a stopped or failed turn and runs it again. The agent's memory
@@ -714,7 +730,69 @@ export class AgentService {
           'Could not save conversations. Check disk space and permissions, then restart the server.'
       }
       this.notify()
+      // Claude has written its title by now (if not, the next turn tries again).
+      if (thread.provider === 'claude' && thread.titleSource === 'message' && thread.sessionId)
+        void this.autoTitle(thread.id)
     }
+  }
+  // Replaces the automatic first-message title with an AI one (see titles.ts): Claude's own
+  // session title, or a quick Luna call for Codex. Never touches a title you or the agent set.
+  private titling = new Set<string>()
+  private async autoTitle(id: string) {
+    const thread = this.store.threads.get(id)
+    if (!thread || thread.titleSource !== 'message' || this.titling.has(id)) return
+    this.titling.add(id)
+    try {
+      const title =
+        thread.provider === 'claude'
+          ? thread.sessionId
+            ? await this.titles.claudeSession(thread.sessionId, thread.cwd)
+            : undefined
+          : await this.titles.codex(this.conversation(thread))
+      // Renamed meanwhile (or deleted)? Then keep that.
+      const current = this.store.threads.get(id)
+      if (title && current?.titleSource === 'message') this.applyTitle(current, title)
+    } catch {
+      // The first-message title stays.
+    } finally {
+      this.titling.delete(id)
+    }
+  }
+  // What a title is written from: your first message and the latest reply.
+  private conversation(thread: Thread) {
+    const first = thread.messages.find((message) => message.role === 'user')
+    const reply = [...thread.messages].reverse().find((message) => message.role === 'assistant')
+    return [
+      `User: ${first?.text || thread.title}`,
+      reply?.text ? `Assistant (latest reply): ${reply.text.slice(0, 1000)}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+  private applyTitle(thread: Thread, title: string) {
+    thread.title = title
+    thread.titleSource = 'ai'
+    this.changed()
+    // Codex's own apps show the same name (best effort).
+    if (thread.provider === 'codex' && thread.sessionId)
+      void this.titles.nameCodexThread(thread.sessionId, title).catch(() => {})
+  }
+  // "Regenerate title": a fresh title from the conversation (Haiku for Claude, Luna for Codex).
+  async regenerateTitle(id: string) {
+    const thread = this.get(id)
+    if (!thread.messages.some((message) => message.role === 'user'))
+      throw new HttpError(409, 'Send a message first.')
+    let title: string | undefined
+    try {
+      title = await (thread.provider === 'claude' ? this.titles.claude : this.titles.codex)(
+        this.conversation(thread),
+      )
+    } catch {
+      title = undefined
+    }
+    if (!title) throw new HttpError(502, 'Couldn’t write a title right now. Try again.')
+    this.applyTitle(thread, title)
+    return thread
   }
   approve(id: string, approvalId: string, allow: boolean) {
     const thread = this.get(id),
@@ -951,13 +1029,15 @@ export class AgentService {
   async rename(id: string, input: unknown) {
     const { title } = z.object({ title: z.string().trim().min(1).max(120) }).parse(input)
     const thread = this.get(id)
-    const previous = thread.title
-    // Renaming only touches the label, so it is allowed while the agent works.
+    const previous = { title: thread.title, titleSource: thread.titleSource }
+    // Renaming only touches the label, so it is allowed while the agent works. A name you (or
+    // the agent) chose is never replaced by an automatic title.
     thread.title = title
+    thread.titleSource = 'custom'
     try {
       await this.store.save()
     } catch {
-      thread.title = previous
+      Object.assign(thread, previous)
       throw new HttpError(500, 'Could not rename the thread.')
     }
     this.notify()
@@ -983,7 +1063,7 @@ export function getService() {
   return (globals.t3MiniService ??= (async () => {
     const store = new ThreadStore(defaultStorePath())
     await store.load()
-    const service = new AgentService(store)
+    const service = new AgentService(store, undefined, undefined, undefined, undefined, titleWriter)
     await service.projectStore.load()
     return service
   })())

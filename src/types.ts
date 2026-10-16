@@ -69,6 +69,9 @@ export type Thread = {
   claudeEntry?: string
   // A turn to drop from the agent's memory before the next run (set by an edit).
   rewind?: TurnCheckpoint
+  // Where the title came from: your first message (replaced by an AI title once there is one),
+  // an AI, or a rename by you or the agent (never replaced automatically).
+  titleSource?: 'message' | 'ai' | 'custom'
 }
 export type ThreadSummary = Pick<
   Thread,

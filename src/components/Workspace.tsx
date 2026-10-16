@@ -34,6 +34,7 @@ import {
   Search,
   Settings,
   Smartphone,
+  Sparkles,
   ShieldAlert,
   Square,
   Sun,
@@ -1220,6 +1221,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
   }
   const copyPath = (path: string) => void copyText(path).catch(() => {})
+  // Threads whose title is being rewritten (Regenerate title), shown with a spinner.
+  const [retitling, setRetitling] = useState<ReadonlySet<string>>(() => new Set())
+  // A fresh AI title from the conversation; the sidebar updates through the live connection.
+  async function regenerateTitle(id: string) {
+    setError('')
+    setRetitling((current) => new Set(current).add(id))
+    try {
+      await api(`threads/${id}/title`, 'POST', {})
+    } catch (error) {
+      setError((error as Error).message)
+    } finally {
+      setRetitling((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
+  }
   const committedRename = useRef<typeof renaming>(null)
   async function rename() {
     // Enter commits and unmounts the input, which can also fire blur; save only once.
@@ -1614,7 +1633,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           aria-disabled={busy}
                           aria-current={activeId === item.id ? 'page' : undefined}
                         >
-                          <StatusDot status={item.status} unread={unread.has(item.id)} />
+                          {/* While a new title is being written, a spinner stands in for the dot. */}
+                          {retitling.has(item.id) ? (
+                            <LoaderCircle
+                              size={12}
+                              className="status-spinner thread-retitling"
+                              aria-label="Writing a new title"
+                            />
+                          ) : (
+                            <StatusDot status={item.status} unread={unread.has(item.id)} />
+                          )}
                           <span className="thread-title">{item.title}</span>
                           <span className="thread-time">
                             {item.status === 'waiting'
@@ -1745,6 +1773,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
               </button>
             ) : null}
             <div className="topbar-title">
+              {thread && retitling.has(thread.id) ? (
+                <LoaderCircle
+                  size={13}
+                  className="status-spinner"
+                  aria-label="Writing a new title"
+                />
+              ) : null}
               <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
               {thread ? (
                 <span className="chip" title={thread.cwd}>
@@ -2200,6 +2235,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   label: 'Rename',
                   icon: <Pencil size={14} />,
                   onSelect: () => setRenaming({ id: target.id, title: target.title }),
+                },
+                {
+                  label: retitling.has(target.id) ? 'Writing a title…' : 'Regenerate title',
+                  icon: <Sparkles size={14} />,
+                  disabled: retitling.has(target.id),
+                  onSelect: () => void regenerateTitle(target.id),
                 },
                 {
                   label: 'Copy project path',

@@ -57,7 +57,7 @@ src/components/blocks.tsx   one renderer per block type
 
 - Input: `{ title }`, trimmed, 1–120 characters. There is no thread id: the tool can only rename the thread the agent is running in (`context.rename`, which calls `AgentService.rename` for that thread, saves, and pushes a live update so the sidebar changes right away).
 - Safety: `safe` (it only changes a label). The description tells the agent to use it only when the user asks to rename the thread.
-- Typical use: "rename this thread to Login bug" or "give this session a better name".
+- Typical use: "rename this thread to Login bug", or "give this a better name" / "regenerate the title", where the agent writes a 2–6 word title itself from the whole conversation (no separate title model; the agent knows the conversation best). The sidebar's **Regenerate title** menu item is the non-agent way (see `titles.ts`).
 - Codex declares tools when a thread starts, so Codex threads created before this tool existed don't have it; Claude threads get it on their next turn.
 
 ## Agents' own images
