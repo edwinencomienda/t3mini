@@ -10,6 +10,30 @@ import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { claudeSettings, threadSettings } from '../provider-settings'
 import { claudeExecutable } from '../cli-updates'
+import { z } from 'zod'
+
+// AskUserQuestion's input, checked before it's shown: 1–4 questions with a few options each.
+const questionInput = z.object({
+  questions: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(1000),
+        header: z.string().max(100).optional(),
+        multiSelect: z.boolean().optional(),
+        options: z
+          .array(
+            z.object({
+              label: z.string().min(1).max(200),
+              description: z.string().max(1000).optional(),
+            }),
+          )
+          .min(1)
+          .max(8),
+      }),
+    )
+    .min(1)
+    .max(4),
+})
 
 // Run the installed Claude Code CLI, so updating it updates t3 mini too. Without one, the copy
 // bundled with the Agent SDK runs.
@@ -125,6 +149,18 @@ export const runClaude: Runner = async (ctx) => {
   const safeTools = tools
     .filter((definition) => definition.safety === 'safe')
     .map((definition) => claudeToolName(definition.name))
+  // Subagents by their Agent tool call, for labelling their steps in the work log.
+  const agentNames = new Map<string, string>()
+  const agentOf = (parent: string | null | undefined) =>
+    parent ? { agent: agentNames.get(parent) ?? 'Subagent' } : {}
+  // Claude's tasks this turn (subagents, shells…); the backgrounded ones are shown as running.
+  const tasks = new Map<string, { description: string; background: boolean }>()
+  const reportBackground = () =>
+    ctx.background?.(
+      [...tasks]
+        .filter(([, task]) => task.background)
+        .map(([id, task]) => ({ id, description: task.description })),
+    )
   const rewinding = Boolean(ctx.thread.sessionId && ctx.rewind?.claudeResumeAt)
   let reportedRewind = false
   const stream = query({
@@ -149,6 +185,26 @@ export const runClaude: Runner = async (ctx) => {
         : {}),
       canUseTool: async (toolName, input, options) => {
         if (safeTools.includes(toolName)) return { behavior: 'allow', updatedInput: input }
+        // A question for you, not a permission: Claude Code hands it over even with full access.
+        // Your answers go back in the tool's input (question text → answer).
+        if (toolName === 'AskUserQuestion' && ctx.ask) {
+          const parsed = questionInput.safeParse(input)
+          if (parsed.success) {
+            const { questions } = parsed.data
+            const answers = await ctx.ask({
+              id: options.toolUseID,
+              title: questions.length === 1 ? 'Claude has a question' : 'Claude has some questions',
+              questions,
+            })
+            return answers
+              ? { behavior: 'allow', updatedInput: { ...input, answers } }
+              : {
+                  behavior: 'deny',
+                  message:
+                    'The user skipped this question. Continue with your best judgment, or ask in plain text if you really need an answer.',
+                }
+          }
+        }
         const allow = await ctx.approve({
           id: options.toolUseID,
           title: `Allow ${toolName}?`,
@@ -178,13 +234,41 @@ export const runClaude: Runner = async (ctx) => {
       }
       if ((message.type === 'assistant' || message.type === 'user') && message.uuid)
         if (!('isReplay' in message && message.isReplay)) ctx.entry?.(message.uuid)
+      // Background work (subagents, shells) keeps the turn open after Claude's last reply; show
+      // what's still running so a long wait doesn't look stuck.
+      if (message.type === 'system') {
+        if (message.subtype === 'task_started') {
+          tasks.set(message.task_id, {
+            description: message.description,
+            background: Boolean(message.is_backgrounded),
+          })
+          reportBackground()
+        } else if (message.subtype === 'task_updated') {
+          const task = tasks.get(message.task_id)
+          const { status, description, is_backgrounded } = message.patch
+          if (task) {
+            if (description) task.description = description
+            if (is_backgrounded !== undefined) task.background = is_backgrounded
+            if (status && !['pending', 'running', 'paused'].includes(status))
+              tasks.delete(message.task_id)
+            reportBackground()
+          }
+        } else if (message.subtype === 'task_notification') {
+          tasks.delete(message.task_id)
+          reportBackground()
+        }
+      }
       if (message.type === 'stream_event') {
         const event = message.event
         if (event.type === 'message_start') {
           assistantId = event.message.id
           streamed = false
         }
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'text_delta' &&
+          !message.parent_tool_use_id
+        ) {
           streamed = true
           ctx.text(assistantId, event.delta.text)
         }
@@ -194,11 +278,13 @@ export const runClaude: Runner = async (ctx) => {
             id: event.content_block.id,
             label: describe(event.content_block.name, {}).label,
             status: 'running',
+            ...agentOf(message.parent_tool_use_id),
           })
         }
       }
       if (message.type === 'assistant') {
-        if (!streamed) {
+        // A subagent's own words stay in its task; only its steps show in the work log.
+        if (!streamed && !message.parent_tool_use_id) {
           const text = message.message.content
             .filter((block) => block.type === 'text')
             .map((block) => block.text)
@@ -208,10 +294,16 @@ export const runClaude: Runner = async (ctx) => {
         for (const block of message.message.content)
           if (block.type === 'tool_use') {
             toolIds.add(block.id)
+            // Remember subagents by their task description, to label their steps.
+            if (block.name === 'Agent' || block.name === 'Task') {
+              const description = (block.input as { description?: unknown }).description
+              if (typeof description === 'string') agentNames.set(block.id, description)
+            }
             ctx.activity({
               id: block.id,
               ...describe(block.name, block.input),
               status: 'running',
+              ...agentOf(message.parent_tool_use_id),
             })
           }
       }

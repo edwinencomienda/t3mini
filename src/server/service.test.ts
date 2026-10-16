@@ -215,6 +215,29 @@ it('takes dictation vocabulary from the last two agent replies only', async () =
   expect(terms).not.toContain('Zanzibarqux')
   expect(await service.dictationKeyterms('no-such-thread')).toEqual([])
 })
+it('waits on agent questions like approvals and returns your answers', async () => {
+  const created = await thread()
+  await service.send(created.id, { text: 'Fix the login' })
+  await started
+  const questions = [{ question: 'Block 2FA users?', options: [{ label: 'Yes' }, { label: 'No' }] }]
+  const answered = context.ask!({ id: 'q1', title: 'Claude has a question', questions })
+  expect(created.status).toBe('waiting')
+  expect(created.approvals).toEqual([
+    { id: 'q1', title: 'Claude has a question', detail: '', questions },
+  ])
+  service.approve(created.id, 'q1', true, { 'Block 2FA users?': 'Yes' })
+  expect(await answered).toEqual({ 'Block 2FA users?': 'Yes' })
+  expect(created.status).toBe('working')
+  // Skipping resolves with no answers.
+  const skipped = context.ask!({ id: 'q2', title: 'Claude has a question', questions })
+  service.approve(created.id, 'q2', false)
+  expect(await skipped).toBeNull()
+  // Background tasks show while the turn is open and clear when it ends.
+  context.background!([{ id: 'task-1', description: 'Update docs' }])
+  expect(created.background).toEqual([{ id: 'task-1', description: 'Update docs' }])
+  await settle(created.id, finish)
+  expect(created.background).toBeUndefined()
+})
 it('saves projects, lists them by recent activity, and only removes empty ones', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'other-project'))

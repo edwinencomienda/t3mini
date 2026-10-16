@@ -44,8 +44,22 @@ export type Activity = {
   // What the step returned, trimmed.
   output?: string
   status: 'running' | 'completed' | 'failed'
+  // The subagent that took this step (its task description); absent for the main agent.
+  agent?: string
 }
-export type Approval = { id: string; title: string; detail: string }
+// A multiple-choice question from the agent (Claude's AskUserQuestion).
+export type QuestionOption = { label: string; description?: string }
+export type Question = {
+  question: string
+  // A short tag, e.g. "Auth method".
+  header?: string
+  multiSelect?: boolean
+  options: QuestionOption[]
+}
+// Something the agent is waiting on: a yes/no permission, or (with `questions`) answers.
+export type Approval = { id: string; title: string; detail: string; questions?: Question[] }
+// A task the agent left running in the background (e.g. a subagent), while the turn is open.
+export type BackgroundTask = { id: string; description: string }
 export type Thread = {
   id: string
   title: string
@@ -69,6 +83,8 @@ export type Thread = {
   claudeEntry?: string
   // A turn to drop from the agent's memory before the next run (set by an edit).
   rewind?: TurnCheckpoint
+  // Background tasks still running in the current turn.
+  background?: BackgroundTask[]
   // Where the title came from: your first message (replaced by an AI title once there is one),
   // an AI, or a rename by you or the agent (never replaced automatically).
   titleSource?: 'message' | 'ai' | 'custom'

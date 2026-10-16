@@ -309,9 +309,17 @@ export async function handleApi(request: Request) {
         if (parts[2] === 'stop') return Response.json(await service.stop(id))
         if (parts[2] === 'approve') {
           const data = z
-            .object({ approvalId: z.string(), allow: z.boolean() })
+            .object({
+              approvalId: z.string(),
+              allow: z.boolean(),
+              // Answers to an agent's question: question text → chosen option(s) or your words.
+              answers: z
+                .record(z.string().max(1000), z.string().max(4000))
+                .refine((value) => Object.keys(value).length <= 8)
+                .optional(),
+            })
             .parse(await request.json())
-          return Response.json(service.approve(id, data.approvalId, data.allow))
+          return Response.json(service.approve(id, data.approvalId, data.allow, data.answers))
         }
       }
     }

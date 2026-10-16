@@ -51,6 +51,8 @@ On the Mac, t3 mini checks npm for new Claude Code and Codex releases (at startu
 - Streamed Markdown replies (code blocks have a copy button) and a work log for the latest turn. Each step reads like `Run git status`, `Read src/app.ts`, or `Edit src/styles.css`; click a step to see the full command or edit and its output (long output is trimmed).
 - Real provider status: starting, working, waiting for approval, completed, stopped, or failed.
 - Explicit **Allow once / Decline** actions when a provider requests tool approval, plus **Stop** for an active turn.
+- When Claude asks you a multiple-choice question (its AskUserQuestion tool), a question card shows the options to pick from (or several, when it allows that), plus **Something else** to type your own answer; **Send answer** gives Claude your choice, **Skip** lets it carry on without. Questions appear in every permission mode, including Full access, since they need your answer rather than your permission.
+- Work Claude leaves running in the background (a background subagent or shell) keeps the turn open after its last reply; a **Still running in the background** line names it until it finishes, and a subagent's steps in the work log are tagged with its task name.
 - Live updates over Server-Sent Events, including reconnect snapshots. Switching threads or closing the browser does not stop an agent.
 - Recoverable conversations after a server restart. A turn that was active at restart appears as stopped; send a new message to resume its provider session.
 
@@ -80,7 +82,7 @@ New threads default to **Claude** (Codex if only Codex is installed) and **Full 
 
 The **Browse…** chooser opens on the Mac running the server. Cancel leaves the current folder unchanged. On other operating systems, enter the project folder path manually.
 
-This first version runs on one local Node process. It binds to loopback and rejects foreign hosts and cross-origin API requests. Phone access (below) is the only way in from another device. There are no tunnels, worktree isolation, checkpoint rollback, or interactive provider question forms. Use a project folder or worktree you intend the agent to edit. Decline unsupported requests or stop the turn and answer with a follow-up message.
+This first version runs on one local Node process. It binds to loopback and rejects foreign hosts and cross-origin API requests. Phone access (below) is the only way in from another device. There are no tunnels, worktree isolation, or checkpoint rollback. Use a project folder or worktree you intend the agent to edit. Decline unsupported requests or stop the turn and answer with a follow-up message.
 
 ## Dictation
 

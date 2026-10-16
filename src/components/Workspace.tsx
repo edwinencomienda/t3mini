@@ -76,6 +76,7 @@ import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
 import { Modal, ModalTitle } from './Modal'
+import { QuestionCard } from './QuestionCard'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -1403,6 +1404,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   ) : (
                     <Circle size={9} />
                   )}
+                  {item.agent ? (
+                    <span className="step-agent" title={`Subagent: ${item.agent}`}>
+                      {item.agent}
+                    </span>
+                  ) : null}
                   <span className="step-label">{item.label}</span>
                   {item.summary ? (
                     <span className="step-summary" title={item.summary}>
@@ -1904,35 +1910,62 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       </div>
                     ))}
                     {lastUser === -1 ? workLog : null}
-                    {thread.approvals.map((approval) => (
-                      <section className="approval" key={approval.id}>
-                        <div className="approval-title">
-                          <ShieldAlert size={16} />
-                          <strong>{approval.title}</strong>
-                        </div>
-                        <pre>{approval.detail}</pre>
-                        <div className="approval-actions">
-                          <button
-                            className="secondary"
-                            disabled={busy || !connected}
-                            onClick={() =>
-                              action('approve', { approvalId: approval.id, allow: false })
-                            }
-                          >
-                            Decline
-                          </button>
-                          <button
-                            className="primary"
-                            disabled={busy || !connected}
-                            onClick={() =>
-                              action('approve', { approvalId: approval.id, allow: true })
-                            }
-                          >
-                            Allow once
-                          </button>
-                        </div>
-                      </section>
-                    ))}
+                    {thread.approvals.map((approval) =>
+                      approval.questions?.length ? (
+                        <QuestionCard
+                          key={approval.id}
+                          approval={{ ...approval, questions: approval.questions }}
+                          disabled={busy || !connected}
+                          onAnswer={(answers) =>
+                            action('approve', { approvalId: approval.id, allow: true, answers })
+                          }
+                          onSkip={() =>
+                            action('approve', { approvalId: approval.id, allow: false })
+                          }
+                        />
+                      ) : (
+                        <section className="approval" key={approval.id}>
+                          <div className="approval-title">
+                            <ShieldAlert size={16} />
+                            <strong>{approval.title}</strong>
+                          </div>
+                          <pre>{approval.detail}</pre>
+                          <div className="approval-actions">
+                            <button
+                              className="secondary"
+                              disabled={busy || !connected}
+                              onClick={() =>
+                                action('approve', { approvalId: approval.id, allow: false })
+                              }
+                            >
+                              Decline
+                            </button>
+                            <button
+                              className="primary"
+                              disabled={busy || !connected}
+                              onClick={() =>
+                                action('approve', { approvalId: approval.id, allow: true })
+                              }
+                            >
+                              Allow once
+                            </button>
+                          </div>
+                        </section>
+                      ),
+                    )}
+                    {/* Work Claude left running in the background (e.g. a subagent) keeps the turn
+                        open after its last reply; say so, so it doesn't look stuck. */}
+                    {active && thread.background?.length ? (
+                      <div className="background-tasks" role="status">
+                        <LoaderCircle size={13} className="status-spinner" />
+                        <span>
+                          Still running in the background:{' '}
+                          <strong>
+                            {thread.background.map((task) => task.description).join(', ')}
+                          </strong>
+                        </span>
+                      </div>
+                    ) : null}
                     {/* One working indicator: the work log shows it once the agent starts using tools. */}
                     {active && !thread.approvals.length && !thread.activities.length ? (
                       <div className="thinking" role="status">

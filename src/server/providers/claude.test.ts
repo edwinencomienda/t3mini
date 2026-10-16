@@ -211,3 +211,151 @@ it('gives Claude the t3 mini tools and runs display-only ones without asking', a
   expect(decision).toMatchObject({ behavior: 'allow' })
   expect(approve).not.toHaveBeenCalled()
 })
+
+it('asks questions, labels subagent steps, and reports background tasks', async () => {
+  const question = {
+    questions: [
+      {
+        question: 'How should v2 login handle 2FA users?',
+        header: 'v2 login 2FA',
+        multiSelect: false,
+        options: [
+          { label: 'Block 2FA users', description: 'Clear 403' },
+          { label: 'Skip for now', description: 'Revisit later' },
+        ],
+      },
+    ],
+  }
+  const decisions: unknown[] = []
+  vi.mocked(query).mockImplementation(({ prompt, options }) => {
+    async function* messages(): AsyncGenerator<SDKMessage> {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input')
+      await prompt[Symbol.asyncIterator]().next()
+      const canUseTool = options!.canUseTool!
+      const signal = new AbortController().signal
+      // Claude starts a background subagent…
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          id: 'm1',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'agent-1',
+              name: 'Agent',
+              input: { description: 'Update docs' },
+            },
+          ],
+        },
+      } as unknown as SDKMessage
+      yield {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'task-1',
+        tool_use_id: 'agent-1',
+        description: 'Update docs',
+        is_backgrounded: true,
+      } as unknown as SDKMessage
+      // …whose own steps and words arrive tagged with that tool call.
+      yield {
+        type: 'assistant',
+        parent_tool_use_id: 'agent-1',
+        message: {
+          id: 'm2',
+          content: [
+            { type: 'text', text: 'Subagent thinking out loud' },
+            { type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'ls' } },
+          ],
+        },
+      } as unknown as SDKMessage
+      // A question goes to the user even with full access; a skipped one is denied.
+      decisions.push(
+        await canUseTool('AskUserQuestion', question, { signal, toolUseID: 'q1' } as never),
+      )
+      decisions.push(
+        await canUseTool('AskUserQuestion', question, { signal, toolUseID: 'q2' } as never),
+      )
+      yield {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'task-1',
+        status: 'completed',
+        output_file: '',
+        summary: 'Docs updated',
+      } as unknown as SDKMessage
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        session_id: 'native-session',
+      } as SDKMessage
+    }
+    return Object.assign(messages(), {
+      applyFlagSettings: vi.fn(async () => {}),
+      close: vi.fn(),
+    }) as unknown as ReturnType<typeof query>
+  })
+  const ask = vi
+    .fn()
+    .mockResolvedValueOnce({ 'How should v2 login handle 2FA users?': 'Block 2FA users' })
+    .mockResolvedValueOnce(null)
+  const ctx: ProviderContext = {
+    thread: {
+      id: 'thread',
+      title: 'Test',
+      provider: 'claude',
+      cwd: process.cwd(),
+      model: 'sonnet',
+      effort: '',
+      permissionMode: 'full-access',
+      status: 'starting',
+      createdAt: '',
+      updatedAt: '',
+      messages: [],
+      activities: [],
+      approvals: [],
+    },
+    prompt: 'Fix the API',
+    images: [],
+    tools: {
+      cwd: process.cwd(),
+      attach: vi.fn(),
+      saveImage: vi.fn(),
+      processes: {} as never,
+      rename: vi.fn(),
+    },
+    signal: new AbortController().signal,
+    session: vi.fn(),
+    text: vi.fn(),
+    activity: vi.fn(),
+    approve: vi.fn(async () => true),
+    ask,
+    background: vi.fn(),
+  }
+  await runClaude(ctx)
+  expect(ask).toHaveBeenCalledWith({
+    id: 'q1',
+    title: 'Claude has a question',
+    questions: question.questions,
+  })
+  expect(decisions[0]).toEqual({
+    behavior: 'allow',
+    updatedInput: {
+      ...question,
+      answers: { 'How should v2 login handle 2FA users?': 'Block 2FA users' },
+    },
+  })
+  expect(decisions[1]).toMatchObject({ behavior: 'deny' })
+  expect(ctx.approve).not.toHaveBeenCalled()
+  // The subagent's step is labelled; its words never become Claude's reply.
+  expect(ctx.activity).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'bash-1', agent: 'Update docs' }),
+  )
+  expect(ctx.activity).toHaveBeenCalledWith(
+    expect.not.objectContaining({ id: 'agent-1', agent: expect.anything() }),
+  )
+  expect(ctx.text).not.toHaveBeenCalled()
+  expect(ctx.background).toHaveBeenNthCalledWith(1, [{ id: 'task-1', description: 'Update docs' }])
+  expect(ctx.background).toHaveBeenLastCalledWith([])
+})

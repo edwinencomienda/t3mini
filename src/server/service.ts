@@ -137,7 +137,8 @@ async function resolveFolder(input: string) {
 }
 type Run = {
   controller: AbortController
-  approvals: Map<string, (allow: boolean) => void>
+  // Pending approvals and questions: resolved with yes/no, or a question's answers.
+  approvals: Map<string, (answer: boolean | Record<string, string>) => void>
   done: Promise<void>
   // Set by the provider once the live run can take more messages.
   steer?: Steer
@@ -542,7 +543,7 @@ export class AgentService {
     thread.activities = []
     thread.approvals = []
     const controller = new AbortController()
-    const approvals = new Map<string, (allow: boolean) => void>()
+    const approvals = new Map<string, (answer: boolean | Record<string, string>) => void>()
     const run: Run = { controller, approvals, done: Promise.resolve(), queued: [], messageId }
     // Reserve before any I/O; later messages steer this run instead of starting another.
     this.runs.set(id, run)
@@ -664,9 +665,25 @@ export class AgentService {
           }
           thread.approvals.push(approval)
           thread.status = 'waiting'
-          run.approvals.set(approval.id, resolve)
+          run.approvals.set(approval.id, (answer) => resolve(answer !== false))
           touch()
         }),
+      // A question waits like an approval, but resolves with your answers (null if skipped).
+      ask: ({ id, title, questions }) =>
+        new Promise<Record<string, string> | null>((resolve, reject) => {
+          if (run.controller.signal.aborted) {
+            reject(new Error('Turn stopped.'))
+            return
+          }
+          thread.approvals.push({ id, title, detail: '', questions })
+          thread.status = 'waiting'
+          run.approvals.set(id, (answer) => resolve(typeof answer === 'object' ? answer : null))
+          touch()
+        }),
+      background: (tasks) => {
+        thread.background = tasks.length ? tasks : undefined
+        touch()
+      },
     }
     try {
       try {
@@ -695,6 +712,7 @@ export class AgentService {
       for (const resolve of run.approvals.values()) resolve(false)
       run.approvals.clear()
       thread.approvals = []
+      thread.background = undefined
       thread.activities = thread.activities.map((activity) =>
         activity.status === 'running'
           ? { ...activity, status: thread.status === 'completed' ? 'completed' : 'failed' }
@@ -794,7 +812,8 @@ export class AgentService {
     this.applyTitle(thread, title)
     return thread
   }
-  approve(id: string, approvalId: string, allow: boolean) {
+  // Answers an approval (allow or decline), or a question (allow with answers, or skip).
+  approve(id: string, approvalId: string, allow: boolean, answers?: Record<string, string>) {
     const thread = this.get(id),
       run = this.runs.get(id),
       resolve = run?.approvals.get(approvalId)
@@ -802,7 +821,7 @@ export class AgentService {
     run.approvals.delete(approvalId)
     thread.approvals = thread.approvals.filter((item) => item.id !== approvalId)
     thread.status = thread.approvals.length ? 'waiting' : 'working'
-    resolve(allow)
+    resolve(allow ? (answers ?? true) : false)
     this.changed()
     return { ok: true }
   }
