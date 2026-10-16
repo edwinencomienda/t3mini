@@ -34,6 +34,7 @@ import {
   Plus,
   Search,
   Settings,
+  Settings2,
   Smartphone,
   Sparkles,
   SquareCheck,
@@ -48,7 +49,7 @@ import {
 } from 'lucide-react'
 import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { AgentSettingsControls, Picker, ProviderMark } from './AgentSettingsControls'
+import { AgentSettingsControls, Picker, ProviderMark, SettingsMenu } from './AgentSettingsControls'
 import { VSCodeIcon } from './ProviderIcon'
 import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
@@ -328,6 +329,7 @@ const MessageView = memo(
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 // The composer grows with its text (or a live dictation preview) up to this height, then scrolls.
 const composerMaxHeight = 240
+const groupByKey = 't3-mini:sidebar-group'
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 // A project's name: the one you gave it in the sidebar, else its folder name.
 const projectLabel = (projects: ProjectSummary[], path: string) =>
@@ -565,6 +567,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // How the sidebar lists threads: under their projects, or one list (remembered per browser).
+  const [groupBy, setGroupBy] = useState<'project' | 'none'>('project')
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(groupByKey) === 'none') setGroupBy('none')
+    } catch {
+      // Storage unavailable: grouped by project.
+    }
+  }, [])
+  function changeGroupBy(next: 'project' | 'none') {
+    setGroupBy(next)
+    try {
+      if (next === 'none') localStorage.setItem(groupByKey, 'none')
+      else localStorage.removeItem(groupByKey)
+    } catch {
+      // The choice still applies until reload.
+    }
+  }
   // 'system' on the server render; the saved choice is read after mount (already applied by the head script).
   const [theme, setTheme] = useState<Theme>('system')
   useEffect(() => setTheme(loadTheme()), [])
@@ -1563,14 +1583,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const visibleThreads = threads.filter((item) =>
     `${item.title} ${item.cwd}`.toLowerCase().includes(query),
   )
-  // Projects arrive most recently active first; threads within them newest first. A thread
-  // created a moment ago may arrive before its project does, so fall back to thread folders.
+  // Projects stay put, newest added on top, so activity doesn't reshuffle them; only the
+  // threads inside each project move (newest message first). A thread created a moment ago
+  // may arrive before its project does, so fall back to thread folders.
   const projectPaths = [
     ...new Set([
       ...threads
         .map((item) => item.cwd)
         .filter((cwd) => !projects.some((project) => project.path === cwd)),
-      ...projects.map((project) => project.path),
+      ...[...projects]
+        .sort((a, b) => (b.addedAt ?? '').localeCompare(a.addedAt ?? ''))
+        .map((project) => project.path),
     ]),
   ]
   const groups = projectPaths
@@ -1583,9 +1606,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
     )
   // Rows in sidebar order (open projects only), for Shift-click ranges; and the picked threads
   // that still exist.
-  const visibleOrder = groups.flatMap((group) =>
-    !collapsed[group.path] || query ? group.items.map((item) => item.id) : [],
-  )
+  const visibleOrder =
+    groupBy === 'none'
+      ? visibleThreads.map((item) => item.id)
+      : groups.flatMap((group) =>
+          !collapsed[group.path] || query ? group.items.map((item) => item.id) : [],
+        )
   const pickedIds = threads.filter((item) => picked.has(item.id)).map((item) => item.id)
   function pickRange(id: string) {
     const from = visibleOrder.indexOf(pickAnchor.current ?? activeId ?? id)
@@ -1702,6 +1728,121 @@ export function Workspace({ threadId }: { threadId?: string }) {
     </div>
   )
 
+  // One thread in the sidebar (with its project's name when the list isn't grouped).
+  const threadRow = (item: ThreadSummary, project?: string) =>
+    renaming?.id === item.id ? (
+      <div className="thread-row selected renaming" key={item.id}>
+        <StatusDot status={item.status} unread={unread.has(item.id)} />
+        <input
+          className="thread-rename"
+          aria-label="Thread name"
+          autoFocus
+          maxLength={120}
+          value={renaming.title}
+          onFocus={(event) => event.target.select()}
+          onChange={(event) => setRenaming({ id: item.id, title: event.target.value })}
+          onBlur={() => void rename()}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void rename()
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              setRenaming(null)
+            }
+          }}
+        />
+      </div>
+    ) : (
+      // The ⋮ button sits beside the link (a button can't live inside a link).
+      <div className="thread-row-wrap" key={item.id}>
+        {/* Resting on a row for a moment shows its hover card (ThreadPreview). */}
+        <ThreadPreviewTrigger
+          handle={threadPreview}
+          payload={item.id}
+          delay={700}
+          closeDelay={150}
+          render={
+            <Link
+              to="/threads/$threadId"
+              params={{ threadId: item.id }}
+              data-thread-id={item.id}
+              className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
+              aria-selected={picked.size ? picked.has(item.id) : undefined}
+              onClick={(event) => {
+                if (busy) {
+                  event.preventDefault()
+                  return
+                }
+                // Picking threads instead of opening one (middle-click still opens
+                // a new tab).
+                if (
+                  event.button === 0 &&
+                  (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
+                ) {
+                  event.preventDefault()
+                  if (event.shiftKey) pickRange(item.id)
+                  else togglePick(item.id)
+                  return
+                }
+                if (!event.altKey && event.button === 0) prepareSelection(item.id)
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                setMenu({
+                  kind: 'thread',
+                  id: item.id,
+                  position: menuPosition(event),
+                })
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault()
+                setRenaming({ id: item.id, title: item.title })
+              }}
+              aria-disabled={busy}
+              aria-current={activeId === item.id ? 'page' : undefined}
+            />
+          }
+        >
+          {/* A picked thread shows a check, and while a new title is being written a
+                              spinner, in place of the status dot. */}
+          {picked.has(item.id) ? (
+            <span className="thread-pick" aria-hidden>
+              <Check size={9} strokeWidth={3.5} />
+            </span>
+          ) : retitling.has(item.id) ? (
+            <LoaderCircle
+              size={12}
+              className="status-spinner thread-retitling"
+              aria-label="Writing a new title"
+            />
+          ) : (
+            <StatusDot status={item.status} unread={unread.has(item.id)} />
+          )}
+          <span className="thread-title">{item.title}</span>
+          {project ? <span className="thread-project">{project}</span> : null}
+          <span className="thread-time">{threadTime(item, now)}</span>
+        </ThreadPreviewTrigger>
+        <button
+          type="button"
+          className="thread-more"
+          aria-label={`More actions for ${item.title}`}
+          title="More"
+          aria-haspopup="menu"
+          aria-expanded={menu?.kind === 'thread' && menu.id === item.id}
+          onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            setMenu({
+              kind: 'thread',
+              id: item.id,
+              position: { x: rect.left, y: rect.bottom + 4 },
+            })
+          }}
+        >
+          <EllipsisVertical size={14} />
+        </button>
+      </div>
+    )
   return (
     <div className="workspace">
       {confirmDialog}
@@ -1767,30 +1908,61 @@ export function Workspace({ threadId }: { threadId?: string }) {
         </label>
         {groups.length ? (
           <div className="sidebar-section">
-            <span>Projects</span>
-            {(() => {
-              const anyExpanded = groups.some((group) => !collapsed[group.path])
-              return (
-                <button
-                  className="icon-button"
-                  aria-label={anyExpanded ? 'Collapse all projects' : 'Expand all projects'}
-                  title={anyExpanded ? 'Collapse all' : 'Expand all'}
-                  onClick={() =>
-                    setCollapsed(
-                      anyExpanded
-                        ? Object.fromEntries(projectPaths.map((path) => [path, true]))
-                        : {},
-                    )
-                  }
-                >
-                  {anyExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
-                </button>
-              )
-            })()}
+            <span>{groupBy === 'none' ? 'Recents' : 'Projects'}</span>
+            {/* View options (like Claude Desktop): group threads by project, or not at all. */}
+            <SettingsMenu
+              label="Sidebar view"
+              text={groupBy === 'none' ? 'Not grouped' : 'Grouped by project'}
+              title="View options"
+              triggerClassName="icon-button sidebar-view"
+              trigger={<Settings2 size={13} />}
+              placement="down"
+              rows={[
+                {
+                  key: 'group',
+                  label: 'Group by',
+                  text: groupBy === 'none' ? 'None' : 'Project',
+                  value: groupBy,
+                  options: [
+                    { value: 'project', label: 'Project' },
+                    { value: 'none', label: 'None' },
+                  ],
+                  onSelect: (value) => changeGroupBy(value === 'none' ? 'none' : 'project'),
+                  closeOnSelect: true,
+                },
+              ]}
+            />
+            {groupBy === 'none'
+              ? null
+              : (() => {
+                  const anyExpanded = groups.some((group) => !collapsed[group.path])
+                  return (
+                    <button
+                      className="icon-button"
+                      aria-label={anyExpanded ? 'Collapse all projects' : 'Expand all projects'}
+                      title={anyExpanded ? 'Collapse all' : 'Expand all'}
+                      onClick={() =>
+                        setCollapsed(
+                          anyExpanded
+                            ? Object.fromEntries(projectPaths.map((path) => [path, true]))
+                            : {},
+                        )
+                      }
+                    >
+                      {anyExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                    </button>
+                  )
+                })()}
           </div>
         ) : null}
         <nav className="thread-list" aria-label="Threads" ref={threadList}>
-          {groups.map(({ path: cwd, items }) => (
+          {groupBy === 'none' && groups.length ? (
+            // One list, newest message first, each thread with its project's name.
+            <section className="project recents">
+              {visibleThreads.map((item) => threadRow(item, projectName(item.cwd)))}
+            </section>
+          ) : null}
+          {(groupBy === 'none' ? [] : groups).map(({ path: cwd, items }) => (
             <section className="project" key={cwd}>
               <div
                 className="project-header"
@@ -1855,124 +2027,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <Plus size={15} />
                 </button>
               </div>
-              {!collapsed[cwd] || query
-                ? items.map((item) =>
-                    renaming?.id === item.id ? (
-                      <div className="thread-row selected renaming" key={item.id}>
-                        <StatusDot status={item.status} unread={unread.has(item.id)} />
-                        <input
-                          className="thread-rename"
-                          aria-label="Thread name"
-                          autoFocus
-                          maxLength={120}
-                          value={renaming.title}
-                          onFocus={(event) => event.target.select()}
-                          onChange={(event) =>
-                            setRenaming({ id: item.id, title: event.target.value })
-                          }
-                          onBlur={() => void rename()}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              void rename()
-                            } else if (event.key === 'Escape') {
-                              event.preventDefault()
-                              setRenaming(null)
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      // The ⋮ button sits beside the link (a button can't live inside a link).
-                      <div className="thread-row-wrap" key={item.id}>
-                        {/* Resting on a row for a moment shows its hover card (ThreadPreview). */}
-                        <ThreadPreviewTrigger
-                          handle={threadPreview}
-                          payload={item.id}
-                          delay={700}
-                          closeDelay={150}
-                          render={
-                            <Link
-                              to="/threads/$threadId"
-                              params={{ threadId: item.id }}
-                              data-thread-id={item.id}
-                              className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
-                              aria-selected={picked.size ? picked.has(item.id) : undefined}
-                              onClick={(event) => {
-                                if (busy) {
-                                  event.preventDefault()
-                                  return
-                                }
-                                // Picking threads instead of opening one (middle-click still opens
-                                // a new tab).
-                                if (
-                                  event.button === 0 &&
-                                  (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
-                                ) {
-                                  event.preventDefault()
-                                  if (event.shiftKey) pickRange(item.id)
-                                  else togglePick(item.id)
-                                  return
-                                }
-                                if (!event.altKey && event.button === 0) prepareSelection(item.id)
-                              }}
-                              onContextMenu={(event) => {
-                                event.preventDefault()
-                                setMenu({
-                                  kind: 'thread',
-                                  id: item.id,
-                                  position: menuPosition(event),
-                                })
-                              }}
-                              onDoubleClick={(event) => {
-                                event.preventDefault()
-                                setRenaming({ id: item.id, title: item.title })
-                              }}
-                              aria-disabled={busy}
-                              aria-current={activeId === item.id ? 'page' : undefined}
-                            />
-                          }
-                        >
-                          {/* A picked thread shows a check, and while a new title is being written a
-                              spinner, in place of the status dot. */}
-                          {picked.has(item.id) ? (
-                            <span className="thread-pick" aria-hidden>
-                              <Check size={9} strokeWidth={3.5} />
-                            </span>
-                          ) : retitling.has(item.id) ? (
-                            <LoaderCircle
-                              size={12}
-                              className="status-spinner thread-retitling"
-                              aria-label="Writing a new title"
-                            />
-                          ) : (
-                            <StatusDot status={item.status} unread={unread.has(item.id)} />
-                          )}
-                          <span className="thread-title">{item.title}</span>
-                          <span className="thread-time">{threadTime(item, now)}</span>
-                        </ThreadPreviewTrigger>
-                        <button
-                          type="button"
-                          className="thread-more"
-                          aria-label={`More actions for ${item.title}`}
-                          title="More"
-                          aria-haspopup="menu"
-                          aria-expanded={menu?.kind === 'thread' && menu.id === item.id}
-                          onClick={(event) => {
-                            const rect = event.currentTarget.getBoundingClientRect()
-                            setMenu({
-                              kind: 'thread',
-                              id: item.id,
-                              position: { x: rect.left, y: rect.bottom + 4 },
-                            })
-                          }}
-                        >
-                          <EllipsisVertical size={14} />
-                        </button>
-                      </div>
-                    ),
-                  )
-                : null}
+              {!collapsed[cwd] || query ? items.map((item) => threadRow(item)) : null}
               {!collapsed[cwd] && !items.length && !query ? (
                 <button
                   className="thread-row empty-project"

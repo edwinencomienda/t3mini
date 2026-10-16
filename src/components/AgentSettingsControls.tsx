@@ -14,7 +14,7 @@ import { ProviderIcon } from './ProviderIcon'
 
 type Option = { value: string; label: string; description?: string; badge?: string }
 // One setting in the model menu: a row that opens its choices in a submenu.
-type MenuRow = {
+export type MenuRow = {
   key: string
   label: string
   // The current choice, shown on the right of the row.
@@ -172,10 +172,12 @@ export function Picker({
 // The model menu: rows for Model, Effort… that open their choices in a submenu on hover or
 // click. Picking a choice closes the submenu but keeps the menu open, so the next setting is
 // one hover away.
-function SettingsMenu({
+export function SettingsMenu({
   label,
   text,
   trigger,
+  triggerClassName = 'picker-trigger pill',
+  title,
   header,
   note,
   rows,
@@ -187,6 +189,8 @@ function SettingsMenu({
   label: string
   text: string
   trigger: ReactNode
+  triggerClassName?: string
+  title?: string
   // Shown above the rows (e.g. provider tabs).
   header?: ReactNode
   // Shown below the rows.
@@ -212,7 +216,7 @@ function SettingsMenu({
   }, [disabled])
   return (
     <Menu.Root open={open} onOpenChange={change} disabled={disabled}>
-      <Menu.Trigger className="picker-trigger pill" aria-label={`${label}: ${text}`}>
+      <Menu.Trigger className={triggerClassName} title={title} aria-label={`${label}: ${text}`}>
         {trigger}
       </Menu.Trigger>
       <Menu.Portal>

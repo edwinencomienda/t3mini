@@ -157,6 +157,9 @@ export type ProjectSummary = {
   path: string
   name?: string
   lastActiveAt: string
+  // When it was added (or, for a folder that only has threads, its first thread): the
+  // sidebar keeps projects in this order so they don't jump around with activity.
+  addedAt: string
   threadCount: number
 }
 export type ProviderHealth = { installed: boolean; version?: string }

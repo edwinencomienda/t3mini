@@ -2603,6 +2603,39 @@ body.resizing {
   width: 1.5rem;
   height: 1.5rem;
 }
+/* The span takes the free space, so the view and collapse buttons sit together on the right. */
+.sidebar-section > span {
+  flex: 1;
+}
+.sidebar-section .sidebar-view[data-popup-open] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+/* The view-options button shows while you hover the header line (or it's open or focused). */
+.sidebar-section .sidebar-view {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sidebar-section:hover .sidebar-view,
+.sidebar-section .sidebar-view:focus-visible,
+.sidebar-section .sidebar-view[data-popup-open] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .sidebar-section .sidebar-view {
+    opacity: 1;
+  }
+}
+/* Not grouped: each thread names its project. */
+.thread-project {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--faint);
+}
 
 /* Picker option badges (e.g. Codex service tier) */
 .picker-badge {

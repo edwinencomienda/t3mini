@@ -206,6 +206,7 @@ export class AgentService {
           project.lastActiveAt && project.lastActiveAt > project.addedAt
             ? project.lastActiveAt
             : project.addedAt,
+        addedAt: project.addedAt,
         threadCount: 0,
       })
     for (const thread of this.store.threads.values()) {
@@ -213,10 +214,14 @@ export class AgentService {
       const project = projects.get(thread.cwd) ?? {
         path: thread.cwd,
         lastActiveAt: sentAt,
+        addedAt: thread.createdAt,
         threadCount: 0,
       }
       project.threadCount++
       if (sentAt > project.lastActiveAt) project.lastActiveAt = sentAt
+      // A folder without a saved project counts from its first thread.
+      if (!this.projectStore.projects.has(thread.cwd) && thread.createdAt < project.addedAt)
+        project.addedAt = thread.createdAt
       projects.set(thread.cwd, project)
     }
     return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
