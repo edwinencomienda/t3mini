@@ -99,6 +99,14 @@ export type ThreadSummary = Pick<
   // While waiting: on a yes/no approval, or on answers to the agent's question.
   waitingFor?: 'approval' | 'question'
 }
+// A conversation that mentions what you searched for (command palette), with a short excerpt.
+export type MessageMatch = {
+  threadId: string
+  title: string
+  cwd: string
+  role: 'user' | 'assistant'
+  snippet: string
+}
 // A project is a folder on this machine. Saved projects stay in the sidebar even without threads.
 // name: shown instead of the folder name; renaming never touches the folder on disk.
 export type Project = { path: string; addedAt: string; name?: string }

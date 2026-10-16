@@ -80,6 +80,7 @@ import { DictationButton, dictationSupported } from './Dictation'
 import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
+import { CommandPalette } from './CommandPalette'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -294,6 +295,11 @@ function relativeTime(iso: string, now: number) {
   if (days < 7) return `${days}d`
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
+// The sidebar's right-hand label for a thread: what it waits for, else when it last changed.
+function threadTime(item: ThreadSummary, now: number) {
+  if (item.status === 'waiting') return item.waitingFor === 'question' ? 'Question' : 'Approval'
+  return relativeTime(item.updatedAt, now)
+}
 function duration(start: string, end: string) {
   const seconds = Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 1000))
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
@@ -479,6 +485,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const composer = useRef<HTMLTextAreaElement>(null)
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   // 'system' on the server render; the saved choice is read after mount (already applied by the head script).
   const [theme, setTheme] = useState<Theme>('system')
   useEffect(() => setTheme(loadTheme()), [])
@@ -822,10 +829,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   useEffect(() => {
     // ⇧⌘O / Ctrl+Shift+O starts a new thread, matching t3code. ⌘S / Ctrl+S toggles the
-    // sidebar (in place of the browser's Save Page, which has no use here).
+    // sidebar (in place of the browser's Save Page, which has no use here). ⌘K / Ctrl+K opens
+    // the command palette (or closes it again).
     const onKey = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey
-      if (mod && event.shiftKey && event.key.toLowerCase() === 'o') {
+      if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        if (bootstrap) setPaletteOpen((open) => !open)
+      } else if (mod && event.shiftKey && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         if (bootstrap) openNewThreadRef.current()
       } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
@@ -1602,6 +1613,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
           <div className="sidebar-header-actions">
             <button
               className="icon-button"
+              onClick={() => setPaletteOpen(true)}
+              disabled={!bootstrap}
+              aria-label="Search"
+              title={`Search (${isMac ? '⌘K' : 'Ctrl+K'})`}
+            >
+              <Search size={15} />
+            </button>
+            <button
+              className="icon-button"
               onClick={() => openNewThread()}
               disabled={!bootstrap}
               aria-label="New thread"
@@ -1807,13 +1827,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             <StatusDot status={item.status} unread={unread.has(item.id)} />
                           )}
                           <span className="thread-title">{item.title}</span>
-                          <span className="thread-time">
-                            {item.status === 'waiting'
-                              ? item.waitingFor === 'question'
-                                ? 'Question'
-                                : 'Approval'
-                              : relativeTime(item.updatedAt, now)}
-                          </span>
+                          <span className="thread-time">{threadTime(item, now)}</span>
                         </Link>
                         <button
                           type="button"
@@ -2565,6 +2579,32 @@ export function Workspace({ threadId }: { threadId?: string }) {
             if (preferences.prompted) setShowPrompt(false)
           }}
           onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+      {paletteOpen ? (
+        <CommandPalette
+          threads={[...threads].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))}
+          projectName={projectName}
+          statusDot={(item) => <StatusDot status={item.status} unread={unread.has(item.id)} />}
+          time={(item) => threadTime(item, now)}
+          onOpenThread={select}
+          onClose={() => setPaletteOpen(false)}
+          commands={[
+            {
+              id: 'new-thread',
+              label: 'New thread',
+              shortcut: isMac ? '⇧⌘O' : 'Ctrl+Shift+O',
+              run: () => openNewThread(),
+            },
+            { id: 'add-project', label: 'Add project', run: () => setAddProject(true) },
+            {
+              id: 'sidebar',
+              label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar',
+              shortcut: isMac ? '⌘S' : 'Ctrl+S',
+              run: toggleSidebar,
+            },
+            { id: 'settings', label: 'Settings', run: () => setSettingsOpen(true) },
+          ]}
         />
       ) : null}
       {newThreadProject !== null && bootstrap ? (

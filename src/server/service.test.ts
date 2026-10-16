@@ -260,6 +260,21 @@ it('saves projects, lists them by recent activity, and only removes empty ones',
   await service.removeProject({ path: other })
   expect(service.projects().map((project) => project.path)).toEqual([created.cwd])
 })
+it('searches conversations for the command palette, one excerpt per thread', async () => {
+  const created = await thread()
+  await service.send(created.id, { text: 'Please fix the   Flaky login test in CI' })
+  await started
+  await settle(created.id, finish)
+  await thread()
+  const [match, ...rest] = service.searchMessages('flaky LOGIN')
+  expect(rest).toEqual([])
+  expect(match).toMatchObject({ threadId: created.id, cwd: created.cwd, role: 'user' })
+  // Whitespace is collapsed, and long text is cut around the match.
+  expect(match!.snippet).toBe('Please fix the Flaky login test in CI')
+  expect(service.searchMessages('nothing like this')).toEqual([])
+  expect(() => service.searchMessages('a')).toThrow()
+  expect(() => service.searchMessages('x'.repeat(201))).toThrow()
+})
 it('renames a project label without touching its folder, and resets it with an empty name', async () => {
   const created = await thread()
   const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })

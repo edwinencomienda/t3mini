@@ -169,6 +169,9 @@ export async function handleApi(request: Request) {
       macOnly('Browsing folders')
       return Response.json(await pickProjectFolder(await request.json()))
     }
+    // Command palette: threads whose conversations mention the query.
+    if (parts[0] === 'search' && !parts[1] && request.method === 'GET')
+      return Response.json({ matches: service.searchMessages(url.searchParams.get('q') ?? '') })
     // Who each agent is signed in as (email and plan), for Settings → Agents.
     if (parts[0] === 'providers' && parts[1] === 'accounts' && request.method === 'GET') {
       const refresh = url.searchParams.get('refresh') === '1'

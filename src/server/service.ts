@@ -10,6 +10,7 @@ import {
   editableMessage,
   type Bootstrap,
   type GitInfo,
+  type MessageMatch,
   type PullRequest,
   type Message,
   type ProjectSummary,
@@ -224,6 +225,30 @@ export class AgentService {
       this.notify()
     }
     return this.projects().find((project) => project.path === path)!
+  }
+  // Threads whose messages mention the query (case-insensitive), newest first, one match per
+  // thread, with a short excerpt around it. For the command palette's "In messages" results.
+  searchMessages(input: unknown): MessageMatch[] {
+    const query = z.string().trim().min(2).max(200).parse(input).toLowerCase()
+    const matches: MessageMatch[] = []
+    for (const thread of this.list()) {
+      const full = this.store.threads.get(thread.id)
+      const message = full?.messages.find((item) => item.text.toLowerCase().includes(query))
+      if (!full || !message) continue
+      const text = message.text.replace(/\s+/g, ' ')
+      const at = text.toLowerCase().indexOf(query)
+      const start = Math.max(0, at - 60)
+      const end = Math.min(text.length, at + query.length + 80)
+      matches.push({
+        threadId: full.id,
+        title: full.title,
+        cwd: full.cwd,
+        role: message.role,
+        snippet: `${start ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`,
+      })
+      if (matches.length >= 20) break
+    }
+    return matches
   }
   // Changes the name shown for a project; an empty name goes back to the folder name. Only the
   // label changes: the folder, its path, and its threads stay as they are.
