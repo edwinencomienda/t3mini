@@ -85,7 +85,7 @@ import { CommandPalette } from './CommandPalette'
 import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
-import { LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
+import { Celebration, LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -2293,19 +2293,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     {/* What the agent is doing right now, and for how long. */}
                     {active && !thread.approvals.length ? (
                       liveStep ? (
-                        <LiveLine text={stepTitle(liveStep)} since={liveStep.startedAt} />
+                        <LiveLine
+                          text={stepTitle(liveStep)}
+                          since={liveStep.startedAt}
+                          provider={thread.provider}
+                          mood="working"
+                        />
                       ) : currentTodo ? (
                         // Between steps, the checklist's current item in its "-ing" form.
                         <LiveLine
                           text={currentTodo.activeText || currentTodo.text}
                           since={lastTodoAt ?? thread.startedAt}
+                          provider={thread.provider}
+                          mood="working"
                         />
                       ) : (
                         <LiveLine
                           text={thread.status === 'starting' ? 'Starting…' : 'Thinking…'}
                           since={thread.startedAt}
+                          provider={thread.provider}
+                          mood="thinking"
                         />
                       )
+                    ) : thread.status === 'completed' && thread.completedAt ? (
+                      <Celebration provider={thread.provider} at={thread.completedAt} />
                     ) : null}
                     {thread.error ? (
                       <div className="error-banner" role="alert">

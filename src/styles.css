@@ -3900,3 +3900,16 @@ body.resizing {
   padding-left: 0.85rem;
   border-left: 1px solid var(--border);
 }
+
+/* The agent's animated character in the working line (Settings → Appearance). */
+.live-line.with-mascot {
+  gap: 0.4rem;
+  margin-left: -0.35rem;
+}
+.mascot {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  /* The GIFs have padding; keep the line from growing much. */
+  margin: -6px 0;
+}

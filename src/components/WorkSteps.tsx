@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { Check, ChevronRight, CircleCheck, CircleDashed, LoaderCircle, X } from 'lucide-react'
-import type { Activity, Todo } from '../types'
+import type { Activity, Provider, Todo } from '../types'
+import { mascotLift, mascotSrc, useMascots, type Mood } from '../mascots'
 
 // The agent's tool steps in the conversation, Claude Desktop style: one plain-English line per
 // step (Claude's own description of a command when it gave one), "Failed" when it failed, and
@@ -124,22 +125,72 @@ function elapsed(since: string, now: number) {
 
 // "∴ Building the package and running unit tests 42s". Ticks on its own, so the timer doesn't
 // re-render the conversation every second.
-export function LiveLine({ text, since }: { text: string; since?: string }) {
+// With the characters on (Settings → Appearance), the agent's character replaces the dots,
+// matching what it's doing (mood).
+export function LiveLine({
+  text,
+  since,
+  provider,
+  mood = 'working',
+}: {
+  text: string
+  since?: string
+  provider?: Provider
+  mood?: Mood
+}) {
   const [now, setNow] = useState(() => Date.now())
+  const mascots = useMascots()
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [])
   return (
-    <div className="live-line" role="status">
-      <span className="live-dots" aria-hidden>
-        <span />
-        <span />
-        <span />
-        <span />
-      </span>
+    <div className={`live-line ${mascots && provider ? 'with-mascot' : ''}`} role="status">
+      {mascots && provider ? (
+        <img
+          className="mascot"
+          src={mascotSrc(provider, mood)}
+          style={{ translate: `0 -${mascotLift(provider, mood)}px` }}
+          width={40}
+          height={40}
+          alt=""
+        />
+      ) : (
+        <span className="live-dots" aria-hidden>
+          <span />
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
       <span className="live-text">{text}</span>
       {since ? <span className="live-time">{elapsed(since, now)}</span> : null}
+    </div>
+  )
+}
+
+// A short celebration where the working line was, right after a turn finishes (characters on).
+export function Celebration({ provider, at }: { provider: Provider; at: string }) {
+  const mascots = useMascots()
+  const left = 4000 - (Date.now() - Date.parse(at))
+  const [visible, setVisible] = useState(left > 0)
+  useEffect(() => {
+    setVisible(left > 0)
+    if (left <= 0) return
+    const timer = setTimeout(() => setVisible(false), left)
+    return () => clearTimeout(timer)
+  }, [at, left > 0])
+  if (!mascots || !visible) return null
+  return (
+    <div className="live-line with-mascot celebration" aria-hidden>
+      <img
+        className="mascot"
+        src={mascotSrc(provider, 'celebrating', at)}
+        style={{ translate: `0 -${mascotLift(provider, 'celebrating')}px` }}
+        width={40}
+        height={40}
+        alt=""
+      />
     </div>
   )
 }

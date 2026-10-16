@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { themeLabels, themes, type Theme } from '../theme'
+import { saveMascots, useMascotSetting } from '../mascots'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
@@ -200,6 +201,7 @@ export function SettingsDialog({
   onClose: () => void
 }) {
   const [permission, setPermission] = useState<DesktopPermission>(desktopPermission)
+  const mascotsOn = useMascotSetting()
   // Account emails are hidden until you choose to show them (not remembered).
   const [showEmails, setShowEmails] = useState(false)
   // Who each agent is signed in as; loaded when the Agents tab opens.
@@ -278,6 +280,20 @@ export function SettingsDialog({
                         </>
                       ),
                     }))}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>Working animations</strong>
+                    <small>
+                      Show the Claude and Codex characters while an agent works. Off shows the
+                      simple dots.
+                    </small>
+                  </div>
+                  <Toggle
+                    label="Working animations"
+                    checked={mascotsOn}
+                    onChange={(enabled) => saveMascots(enabled)}
                   />
                 </div>
               </section>
