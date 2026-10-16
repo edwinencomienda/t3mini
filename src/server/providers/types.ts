@@ -4,6 +4,7 @@ import type {
   BackgroundTask,
   Question,
   Thread,
+  Todo,
   TurnCheckpoint,
 } from '../../types'
 import type { ToolContext } from '../tools/types'
@@ -20,6 +21,8 @@ export type ProviderContext = {
   session: (id: string) => void
   text: (id: string, text: string, replace?: boolean) => void
   activity: (activity: Activity) => void
+  // The agent's to-do checklist changed (the whole new list).
+  todos?: (todos: Todo[]) => void
   approve: (approval: Approval) => Promise<boolean>
   // A question for you; resolves with your answers (question text → answer), or null if you
   // skipped it.

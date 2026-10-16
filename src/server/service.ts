@@ -774,6 +774,10 @@ export class AgentService {
           run.approvals.set(id, (answer) => resolve(typeof answer === 'object' ? answer : null))
           touch()
         }),
+      todos: (todos) => {
+        thread.todos = todos.length ? todos : undefined
+        touch()
+      },
       background: (tasks) => {
         thread.background = tasks.length ? tasks : undefined
         touch()

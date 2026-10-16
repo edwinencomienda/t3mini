@@ -6,6 +6,7 @@ import { openCodexClient } from './codex-client'
 import { codexPolicy, threadSettings } from '../provider-settings'
 import { readCodexModels } from '../models'
 import { describeCodexItem } from './activity'
+import { codexPlan } from './todos'
 import { findTool, runTool, toolJsonSchema, tools } from '../tools'
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -58,6 +59,16 @@ export const runCodex: Runner = async (ctx) => {
         return
       }
       if (packet.method === 'turn/started') turnId = string(object(params.turn).id)
+      // Codex's plan, shown as the to-do checklist card.
+      if (packet.method === 'turn/plan/updated') {
+        ctx.todos?.(codexPlan(params))
+        ctx.activity({
+          id: `plan:${turnId || 'turn'}`,
+          label: 'Update plan',
+          status: 'completed',
+          todo: true,
+        })
+      }
       if (packet.method === 'item/agentMessage/delta')
         ctx.text(string(params.itemId), string(params.delta))
       if (packet.method === 'item/started' || packet.method === 'item/completed') {

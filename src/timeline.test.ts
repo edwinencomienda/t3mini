@@ -23,7 +23,13 @@ const step = (id: string, s?: number, status: Activity['status'] = 'completed'):
   ...(s === undefined ? {} : { startedAt: at(s) }),
 })
 const kinds = (work: ReturnType<typeof buildTurns>[number]['work']) =>
-  work.map((item) => (item.kind === 'note' ? item.message.id : `step:${item.activity.id}`))
+  work.map((item) =>
+    item.kind === 'note'
+      ? item.message.id
+      : item.kind === 'todos'
+        ? 'todos'
+        : `step:${item.activity.id}`,
+  )
 
 describe('buildTurns', () => {
   it('folds a finished turn: notes and steps in order, the last reply as the answer', () => {
@@ -110,6 +116,18 @@ describe('buildTurns', () => {
       status: 'working',
     })
     expect(live!.blocks).toEqual([])
+  })
+
+  it('draws to-do updates as one checklist card where the list first appeared', () => {
+    const todo = (id: string, s: number): Activity => ({ ...step(id, s), todo: true })
+    const [turn] = buildTurns({
+      messages: [user('q', 0), reply('n1', 2), reply('final', 20)],
+      activities: [todo('t1', 3), step('s1', 5), todo('t2', 8), step('s2', 10)],
+      status: 'completed',
+      completedAt: at(21),
+    })
+    expect(kinds(turn!.work)).toEqual(['n1', 'todos', 'step:s1', 'step:s2'])
+    expect(turn!.steps).toBe(2)
   })
 
   it('says when a run stopped or failed', () => {

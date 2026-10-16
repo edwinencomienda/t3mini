@@ -8,6 +8,7 @@ import {
 import { claudeToolName, mcpServerName, runTool, tools } from '../tools'
 import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
+import { applyClaudeTodo, taskCreated, todoTools } from './todos'
 import { claudeSettings, threadSettings } from '../provider-settings'
 import { claudeExecutable } from '../cli-updates'
 import { z } from 'zod'
@@ -173,6 +174,9 @@ export const runClaude: Runner = async (ctx) => {
       settingSources: ['user', 'project', 'local'],
       mcpServers: { [mcpServerName]: t3Tools },
       allowedTools: safeTools,
+      // Claude's to-do tools (TodoWrite / TaskCreate…) are off by default outside the
+      // interactive CLI; t3 mini draws them as a checklist card, so turn them on.
+      env: { ...process.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' },
       ...claudeExecutableOption(),
       ...(ctx.thread.sessionId ? { resume: ctx.thread.sessionId } : {}),
       // Editing a stopped turn: resume from the last entry before it, dropping that turn. The
@@ -305,11 +309,30 @@ export const runClaude: Runner = async (ctx) => {
               status: 'running',
               ...agentOf(message.parent_tool_use_id),
             })
+            // The main agent's to-do list (a subagent's own list stays in its task).
+            if (todoTools.has(block.name) && !message.parent_tool_use_id) {
+              const todos = applyClaudeTodo(
+                ctx.thread.todos ?? [],
+                block.name,
+                block.input,
+                block.id,
+              )
+              if (todos) ctx.todos?.(todos)
+            }
           }
       }
       if (message.type === 'user' && Array.isArray(message.message.content)) {
         for (const block of message.message.content)
           if (block.type === 'tool_result' && toolIds.has(block.tool_use_id)) {
+            const created = block.is_error
+              ? undefined
+              : taskCreated(
+                  ctx.thread.todos ?? [],
+                  block.tool_use_id,
+                  message.tool_use_result,
+                  toolOutput(block.content),
+                )
+            if (created) ctx.todos?.(created)
             ctx.activity({
               id: block.tool_use_id,
               label: 'Tool',

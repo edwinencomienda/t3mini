@@ -2,7 +2,14 @@
 // one-line summary (the command or path), the full input for the expanded view, and output.
 import { findClaudeTool, findTool } from '../tools'
 
-export type ToolStep = { label: string; summary?: string; detail?: string; title?: string }
+export type ToolStep = {
+  label: string
+  summary?: string
+  detail?: string
+  title?: string
+  // A to-do list call, shown as the checklist card instead of a step.
+  todo?: boolean
+}
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -79,6 +86,16 @@ export function describeClaudeTool(name: string, rawInput: unknown, cwd: string)
       }
     case 'WebFetch':
       return { label: 'Fetch', summary: string(input.url), detail: string(input.prompt) }
+    case 'ToolSearch':
+      // Claude loading tools it keeps on standby (e.g. its to-do tools) before using them.
+      return {
+        label: 'Load tools',
+        summary:
+          string(input.query)
+            .replace(/^select:/, '')
+            .split(',')
+            .join(', ') || undefined,
+      }
     case 'WebSearch':
       return { label: 'Search the web', summary: string(input.query) }
     case 'Task':
@@ -88,10 +105,16 @@ export function describeClaudeTool(name: string, rawInput: unknown, cwd: string)
         summary: string(input.description),
         detail: clip(string(input.prompt), 4000),
       }
+    case 'TaskCreate':
+    case 'TaskUpdate':
+    case 'TaskList':
+    case 'TaskGet':
+      return { label: 'Update todos', summary: string(input.subject) || undefined, todo: true }
     case 'TodoWrite': {
       const todos = Array.isArray(input.todos) ? input.todos.map(object) : []
       return {
         label: 'Update todos',
+        todo: true,
         summary: `${todos.length} ${todos.length === 1 ? 'item' : 'items'}`,
         detail: todos
           .map(

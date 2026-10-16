@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react'
-import { Check, ChevronRight, LoaderCircle, X } from 'lucide-react'
-import type { Activity } from '../types'
+import { Check, ChevronRight, CircleCheck, CircleDashed, LoaderCircle, X } from 'lucide-react'
+import type { Activity, Todo } from '../types'
 
 // The agent's tool steps in the conversation, Claude Desktop style: one plain-English line per
 // step (Claude's own description of a command when it gave one), "Failed" when it failed, and
@@ -48,6 +48,37 @@ export const StepRow = memo(function StepRow({ step }: { step: Activity }) {
         {!hasDetail ? <p>{step.status === 'running' ? 'Running…' : 'No output.'}</p> : null}
       </div>
     </details>
+  )
+})
+
+// The agent's to-do list as a checklist that updates in place: done items checked, the
+// current one spinning, the rest waiting.
+export const TodoCard = memo(function TodoCard({ todos }: { todos: Todo[] }) {
+  const done = todos.filter((todo) => todo.status === 'completed').length
+  return (
+    <ul className="todo-card" aria-label={`To-do list, ${done} of ${todos.length} done`}>
+      {todos.map((todo) => (
+        <li key={todo.id} className={`todo ${todo.status}`}>
+          <span className="todo-icon" aria-hidden>
+            {todo.status === 'completed' ? (
+              <CircleCheck size={16} />
+            ) : todo.status === 'in_progress' ? (
+              <LoaderCircle size={16} className="status-spinner" />
+            ) : (
+              <CircleDashed size={16} />
+            )}
+          </span>
+          <span className="todo-text">{todo.text}</span>
+          <span className="visually-hidden">
+            {todo.status === 'completed'
+              ? ' (done)'
+              : todo.status === 'in_progress'
+                ? ' (in progress)'
+                : ''}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 })
 

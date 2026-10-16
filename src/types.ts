@@ -45,6 +45,8 @@ export type Activity = {
   // When the step started (steps saved before this was added have none), to place it among
   // the agent's messages and time it.
   startedAt?: string
+  // A to-do list update: drawn as the checklist card instead of a step.
+  todo?: boolean
   // Full input for the expanded view (whole command, edit preview, arguments).
   detail?: string
   // What the step returned, trimmed.
@@ -53,6 +55,10 @@ export type Activity = {
   // The subagent that took this step (its task description); absent for the main agent.
   agent?: string
 }
+// One item of the agent's to-do checklist. activeText is the "-ing" form shown while it's the
+// current item ("Running tests").
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export type Todo = { id: string; text: string; activeText?: string; status: TodoStatus }
 // A multiple-choice question from the agent (Claude's AskUserQuestion).
 export type QuestionOption = { label: string; description?: string }
 export type Question = {
@@ -91,6 +97,8 @@ export type Thread = {
   rewind?: TurnCheckpoint
   // Background tasks still running in the current turn.
   background?: BackgroundTask[]
+  // The agent's latest to-do checklist (kept across turns: Claude's tasks live for the session).
+  todos?: Todo[]
   // Where the title came from: your first message (replaced by an AI title once there is one),
   // an AI, or a rename by you or the agent (never replaced automatically).
   titleSource?: 'message' | 'ai' | 'custom'

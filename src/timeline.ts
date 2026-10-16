@@ -11,7 +11,10 @@ import type { Activity, Message, Status } from './types'
 // folds, they move from its notes to the final answer, so they stay in view.
 
 export type WorkItem =
-  { kind: 'note'; message: Message; at: string } | { kind: 'step'; activity: Activity; at: string }
+  | { kind: 'note'; message: Message; at: string }
+  | { kind: 'step'; activity: Activity; at: string }
+  // The to-do checklist card, where the agent first wrote its list in this turn.
+  | { kind: 'todos'; at: string }
 
 export type Turn = {
   key: string
@@ -77,6 +80,12 @@ export function buildTurns(thread: ThreadState): Turn[] {
       })
     }
     const turn = turns[index]!
+    // To-do updates become one checklist card (not steps), placed at the first one.
+    if (activity.todo) {
+      if (!turn.work.some((item) => item.kind === 'todos'))
+        turn.work.push({ kind: 'todos', at: activity.startedAt ?? '' })
+      continue
+    }
     turn.work.push({ kind: 'step', activity, at: activity.startedAt ?? '' })
     turn.steps++
   }

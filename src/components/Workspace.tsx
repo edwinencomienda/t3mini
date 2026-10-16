@@ -83,7 +83,7 @@ import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
 import { SidebarResize } from './SidebarResize'
-import { LiveLine, StepRow, stepTitle } from './WorkSteps'
+import { LiveLine, StepRow, TodoCard, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -1634,8 +1634,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const liveStep = active
     ? [...(thread?.activities ?? [])]
         .reverse()
-        .find((item) => item.status === 'running' && !item.agent)
+        .find((item) => item.status === 'running' && !item.agent && !item.todo)
     : undefined
+  const currentTodo = active
+    ? thread?.todos?.find((todo) => todo.status === 'in_progress')
+    : undefined
+  const lastTodoAt = [...(thread?.activities ?? [])].reverse().find((item) => item.todo)?.startedAt
   // In a finished turn the notes' images live with the answer, so notes show just their text.
   const workList = (items: WorkItem[], folded = false) => (
     <div className="work">
@@ -1649,6 +1653,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
               {...(folded ? { blocks: [] } : {})}
             />
           )
+        ) : item.kind === 'todos' ? (
+          thread?.todos?.length ? (
+            <TodoCard key="todos" todos={thread.todos} />
+          ) : null
         ) : item.activity === liveStep ? null : (
           <StepRow key={item.activity.id} step={item.activity} />
         ),
@@ -2265,6 +2273,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     {active && !thread.approvals.length ? (
                       liveStep ? (
                         <LiveLine text={stepTitle(liveStep)} since={liveStep.startedAt} />
+                      ) : currentTodo ? (
+                        // Between steps, the checklist's current item in its "-ing" form.
+                        <LiveLine
+                          text={currentTodo.activeText || currentTodo.text}
+                          since={lastTodoAt ?? thread.startedAt}
+                        />
                       ) : (
                         <LiveLine
                           text={thread.status === 'starting' ? 'Starting…' : 'Thinking…'}
