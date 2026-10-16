@@ -267,6 +267,8 @@ const MessageView = memo(
     (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
     (before.message.blocks?.length ?? 0) === (after.message.blocks?.length ?? 0),
 )
+// The composer grows with its text (or a live dictation preview) up to this height, then scrolls.
+const composerMaxHeight = 240
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 // A project's name: the one you gave it in the sidebar, else its folder name.
 const projectLabel = (projects: ProjectSummary[], path: string) =>
@@ -401,7 +403,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const element = composer.current
     if (!element) return
     element.style.height = 'auto'
-    element.style.height = `${Math.min(element.scrollHeight, 240)}px`
+    element.style.height = `${Math.min(element.scrollHeight, composerMaxHeight)}px`
   }
   // Called on every keystroke: only the "anything to send?" flag can trigger a render.
   function draftChanged(text: string) {
@@ -1290,6 +1292,36 @@ export function Workspace({ threadId }: { threadId?: string }) {
         `${group.path} ${projectName(group.path)}`.toLowerCase().includes(query),
     )
   const active = thread ? isActive(thread.status) : false
+  // Live dictation shows in the empty composer's placeholder. A placeholder doesn't count toward
+  // the textarea's height, so the box is sized to the words as if they were typed; past the
+  // maximum height it keeps the latest words (what you're saying now). Set on the element
+  // directly, so live words never re-render the page.
+  function showPreview(words: string) {
+    const element = composer.current
+    if (!element) return
+    // With a draft in the box the placeholder isn't visible; just keep it current.
+    if (!words || element.value) {
+      element.placeholder = words || composerPlaceholder
+      resizeComposer()
+      return
+    }
+    const measure = (value: string) => {
+      element.value = value
+      element.style.height = 'auto'
+      return element.scrollHeight
+    }
+    let text = words
+    let height = measure(text)
+    while (height > composerMaxHeight && text.length > 40) {
+      // Drop the oldest ~15%, at a word boundary.
+      const rest = text.slice(Math.ceil(text.length * 0.15)).replace(/^\S*\s+/, '')
+      text = `… ${rest}`
+      height = measure(text)
+    }
+    element.value = ''
+    element.placeholder = text
+    element.style.height = `${Math.min(height, composerMaxHeight)}px`
+  }
   // The edit bar shows only while the recalled message is still the one that can be edited.
   const editingMessage = Boolean(thread && editing && editableMessage(thread)?.id === editing)
   const composerPlaceholder = !thread
@@ -2047,10 +2079,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               insertText((before && !/\s$/.test(before) ? ' ' : '') + text)
                             }}
                             // Live words go straight onto the placeholder (no re-render per word).
-                            onPreview={(words) => {
-                              const element = composer.current
-                              if (element) element.placeholder = words || composerPlaceholder
-                            }}
+                            onPreview={showPreview}
                             onError={setError}
                           />
                         ) : null}
