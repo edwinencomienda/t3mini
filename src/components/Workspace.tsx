@@ -81,6 +81,7 @@ import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
+import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
 import {
@@ -1777,39 +1778,52 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     ) : (
                       // The ⋮ button sits beside the link (a button can't live inside a link).
                       <div className="thread-row-wrap" key={item.id}>
-                        <Link
-                          to="/threads/$threadId"
-                          params={{ threadId: item.id }}
-                          className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
-                          aria-selected={picked.size ? picked.has(item.id) : undefined}
-                          onClick={(event) => {
-                            if (busy) {
-                              event.preventDefault()
-                              return
-                            }
-                            // Picking threads instead of opening one (middle-click still opens
-                            // a new tab).
-                            if (
-                              event.button === 0 &&
-                              (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
-                            ) {
-                              event.preventDefault()
-                              if (event.shiftKey) pickRange(item.id)
-                              else togglePick(item.id)
-                              return
-                            }
-                            if (!event.altKey && event.button === 0) prepareSelection(item.id)
-                          }}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            setMenu({ kind: 'thread', id: item.id, position: menuPosition(event) })
-                          }}
-                          onDoubleClick={(event) => {
-                            event.preventDefault()
-                            setRenaming({ id: item.id, title: item.title })
-                          }}
-                          aria-disabled={busy}
-                          aria-current={activeId === item.id ? 'page' : undefined}
+                        {/* Resting on a row for a moment shows its hover card (ThreadPreview). */}
+                        <ThreadPreviewTrigger
+                          handle={threadPreview}
+                          payload={item.id}
+                          delay={700}
+                          closeDelay={150}
+                          render={
+                            <Link
+                              to="/threads/$threadId"
+                              params={{ threadId: item.id }}
+                              className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
+                              aria-selected={picked.size ? picked.has(item.id) : undefined}
+                              onClick={(event) => {
+                                if (busy) {
+                                  event.preventDefault()
+                                  return
+                                }
+                                // Picking threads instead of opening one (middle-click still opens
+                                // a new tab).
+                                if (
+                                  event.button === 0 &&
+                                  (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
+                                ) {
+                                  event.preventDefault()
+                                  if (event.shiftKey) pickRange(item.id)
+                                  else togglePick(item.id)
+                                  return
+                                }
+                                if (!event.altKey && event.button === 0) prepareSelection(item.id)
+                              }}
+                              onContextMenu={(event) => {
+                                event.preventDefault()
+                                setMenu({
+                                  kind: 'thread',
+                                  id: item.id,
+                                  position: menuPosition(event),
+                                })
+                              }}
+                              onDoubleClick={(event) => {
+                                event.preventDefault()
+                                setRenaming({ id: item.id, title: item.title })
+                              }}
+                              aria-disabled={busy}
+                              aria-current={activeId === item.id ? 'page' : undefined}
+                            />
+                          }
                         >
                           {/* A picked thread shows a check, and while a new title is being written a
                               spinner, in place of the status dot. */}
@@ -1828,7 +1842,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           )}
                           <span className="thread-title">{item.title}</span>
                           <span className="thread-time">{threadTime(item, now)}</span>
-                        </Link>
+                        </ThreadPreviewTrigger>
                         <button
                           type="button"
                           className="thread-more"
@@ -2581,6 +2595,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
+      <ThreadPreviewCard
+        projectName={projectName}
+        statusLabel={(status) => labels[status]}
+        ago={(iso) => {
+          const label = relativeTime(iso, now)
+          return label === 'now' ? 'Just now' : /^\d+[mhd]$/.test(label) ? `${label} ago` : label
+        }}
+      />
       {paletteOpen ? (
         <CommandPalette
           threads={[...threads].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))}

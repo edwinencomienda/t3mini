@@ -99,6 +99,29 @@ export type ThreadSummary = Pick<
   // While waiting: on a yes/no approval, or on answers to the agent's question.
   waitingFor?: 'approval' | 'question'
 }
+// A quick look at a thread for the sidebar's hover card: its settings, size, and the start and
+// latest reply of the conversation (shortened).
+export type ThreadGlance = Pick<
+  Thread,
+  | 'id'
+  | 'title'
+  | 'provider'
+  | 'cwd'
+  | 'model'
+  | 'effort'
+  | 'permissionMode'
+  | 'serviceTier'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'error'
+> & {
+  messageCount: number
+  firstMessage?: string
+  lastReply?: string
+  // What it waits for, e.g. the approval's title.
+  waitingOn?: string
+}
 // A conversation that mentions what you searched for (command palette), with a short excerpt.
 export type MessageMatch = {
   threadId: string

@@ -260,6 +260,22 @@ it('saves projects, lists them by recent activity, and only removes empty ones',
   await service.removeProject({ path: other })
   expect(service.projects().map((project) => project.path)).toEqual([created.cwd])
 })
+it('gives a short glance at a thread for the sidebar hover card', async () => {
+  const created = await thread()
+  expect(service.glance(created.id)).toMatchObject({ id: created.id, messageCount: 0 })
+  expect(service.glance(created.id).firstMessage).toBeUndefined()
+  await service.send(created.id, { text: `Start   here ${'x'.repeat(300)}` })
+  await started
+  context.text('reply', 'All done.', true)
+  await settle(created.id, finish)
+  const glance = service.glance(created.id)
+  expect(glance.messageCount).toBe(2)
+  expect(glance.firstMessage).toMatch(/^Start here x+…$/)
+  expect(glance.firstMessage!.length).toBe(160)
+  expect(glance.lastReply).toBe('All done.')
+  expect(glance).not.toHaveProperty('messages')
+  expect(() => service.glance('missing')).toThrow('Thread not found')
+})
 it('searches conversations for the command palette, one excerpt per thread', async () => {
   const created = await thread()
   await service.send(created.id, { text: 'Please fix the   Flaky login test in CI' })

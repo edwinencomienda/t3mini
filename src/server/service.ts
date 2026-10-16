@@ -11,6 +11,7 @@ import {
   type Bootstrap,
   type GitInfo,
   type MessageMatch,
+  type ThreadGlance,
   type PullRequest,
   type Message,
   type ProjectSummary,
@@ -228,6 +229,39 @@ export class AgentService {
   }
   // Threads whose messages mention the query (case-insensitive), newest first, one match per
   // thread, with a short excerpt around it. For the command palette's "In messages" results.
+  glance(id: string): ThreadGlance {
+    const thread = this.get(id)
+    const shorten = (text: string | undefined, length: number) => {
+      const value = text?.replace(/\s+/g, ' ').trim()
+      if (!value) return undefined
+      return value.length > length ? `${value.slice(0, length - 1).trimEnd()}…` : value
+    }
+    const sent = thread.messages.filter((message) => !message.queued && !message.unsent)
+    const firstMessage = shorten(sent.find((message) => message.role === 'user')?.text, 160)
+    const lastReply = shorten(
+      [...sent].reverse().find((message) => message.role === 'assistant')?.text,
+      220,
+    )
+    const waitingOn = thread.status === 'waiting' ? thread.approvals[0]?.title : undefined
+    return {
+      id: thread.id,
+      title: thread.title,
+      provider: thread.provider,
+      cwd: thread.cwd,
+      model: thread.model,
+      effort: thread.effort,
+      permissionMode: thread.permissionMode,
+      ...(thread.serviceTier ? { serviceTier: thread.serviceTier } : {}),
+      status: thread.status,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      ...(thread.error ? { error: shorten(thread.error, 160) } : {}),
+      messageCount: sent.length,
+      ...(firstMessage ? { firstMessage } : {}),
+      ...(lastReply ? { lastReply } : {}),
+      ...(waitingOn ? { waitingOn: shorten(waitingOn, 120) } : {}),
+    }
+  }
   searchMessages(input: unknown): MessageMatch[] {
     const query = z.string().trim().min(2).max(200).parse(input).toLowerCase()
     const matches: MessageMatch[] = []

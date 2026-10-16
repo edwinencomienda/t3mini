@@ -3415,3 +3415,113 @@ body.resizing {
   color: var(--faint);
   font-size: 0.75rem;
 }
+
+/* Thread hover card (sidebar): a quick look at a thread without opening it */
+.thread-glance {
+  width: min(20rem, calc(100vw - 2rem));
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--shadow);
+  font-size: 0.8rem;
+  outline: 0;
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+.thread-glance[data-starting-style],
+.thread-glance[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.97);
+}
+.glance-loading {
+  display: flex;
+  justify-content: center;
+  padding: 0.6rem;
+  color: var(--muted-foreground);
+}
+.glance-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.glance-head svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.glance-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.glance-meta {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0.3rem 0 0 1.375rem;
+  color: var(--muted-foreground);
+}
+.glance-status.working,
+.glance-status.starting {
+  color: var(--primary);
+}
+.glance-status.waiting {
+  color: var(--warning);
+}
+.glance-status.failed {
+  color: var(--danger);
+}
+.glance-status.completed {
+  color: var(--success);
+}
+.glance-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0.7rem 0 0;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+.glance-facts dt {
+  color: var(--muted-foreground);
+}
+.glance-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.glance-waiting,
+.glance-error {
+  margin: 0.65rem 0 0;
+  line-height: 1.4;
+}
+.glance-waiting span {
+  color: var(--warning);
+  font-weight: 600;
+}
+.glance-error {
+  color: var(--danger);
+}
+.glance-excerpt {
+  margin-top: 0.65rem;
+}
+.glance-excerpt span {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.glance-excerpt p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0.15rem 0 0;
+  line-height: 1.4;
+  color: var(--foreground);
+}
