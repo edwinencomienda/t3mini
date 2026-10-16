@@ -124,7 +124,14 @@ export type Bootstrap = {
 }
 // A thread project's git state for the composer. detached: branch is a short commit hash.
 // url: the branch (or repository) on GitHub, when the remote is there.
-export type GitInfo = { branch: string | null; detached?: boolean; url?: string }
+export type GitInfo = {
+  branch: string | null
+  detached?: boolean
+  url?: string
+  // The branch's pull request on GitHub, when it has one (looked up separately; see service).
+  pullRequest?: PullRequest | null
+}
+export type PullRequest = { number: number; url: string }
 // The message that can be edited and resent: the last thing you sent, when its turn was stopped
 // or failed and the agent can take that turn back (see TurnCheckpoint).
 export function editableMessage(thread: Pick<Thread, 'status' | 'provider' | 'messages'>) {

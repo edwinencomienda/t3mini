@@ -22,6 +22,7 @@ import {
   FileUp,
   FileDiff,
   GitBranch,
+  GitPullRequest,
   FolderOpen,
   LoaderCircle,
   Menu,
@@ -106,6 +107,7 @@ import {
   isActive,
   type Bootstrap,
   type GitInfo,
+  type PullRequest,
   type Message,
   type ProjectSummary,
   type Provider,
@@ -633,8 +635,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const load = () =>
       api<GitInfo>(`threads/${activeId}/git`, 'GET', undefined, controller.signal)
         .then((info) => {
-          gitCache.current.set(activeCwd, info)
-          setGit(info)
+          // Keep the last known pull request on screen while it's looked up again.
+          const known = gitCache.current.get(activeCwd)
+          const shown =
+            known?.branch === info.branch && known.pullRequest
+              ? { ...info, pullRequest: known.pullRequest }
+              : info
+          gitCache.current.set(activeCwd, shown)
+          setGit(shown)
+          // The pull request is a network lookup, so it follows the (instant) branch.
+          if (!info.branch || info.detached || !info.url) return
+          return api<{ pullRequest: PullRequest | null }>(
+            `threads/${activeId}/pull-request`,
+            'GET',
+            undefined,
+            controller.signal,
+          ).then(({ pullRequest }) => {
+            const next = { ...info, pullRequest }
+            gitCache.current.set(activeCwd, next)
+            setGit((current) => (current?.branch === info.branch ? next : current))
+          })
         })
         .catch(() => {})
     if (!turnActive) void load()
@@ -2191,26 +2211,42 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 {thread &&
                 (git?.branch || processes.some((item) => item.project === thread.cwd)) ? (
                   <div className="composer-meta">
-                    {git?.branch ? (
-                      // Opens the branch on GitHub in a new tab when the remote is there.
-                      <a
-                        className="git-branch"
-                        href={git.url}
-                        target={git.url ? '_blank' : undefined}
-                        rel={git.url ? 'noopener noreferrer' : undefined}
-                        title={
-                          (git.detached
-                            ? `Detached HEAD at ${git.branch}`
-                            : `Branch ${git.branch}`) + (git.url ? ' — open on GitHub' : '')
-                        }
-                      >
-                        <GitBranch size={12} />
-                        <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
-                        {git.url ? (
-                          <ExternalLink size={11} className="git-branch-external" />
-                        ) : null}
-                      </a>
-                    ) : null}
+                    {/* Branch and its pull request stay together on the left. */}
+                    <span className="git-info">
+                      {git?.branch ? (
+                        // Opens the branch on GitHub in a new tab when the remote is there.
+                        <a
+                          className="git-branch"
+                          href={git.url}
+                          target={git.url ? '_blank' : undefined}
+                          rel={git.url ? 'noopener noreferrer' : undefined}
+                          title={
+                            (git.detached
+                              ? `Detached HEAD at ${git.branch}`
+                              : `Branch ${git.branch}`) + (git.url ? ' — open on GitHub' : '')
+                          }
+                        >
+                          <GitBranch size={12} />
+                          <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
+                          {git.url ? (
+                            <ExternalLink size={11} className="git-branch-external" />
+                          ) : null}
+                        </a>
+                      ) : null}
+                      {git?.pullRequest ? (
+                        // The branch's pull request on GitHub, in a new tab.
+                        <a
+                          className="git-pr"
+                          href={git.pullRequest.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Open pull request #${git.pullRequest.number} on GitHub`}
+                        >
+                          <GitPullRequest size={12} />
+                          <span>#{git.pullRequest.number}</span>
+                        </a>
+                      ) : null}
+                    </span>
                     {/* Dev servers and other processes agents started in this project. */}
                     <ProcessIndicator processes={processes} project={thread.cwd} />
                   </div>

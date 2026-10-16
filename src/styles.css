@@ -2009,6 +2009,27 @@ a.git-branch[href]:focus-visible {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+.git-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+/* The branch's pull request, right after the branch name. */
+.git-pr {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+}
+.git-pr:hover,
+.git-pr:focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .git-branch-external {
   opacity: 0;
 }

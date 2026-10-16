@@ -36,3 +36,25 @@ export function githubRepoUrl(remote: string): string | null {
 // A branch's page in a GitHub repository; each path segment is encoded.
 export const githubBranchUrl = (repoUrl: string, branch: string) =>
   `${repoUrl}/tree/${branch.split('/').map(encodeURIComponent).join('/')}`
+
+// The open pull request for a commit, from `git ls-remote <remote> 'refs/pull/*'` output. GitHub
+// keeps two refs per pull request:
+// - refs/pull/<n>/head: the PR's latest commit, kept forever, so a branch whose pushed commit
+//   matches is that PR's branch;
+// - refs/pull/<n>/merge: a test merge GitHub keeps only while the PR is open, so merged and
+//   closed PRs don't count. (An open PR with conflicts may have no merge ref, so it's missed.)
+// The newest open PR wins when several point at the same commit.
+export function pullRequestFor(lsRemote: string, sha: string) {
+  const heads: number[] = []
+  const open = new Set<number>()
+  for (const line of lsRemote.split('\n')) {
+    const [hash, ref] = line.trim().split(/\s+/)
+    const [, number, kind] = ref?.match(/^refs\/pull\/(\d+)\/(head|merge)$/) ?? []
+    if (!number) continue
+    if (kind === 'merge') open.add(Number(number))
+    else if (sha && hash === sha) heads.push(Number(number))
+  }
+  const matches = heads.filter((number) => open.has(number))
+  return matches.length ? Math.max(...matches) : undefined
+}
+export const githubPullUrl = (repoUrl: string, number: number) => `${repoUrl}/pull/${number}`

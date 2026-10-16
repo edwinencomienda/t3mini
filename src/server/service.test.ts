@@ -326,6 +326,57 @@ it('reports the git branch of a thread project, or none outside a repository', a
     url: 'https://github.com/edwin/demo/tree/feature/test-branch',
   })
 })
+it('finds the pull request for a pushed branch from GitHub-style refs/pull refs', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const run = (cwd: string, ...args: string[]) => promisify(execFile)('git', args, { cwd })
+  const { mkdir, realpath } = await import('node:fs/promises')
+  // A bare repository standing in for GitHub, with PR refs, and a clone tracking it.
+  const remote = join(directory, 'remote.git')
+  const work = join(directory, 'work')
+  await mkdir(work)
+  await run(directory, 'init', '-q', '--bare', remote)
+  await run(work, 'init', '-q', '-b', 'feature/login')
+  await run(
+    work,
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'one',
+  )
+  await run(work, 'remote', 'add', 'origin', remote)
+  await run(work, 'push', '-q', '-u', 'origin', 'feature/login')
+  const head = (await run(work, 'rev-parse', 'HEAD')).stdout.trim()
+  // PR 7 is merged (only its head ref is left); PR 9 is open (it also has a merge ref).
+  await run(remote, 'update-ref', 'refs/pull/7/head', head)
+  await run(remote, 'update-ref', 'refs/pull/9/head', head)
+  await run(remote, 'update-ref', 'refs/pull/9/merge', head)
+  const created = await service.create({ provider: 'codex', cwd: await realpath(work) })
+  // A local path isn't GitHub, so no link…
+  expect(await service.pullRequest(created.id)).toBeNull()
+  // …but with a GitHub URL (rewritten locally to the bare repo), the newest PR is found.
+  await run(work, 'config', `url.${remote}.insteadOf`, 'git@github.com:edwin/demo.git')
+  await run(work, 'remote', 'set-url', 'origin', 'git@github.com:edwin/demo.git')
+  expect(await service.pullRequest(created.id)).toEqual({
+    number: 9,
+    url: 'https://github.com/edwin/demo/pull/9',
+  })
+  // Once PR 9 is merged too (GitHub drops its merge ref), there's no link…
+  await run(remote, 'update-ref', '-d', 'refs/pull/9/merge')
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  ;(service as unknown as { pullRefs: Map<string, unknown> }).pullRefs.clear()
+  expect(await service.pullRequest(created.id)).toBeNull()
+  await run(remote, 'update-ref', 'refs/pull/9/merge', head)
+  ;(service as unknown as { pullRefs: Map<string, unknown> }).pullRefs.clear()
+  // The default branch never shows one: its tip can be an old PR's head after a merge.
+  await run(work, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/feature/login')
+  expect(await service.pullRequest(created.id)).toBeNull()
+})
 it('saves image uploads by content type, rejects disguised files, and passes images to the agent', async () => {
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',

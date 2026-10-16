@@ -284,6 +284,8 @@ export async function handleApi(request: Request) {
         return Response.json(await service.create(await request.json()), { status: 201 })
       const id = parts[1]
       if (id && !parts[2] && request.method === 'GET') return Response.json(service.get(id))
+      if (id && parts[2] === 'pull-request' && request.method === 'GET')
+        return Response.json({ pullRequest: await service.pullRequest(id) })
       if (id && parts[2] === 'git' && request.method === 'GET')
         return Response.json(await service.gitInfo(id))
       if (id && parts[2] === 'diff' && !parts[3] && request.method === 'GET')

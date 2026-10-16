@@ -10,6 +10,7 @@ import {
   editableMessage,
   type Bootstrap,
   type GitInfo,
+  type PullRequest,
   type Message,
   type ProjectSummary,
   type Provider,
@@ -21,7 +22,7 @@ import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
-import { githubBranchUrl, githubRepoUrl } from './github'
+import { githubBranchUrl, githubPullUrl, githubRepoUrl, pullRequestFor } from './github'
 import { commonWords, extractKeyterms } from './keyterms'
 import { titleWriter, type TitleWriter } from './titles'
 
@@ -898,6 +899,56 @@ export class AgentService {
         ? githubBranchUrl(repo, merge.slice('refs/heads/'.length))
         : repo
     return { branch, ...(detached ? { detached } : {}), ...(url ? { url } : {}) }
+  }
+  // The open pull request for the thread's branch, if it has one on GitHub: found by matching the
+  // branch's pushed commit against GitHub's refs/pull/<n>/head refs, keeping only PRs that still
+  // have a refs/pull/<n>/merge ref (open ones; see pullRequestFor), through `git ls-remote` with
+  // your normal git login (no gh CLI, no token). Kept separate from gitInfo because it's a network
+  // call; the ref list is fetched at most once a minute per repository.
+  private pullRefs = new Map<string, { at: number; refs: Promise<string> }>()
+  async pullRequest(id: string): Promise<PullRequest | null> {
+    const { cwd } = this.get(id)
+    const git = async (args: string[], timeout = 3_000) =>
+      (
+        await exec('git', ['-C', cwd, ...args], {
+          timeout,
+          maxBuffer: 16 * 1024 * 1024,
+          // Never wait on a password or passphrase prompt.
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        })
+      ).stdout.trim()
+    try {
+      const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+      const remote = await git(['config', '--get', `branch.${branch}.remote`])
+      if (!remote || remote === '.' || remote.startsWith('-')) return null
+      // The URL as configured (get-url would apply insteadOf rewrites).
+      const repo = githubRepoUrl(await git(['config', '--get', `remote.${remote}.url`]))
+      if (!repo) return null
+      // Not the default branch: after a fast-forward or rebase merge, main's tip can be an old
+      // pull request's head, which isn't main's pull request.
+      const upstream = await git(['rev-parse', '--abbrev-ref', '@{upstream}'])
+      const defaultBranch = await git([
+        'symbolic-ref',
+        '--quiet',
+        '--short',
+        `refs/remotes/${remote}/HEAD`,
+      ]).catch(() => '')
+      if (upstream === defaultBranch) return null
+      // The branch's commit as last pushed (its remote-tracking ref).
+      const sha = await git(['rev-parse', '--verify', '--quiet', '@{upstream}'])
+      const key = `${cwd}\n${remote}`
+      let cached = this.pullRefs.get(key)
+      if (!cached || Date.now() - cached.at > 60_000) {
+        const refs = git(['ls-remote', remote, 'refs/pull/*'], 10_000)
+        cached = { at: Date.now(), refs }
+        this.pullRefs.set(key, cached)
+        refs.catch(() => this.pullRefs.delete(key))
+      }
+      const number = pullRequestFor(await cached.refs, sha)
+      return number ? { number, url: githubPullUrl(repo, number) } : null
+    } catch {
+      return null
+    }
   }
   // Uncommitted changes in a thread's project: tracked files against HEAD plus new untracked
   // files. git runs without a shell, in the thread's own folder, with output caps.
