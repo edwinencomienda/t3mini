@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { claudeExecutable, isNewer, parseVersion, updateProvider } from './cli-updates'
+import { claudeExecutable, isNewer, parseVersion, updateProvider, updaterEnv } from './cli-updates'
 
 describe('parseVersion', () => {
   it.each([
@@ -23,6 +23,19 @@ describe('isNewer', () => {
     ['garbage', '2.1.300', false],
   ])('%s is newer than %s: %s', (latest, installed, newer) => {
     expect(isNewer(latest, installed)).toBe(newer)
+  })
+})
+
+describe('updaterEnv', () => {
+  it("drops the package manager's npm_* variables and keeps the rest", () => {
+    expect(
+      updaterEnv({
+        PATH: '/usr/bin',
+        HOME: '/Users/me',
+        npm_config_user_agent: 'bun/1.4.3',
+        npm_lifecycle_event: 'dev',
+      }),
+    ).toEqual({ PATH: '/usr/bin', HOME: '/Users/me' })
   })
 })
 

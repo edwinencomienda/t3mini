@@ -127,6 +127,14 @@ export class UpdateError extends Error {
 }
 const names: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' }
 
+// The environment for an updater: ours minus the `npm_*` variables a package-manager script
+// (`bun run dev`, `npm run dev`) adds. Codex's updater reads npm_config_user_agent to pick its
+// installer, so under `bun run dev` it ran `bun install -g` and updated a different copy than
+// the one on PATH, leaving the version unchanged. Without them it updates the copy that ran.
+export function updaterEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !/^npm_/i.test(key)))
+}
+
 // Runs the CLI's own updater (no shell, fixed arguments) and reports the version afterwards.
 // `busy` refuses while a thread on this provider is running, so no turn sees the swap.
 export async function updateProvider(provider: Provider, busy: boolean) {
@@ -139,6 +147,7 @@ export async function updateProvider(provider: Provider, busy: boolean) {
   state.updating.add(provider)
   try {
     await exec(providerExecutable(provider), ['update'], {
+      env: updaterEnv(),
       timeout: 5 * 60_000,
       maxBuffer: 4 * 1024 * 1024,
     })
