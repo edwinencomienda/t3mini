@@ -85,7 +85,7 @@ import { CommandPalette } from './CommandPalette'
 import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
-import { LiveLine, StepRow, TodoCard, stepTitle } from './WorkSteps'
+import { LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -115,6 +115,7 @@ import remarkGfm from 'remark-gfm'
 import {
   editableMessage,
   isActive,
+  type Activity,
   type Bootstrap,
   type GitInfo,
   type PullRequest,
@@ -374,6 +375,16 @@ async function api<T>(
   if (!response.ok)
     throw Object.assign(new Error(data.error || 'Request failed.'), { status: response.status })
   return data as T
+}
+// Work items with each run of consecutive steps gathered into one array (when grouping).
+function groupSteps(items: WorkItem[], group: boolean) {
+  const out: (WorkItem | Activity[])[] = []
+  for (const item of items) {
+    const last = out.at(-1)
+    if (group && item.kind === 'step' && Array.isArray(last)) last.push(item.activity)
+    else out.push(group && item.kind === 'step' ? [item.activity] : item)
+  }
+  return out
 }
 function StatusDot({ status, unread = false }: { status: Status; unread?: boolean }) {
   // Working: the same pulsing dots as the live line at the bottom of the chat.
@@ -1647,10 +1658,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
     : undefined
   const lastTodoAt = [...(thread?.activities ?? [])].reverse().find((item) => item.todo)?.startedAt
   // In a finished turn the notes' images live with the answer, so notes show just their text.
+  // While the turn runs, consecutive steps collapse into one line (StepGroup); the folded
+  // view of a finished turn lists every step.
   const workList = (items: WorkItem[], folded = false) => (
     <div className="work">
-      {items.map((item) =>
-        item.kind === 'note' ? (
+      {groupSteps(
+        items.filter((item) => item.kind !== 'step' || item.activity !== liveStep),
+        !folded,
+      ).map((item) =>
+        Array.isArray(item) ? (
+          <StepGroup key={item[0]!.id} steps={item} />
+        ) : item.kind === 'note' ? (
           folded && !item.message.text.trim() ? null : (
             <MessageView
               key={item.message.id}
@@ -1663,7 +1681,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           thread?.todos?.length ? (
             <TodoCard key="todos" todos={thread.todos} />
           ) : null
-        ) : item.activity === liveStep ? null : (
+        ) : (
           <StepRow key={item.activity.id} step={item.activity} />
         ),
       )}

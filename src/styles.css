@@ -3886,3 +3886,17 @@ body.resizing {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* A run of steps shown as one line while the agent works (StepGroup). */
+.step-count {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+.step-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.25rem 0 0.35rem 0.35rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border);
+}

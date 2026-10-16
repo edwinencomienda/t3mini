@@ -82,6 +82,41 @@ export const TodoCard = memo(function TodoCard({ todos }: { todos: Todo[] }) {
   )
 })
 
+// While the agent works, a run of steps between its notes is one line showing the latest
+// step (like Claude Code), so the chat doesn't fill up with every command. Click it to see
+// them all.
+export function StepGroup({ steps }: { steps: Activity[] }) {
+  const latest = steps.at(-1)!
+  if (steps.length === 1) return <StepRow step={latest} />
+  const failed = steps.filter((step) => step.status === 'failed').length
+  return (
+    <details className={`step step-group ${latest.status}`}>
+      <summary>
+        <span className="step-icon" aria-hidden>
+          {latest.status === 'running' ? (
+            <LoaderCircle size={12} className="status-spinner" />
+          ) : latest.status === 'failed' ? (
+            <X size={12} />
+          ) : (
+            <Check size={12} />
+          )}
+        </span>
+        <span className="step-title">{stepTitle(latest)}</span>
+        <span className="step-count">
+          {steps.length} steps
+          {failed ? <span className="step-failed"> · {failed} failed</span> : null}
+        </span>
+        <ChevronRight size={13} className="chevron" aria-hidden />
+      </summary>
+      <div className="step-group-list">
+        {steps.map((step) => (
+          <StepRow key={step.id} step={step} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
 function elapsed(since: string, now: number) {
   const seconds = Math.max(0, Math.floor((now - Date.parse(since)) / 1000))
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
