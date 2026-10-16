@@ -144,10 +144,17 @@ const starters = [
     text: 'Help me plan a new feature for this project. First, explore the code and ask me what I want to build.',
   },
 ]
-// A code block in a reply, with a button that copies its text (works on phones too: copyText
+// A button that copies some text and shows a check for a moment (works on phones too: copyText
 // falls back to a hidden textarea where the Clipboard API isn't allowed).
-function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
-  const block = useRef<HTMLPreElement>(null)
+function CopyButton({
+  text,
+  label,
+  className,
+}: {
+  text: () => string
+  label: string
+  className: string
+}) {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
@@ -155,24 +162,35 @@ function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
     return () => clearTimeout(timer)
   }, [copied])
   return (
+    <button
+      type="button"
+      className={`icon-button ${className}`}
+      aria-label={copied ? 'Copied' : label}
+      title={copied ? 'Copied' : 'Copy'}
+      onClick={() =>
+        void copyText(text()).then(
+          () => setCopied(true),
+          () => {},
+        )
+      }
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+    </button>
+  )
+}
+// A code block in a reply, with a button that copies its text.
+function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
+  const block = useRef<HTMLPreElement>(null)
+  return (
     <div className="code-block">
       <pre ref={block} {...props}>
         {children}
       </pre>
-      <button
-        type="button"
-        className="icon-button code-copy"
-        aria-label={copied ? 'Copied' : 'Copy code'}
-        title={copied ? 'Copied' : 'Copy'}
-        onClick={() =>
-          void copyText((block.current?.textContent ?? '').replace(/\n$/, '')).then(
-            () => setCopied(true),
-            () => {},
-          )
-        }
-      >
-        {copied ? <Check size={13} /> : <Copy size={13} />}
-      </button>
+      <CopyButton
+        className="code-copy"
+        label="Copy code"
+        text={() => (block.current?.textContent ?? '').replace(/\n$/, '')}
+      />
     </div>
   )
 }
@@ -257,12 +275,23 @@ const MessageView = memo(
             {message.blocks?.length ? <Blocks blocks={message.blocks} /> : null}
           </>
         )}
-        <time dateTime={message.createdAt}>
-          {new Date(message.createdAt).toLocaleTimeString([], {
-            hour: 'numeric',
-            minute: '2-digit',
-          })}
-        </time>
+        {/* Shown on hover (always on touch screens), like Claude Desktop: the time and a copy
+            button for the message as written (a reply's Markdown source). */}
+        <div className="message-actions">
+          <time dateTime={message.createdAt}>
+            {new Date(message.createdAt).toLocaleTimeString([], {
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
+          </time>
+          {message.text ? (
+            <CopyButton
+              className="message-copy"
+              label={message.role === 'user' ? 'Copy message' : 'Copy reply'}
+              text={() => message.text}
+            />
+          ) : null}
+        </div>
       </article>
     )
   },

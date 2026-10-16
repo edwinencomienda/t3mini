@@ -736,15 +736,31 @@ kbd {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.message time {
-  font-size: 11px;
-  color: var(--faint);
-  margin-top: 0.25rem;
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
   opacity: 0;
   transition: opacity 0.15s;
 }
-.message:hover time {
+.message:hover .message-actions,
+.message-actions:focus-within {
   opacity: 1;
+}
+@media (pointer: coarse) {
+  .message-actions {
+    opacity: 1;
+  }
+}
+.message time {
+  font-size: 11px;
+  color: var(--faint);
+}
+.message-copy {
+  width: 1.6rem;
+  height: 1.6rem;
+  color: var(--muted-foreground);
 }
 .markdown {
   line-height: 1.65;
