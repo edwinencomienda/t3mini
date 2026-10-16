@@ -96,7 +96,36 @@ async function claudeModels(cwd: string): Promise<ModelOption[]> {
     stream.close()
   }
 }
-const cache = new Map<string, { expires: number; result: Promise<ModelOption[]> }>()
+// Model lists, per agent and project folder. Asking a CLI takes ~0.3 s (it starts a
+// program), so lists are kept for an hour, and an older one is still answered right away while
+// a fresh one loads in the background. t3 mini warms both agents' lists at startup.
+type Entry = { fetchedAt: number; result: Promise<ModelOption[]>; value?: ModelOption[] }
+const cache = new Map<string, Entry>()
+const freshMs = 60 * 60_000
+function load(provider: Provider, cwd: string, key: string) {
+  const entry: Entry = {
+    fetchedAt: Date.now(),
+    result: (provider === 'codex' ? codexModels(cwd) : claudeModels(cwd)).then(
+      (models) => {
+        entry.value = models
+        return models
+      },
+      (error: unknown) => {
+        // Keep the last good list (if any) rather than nothing.
+        if (cache.get(key) === entry) {
+          if (previous?.value) cache.set(key, previous)
+          else cache.delete(key)
+        }
+        throw error
+      },
+    ),
+  }
+  const previous = cache.get(key)
+  // Bound metadata cache size when browsing lots of projects.
+  if (!previous && cache.size >= 32) cache.delete(cache.keys().next().value!)
+  cache.set(key, entry)
+  return entry
+}
 export async function getModels(provider: Provider, path = homedir(), refresh = false) {
   const expanded =
     path === '~' ? homedir() : path.startsWith('~/') ? join(homedir(), path.slice(2)) : path
@@ -105,27 +134,39 @@ export async function getModels(provider: Provider, path = homedir(), refresh = 
   if (!(await stat(cwd)).isDirectory()) throw new Error('Project folder does not exist.')
   const key = JSON.stringify([provider, cwd])
   const previous = cache.get(key)
-  if (!refresh && previous && previous.expires > Date.now()) return previous.result
-  const result = (provider === 'codex' ? codexModels(cwd) : claudeModels(cwd)).catch(
-    (error: unknown) => {
-      cache.delete(key)
-      throw error
-    },
-  )
-  // Bound metadata cache size when browsing lots of projects.
-  if (cache.size >= 32) cache.delete(cache.keys().next().value!)
-  cache.set(key, { expires: Date.now() + 5 * 60_000, result })
-  return result
+  if (refresh || !previous) return load(provider, cwd, key).result
+  if (Date.now() - previous.fetchedAt > freshMs && previous.value) {
+    // Stale: answer with what we have, refresh quietly.
+    load(provider, cwd, key).result.catch(() => {})
+    return previous.value
+  }
+  return previous.result
 }
-export async function validateEffort(
-  provider: Provider,
-  cwd: string,
+// A list already in memory, without waiting: this folder's, else this agent's most recent one
+// for any folder (model lists are the same across projects in practice).
+export function cachedModels(provider: Provider, cwd: string) {
+  const exact = cache.get(JSON.stringify([provider, cwd]))?.value
+  if (exact) return exact
+  let latest: Entry | undefined
+  for (const [key, entry] of cache)
+    if (
+      entry.value &&
+      JSON.parse(key)[0] === provider &&
+      (!latest || entry.fetchedAt > latest.fetchedAt)
+    )
+      latest = entry
+  return latest?.value
+}
+// Loads both agents' lists ahead of time (at startup), so the first thread doesn't wait.
+export function warmModels() {
+  for (const provider of ['claude', 'codex'] as const) void getModels(provider).catch(() => {})
+}
+// The effort and tier checks against a model list (throws a message for the user).
+export function checkEffort(
+  models: ModelOption[],
   settings: { model: string; effort: string; serviceTier?: string },
 ) {
-  if (!settings.effort && !settings.serviceTier) return
-  if (!settings.model)
-    throw new Error('Choose a model before selecting an effort level or service tier.')
-  const model = (await getModels(provider, cwd)).find((item) => item.id === settings.model)
+  const model = models.find((item) => item.id === settings.model)
   if (settings.effort && !model?.efforts.includes(settings.effort))
     throw new Error(
       'This effort level is not supported by the selected model. Use Default or choose a supported level.',
@@ -135,4 +176,14 @@ export async function validateEffort(
     !model?.serviceTiers?.some((tier) => tier.id === settings.serviceTier)
   )
     throw new Error('This service tier is not available for the selected model. Use Standard.')
+}
+export async function validateEffort(
+  provider: Provider,
+  cwd: string,
+  settings: { model: string; effort: string; serviceTier?: string },
+) {
+  if (!settings.effort && !settings.serviceTier) return
+  if (!settings.model)
+    throw new Error('Choose a model before selecting an effort level or service tier.')
+  checkEffort(await getModels(provider, cwd), settings)
 }

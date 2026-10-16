@@ -49,7 +49,7 @@ import {
 } from './providers/types'
 import { defaultPermission } from '../agent-settings'
 import { settingsSchema } from './provider-settings'
-import { validateEffort } from './models'
+import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
 export class HttpError extends Error {
   readonly name = 'HttpError'
@@ -435,11 +435,18 @@ export class AgentService {
   async create(input: unknown) {
     const data = createSchema.parse(input)
     const cwd = await resolveFolder(data.cwd)
-    try {
-      await validateEffort(data.provider, cwd, data)
-    } catch (error) {
-      throw new HttpError(400, error instanceof Error ? error.message : 'Invalid effort level.')
-    }
+    // Creating a thread shouldn't wait for an agent's CLI (~0.3 s to list its models): check
+    // the effort against a list already in memory, or create now and check in the background.
+    const tuned = Boolean(data.effort || data.serviceTier)
+    if (tuned && !data.model)
+      throw new HttpError(400, 'Choose a model before selecting an effort level or service tier.')
+    const models = tuned ? cachedModels(data.provider, cwd) : undefined
+    if (models)
+      try {
+        checkEffort(models, data)
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : 'Invalid effort level.')
+      }
     const now = new Date().toISOString()
     const thread: Thread = {
       id: crypto.randomUUID(),
@@ -471,7 +478,34 @@ export class AgentService {
       await this.projectStore.save().catch(() => this.projectStore.projects.delete(cwd))
     }
     this.notify()
+    if (tuned && !models) void this.checkNewThreadSettings(thread)
     return thread
+  }
+  // The background check for a thread created before its agent's model list was loaded. Saved
+  // choices were valid when picked; if one no longer is, fall back to the default effort/tier.
+  private async checkNewThreadSettings(thread: Thread) {
+    const chosen = { model: thread.model, effort: thread.effort, serviceTier: thread.serviceTier }
+    // The CLI not answering says nothing about the setting: keep it.
+    const models = await getModels(thread.provider, thread.cwd).catch(() => undefined)
+    if (!models) return
+    try {
+      checkEffort(models, chosen)
+    } catch {
+      const current = this.store.threads.get(thread.id)
+      // Only if the settings are still the ones checked (you may have changed them since).
+      if (
+        !current ||
+        current.effort !== chosen.effort ||
+        current.serviceTier !== chosen.serviceTier ||
+        current.model !== chosen.model
+      )
+        return
+      current.effort = ''
+      delete current.serviceTier
+      current.updatedAt = new Date().toISOString()
+      await this.store.save().catch(() => {})
+      this.notify()
+    }
   }
   async updateSettings(id: string, input: unknown) {
     const thread = this.get(id)
@@ -1281,6 +1315,8 @@ export function getService() {
     await store.load()
     const service = new AgentService(store, undefined, undefined, undefined, undefined, titleWriter)
     await service.projectStore.load()
+    // Load the agents' model lists now, so creating the first thread doesn't wait for them.
+    warmModels()
     return service
   })())
 }
