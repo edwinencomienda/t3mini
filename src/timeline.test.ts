@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest'
+import { buildTurns, foldLabel } from './timeline'
+import type { Activity, Message } from './types'
+
+const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16, 9, 0, seconds)).toISOString()
+const user = (id: string, s: number, extra: Partial<Message> = {}): Message => ({
+  id,
+  role: 'user',
+  text: id,
+  createdAt: at(s),
+  ...extra,
+})
+const reply = (id: string, s: number, text = id): Message => ({
+  id,
+  role: 'assistant',
+  text,
+  createdAt: at(s),
+})
+const step = (id: string, s?: number, status: Activity['status'] = 'completed'): Activity => ({
+  id,
+  label: 'Run',
+  status,
+  ...(s === undefined ? {} : { startedAt: at(s) }),
+})
+const kinds = (work: ReturnType<typeof buildTurns>[number]['work']) =>
+  work.map((item) => (item.kind === 'note' ? item.message.id : `step:${item.activity.id}`))
+
+describe('buildTurns', () => {
+  it('folds a finished turn: notes and steps in order, the last reply as the answer', () => {
+    const [first, second] = buildTurns({
+      messages: [
+        user('q1', 0),
+        reply('a1', 5),
+        user('q2', 10),
+        reply('n1', 12),
+        reply('n2', 20),
+        reply('final', 40),
+      ],
+      activities: [step('s1', 11), step('s2', 15), step('s3', 30)],
+      status: 'completed',
+      completedAt: at(45),
+    })
+    expect(first).toMatchObject({ key: 'q1', done: true, steps: 0, work: [] })
+    expect(first!.answer?.id).toBe('a1')
+    expect(second!.answer?.id).toBe('final')
+    expect(kinds(second!.work)).toEqual(['step:s1', 'n1', 'step:s2', 'n2', 'step:s3'])
+    expect(foldLabel(second!, 'completed')).toBe('Worked for 35s · 3 steps')
+    // Older turns have no saved steps; they count messages instead.
+    expect(
+      foldLabel({ ...first!, work: [{ kind: 'note', message: reply('x', 1), at: at(1) }] }),
+    ).toBe('Worked for 5s · 1 message')
+  })
+
+  it('shows a turn in progress live, with no answer picked yet', () => {
+    const turns = buildTurns({
+      messages: [user('q', 0), reply('n1', 3), reply('n2', 8)],
+      activities: [step('s1', 5), step('s2', 9, 'running')],
+      status: 'working',
+    })
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ done: false, steps: 2 })
+    expect(turns[0]!.answer).toBeUndefined()
+    expect(kinds(turns[0]!.work)).toEqual(['n1', 'step:s1', 'n2', 'step:s2'])
+  })
+
+  it('keeps the running turn live while a queued message waits', () => {
+    const turns = buildTurns({
+      messages: [user('q', 0), reply('n1', 3), user('later', 4, { queued: true })],
+      activities: [step('s1', 5, 'running')],
+      status: 'working',
+    })
+    expect(turns.map((turn) => [turn.key, turn.done])).toEqual([
+      ['q', false],
+      ['later', false],
+    ])
+    // The step started after the queued message, but it belongs to the running turn.
+    expect([turns[0]!.steps, turns[1]!.steps]).toEqual([1, 0])
+  })
+
+  it('puts steps saved without a time after the current turn’s notes', () => {
+    const [turn] = buildTurns({
+      messages: [user('q', 0), reply('n1', 3), reply('final', 8)],
+      activities: [step('old1'), step('old2')],
+      status: 'completed',
+      completedAt: at(9),
+    })
+    expect(turn!.answer?.id).toBe('final')
+    expect(kinds(turn!.work)).toEqual(['n1', 'step:old1', 'step:old2'])
+  })
+
+  it('says when a run stopped or failed', () => {
+    const [turn] = buildTurns({
+      messages: [user('q', 0), reply('n1', 3), reply('partial', 70)],
+      activities: [step('s1', 5, 'failed')],
+      status: 'interrupted',
+      completedAt: at(75),
+    })
+    expect(foldLabel(turn!, 'interrupted')).toBe('Stopped after 1m 15s · 1 step')
+    expect(foldLabel(turn!, 'failed')).toBe('Failed after 1m 15s · 1 step')
+  })
+})

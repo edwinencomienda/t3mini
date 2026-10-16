@@ -39,6 +39,12 @@ export type Activity = {
   label: string
   // One line: the command, path, or query.
   summary?: string
+  // A plain-English headline when the agent gave one (Claude's description of a command),
+  // shown instead of the label and summary.
+  title?: string
+  // When the step started (steps saved before this was added have none), to place it among
+  // the agent's messages and time it.
+  startedAt?: string
   // Full input for the expanded view (whole command, edit preview, arguments).
   detail?: string
   // What the step returned, trimmed.

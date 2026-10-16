@@ -81,6 +81,8 @@ import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
+import { LiveLine, StepRow, stepTitle } from './WorkSteps'
+import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -223,7 +225,8 @@ const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }
 // One message. Live updates parse a fresh copy of the thread every time, so rows compare by
 // content rather than identity; unchanged messages skip rendering entirely.
 const MessageView = memo(
-  function MessageView({ message }: { message: Message }) {
+  // meta: the time and copy row under the message (left off the agent's in-between notes).
+  function MessageView({ message, meta = true }: { message: Message; meta?: boolean }) {
     return (
       <article className={`message ${message.role}`}>
         {message.role === 'user' ? (
@@ -277,25 +280,28 @@ const MessageView = memo(
         )}
         {/* Shown on hover (always on touch screens), like Claude Desktop: the time and a copy
             button for the message as written (a reply's Markdown source). */}
-        <div className="message-actions">
-          <time dateTime={message.createdAt}>
-            {new Date(message.createdAt).toLocaleTimeString([], {
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
-          </time>
-          {message.text ? (
-            <CopyButton
-              className="message-copy"
-              label={message.role === 'user' ? 'Copy message' : 'Copy reply'}
-              text={() => message.text}
-            />
-          ) : null}
-        </div>
+        {meta ? (
+          <div className="message-actions">
+            <time dateTime={message.createdAt}>
+              {new Date(message.createdAt).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </time>
+            {message.text ? (
+              <CopyButton
+                className="message-copy"
+                label={message.role === 'user' ? 'Copy message' : 'Copy reply'}
+                text={() => message.text}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </article>
     )
   },
   (before, after) =>
+    before.meta === after.meta &&
     before.message.id === after.message.id &&
     before.message.text === after.message.text &&
     before.message.queued === after.message.queued &&
@@ -329,10 +335,6 @@ function relativeTime(iso: string, now: number) {
 function threadTime(item: ThreadSummary, now: number) {
   if (item.status === 'waiting') return item.waitingFor === 'question' ? 'Question' : 'Approval'
   return relativeTime(item.updatedAt, now)
-}
-function duration(start: string, end: string) {
-  const seconds = Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 1000))
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 // The last agent used, else Claude (or Codex when only Codex is installed).
@@ -465,7 +467,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
     resizeComposer()
   }
   const [busy, setBusy] = useState(false)
-  const [workLogOpen, setWorkLogOpen] = useState(false)
+  // Finished turns whose folded work you opened (keyed by turn).
+  const [openTurns, setOpenTurns] = useState<Set<string>>(() => new Set())
+  const toggleTurn = (key: string) =>
+    setOpenTurns((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
   const [now, setNow] = useState(() => Date.now())
   const content = useRef<HTMLDivElement>(null)
   // Images waiting to be sent, per thread so switching threads keeps them.
@@ -1101,7 +1110,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setDraft(drafts.current.get(id) || '')
     setSidebarOpen(false)
     setError('')
-    setWorkLogOpen(false)
     stickToBottom.current = true
   }
   function select(id: string) {
@@ -1607,66 +1615,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
   toggleChangesRef.current = () => {
     if (thread && git?.branch) toggleDiff(!diffOpen)
   }
-  const lastUser = thread ? thread.messages.map((message) => message.role).lastIndexOf('user') : -1
-  const workLog = thread?.activities.length ? (
-    <section className={`work-log ${workLogOpen ? 'open' : ''}`}>
-      <button
-        className="work-log-toggle"
-        onClick={() => setWorkLogOpen(!workLogOpen)}
-        aria-expanded={workLogOpen}
-      >
-        <ChevronRight size={13} className="chevron" />
-        <span>
-          {active ? 'Working' : 'Work log'} · {thread.activities.length}{' '}
-          {thread.activities.length === 1 ? 'step' : 'steps'}
-        </span>
-        {active ? <LoaderCircle size={12} className="status-spinner" /> : null}
-      </button>
-      {workLogOpen || active ? (
-        <ol className="work-log-list">
-          {(workLogOpen ? thread.activities : thread.activities.slice(-3)).map((item) => (
-            <li key={item.id} className={item.status}>
-              <details>
-                <summary>
-                  {item.status === 'completed' ? (
-                    <Check size={12} />
-                  ) : item.status === 'failed' ? (
-                    <X size={12} />
-                  ) : (
-                    <Circle size={9} />
-                  )}
-                  {item.agent ? (
-                    <span className="step-agent" title={`Subagent: ${item.agent}`}>
-                      {item.agent}
-                    </span>
-                  ) : null}
-                  <span className="step-label">{item.label}</span>
-                  {item.summary ? (
-                    <span className="step-summary" title={item.summary}>
-                      {item.summary}
-                    </span>
-                  ) : null}
-                </summary>
-                {/* The full input (command, edit, arguments), then what it returned. */}
-                {item.detail && item.detail !== item.summary ? (
-                  <pre className="step-detail">{item.detail}</pre>
-                ) : null}
-                {item.output ? (
-                  <>
-                    <span className="step-section">Output</span>
-                    <pre className="step-output">{item.output}</pre>
-                  </>
-                ) : null}
-                {!item.output && (!item.detail || item.detail === item.summary) ? (
-                  <p>{item.status === 'running' ? 'Running…' : 'No output.'}</p>
-                ) : null}
-              </details>
-            </li>
-          ))}
-        </ol>
-      ) : null}
-    </section>
-  ) : null
+  // The conversation one turn at a time (see timeline.ts). While the agent works, the step
+  // it's on shows in the live line at the bottom instead of in the list.
+  const turns = thread ? buildTurns(thread) : []
+  const liveStep = active
+    ? [...(thread?.activities ?? [])]
+        .reverse()
+        .find((item) => item.status === 'running' && !item.agent)
+    : undefined
+  const workList = (items: WorkItem[]) => (
+    <div className="work">
+      {items.map((item) =>
+        item.kind === 'note' ? (
+          <MessageView key={item.message.id} message={item.message} meta={false} />
+        ) : item.activity === liveStep ? null : (
+          <StepRow key={item.activity.id} step={item.activity} />
+        ),
+      )}
+    </div>
+  )
 
   return (
     <div className="workspace">
@@ -2184,14 +2151,33 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   </section>
                 ) : (
                   <div className="conversation">
-                    {thread.messages.map((message, index) => (
-                      <div className="turn" key={message.id}>
-                        <MessageView message={message} />
-                        {/* The work log belongs to the latest turn, right after its prompt. */}
-                        {index === lastUser ? workLog : null}
+                    {turns.map((turn) => (
+                      <div className="turn" key={turn.key}>
+                        {turn.user ? <MessageView message={turn.user} /> : null}
+                        {turn.done && turn.work.length ? (
+                          <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>
+                            <button
+                              type="button"
+                              className="turn-fold-toggle"
+                              aria-expanded={openTurns.has(turn.key)}
+                              onClick={() => toggleTurn(turn.key)}
+                            >
+                              <span>
+                                {foldLabel(
+                                  turn,
+                                  turn.endedAt === thread.completedAt ? thread.status : undefined,
+                                )}
+                              </span>
+                              <ChevronRight size={13} className="chevron" />
+                            </button>
+                            {openTurns.has(turn.key) ? workList(turn.work) : null}
+                          </div>
+                        ) : !turn.done && turn.work.length ? (
+                          workList(turn.work)
+                        ) : null}
+                        {turn.answer ? <MessageView message={turn.answer} /> : null}
                       </div>
                     ))}
-                    {lastUser === -1 ? workLog : null}
                     {thread.approvals.map((approval) =>
                       approval.questions?.length ? (
                         <QuestionCard
@@ -2248,21 +2234,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         </span>
                       </div>
                     ) : null}
-                    {/* One working indicator: the work log shows it once the agent starts using tools. */}
-                    {active && !thread.approvals.length && !thread.activities.length ? (
-                      <div className="thinking" role="status">
-                        <span />
-                        <span />
-                        <span />
-                        {labels[thread.status]}…
-                      </div>
-                    ) : thread.completedAt && thread.startedAt ? (
-                      <div className="turn-divider" role="status">
-                        <span>
-                          {thread.status === 'completed' ? 'Worked' : labels[thread.status]} for{' '}
-                          {duration(thread.startedAt, thread.completedAt)}
-                        </span>
-                      </div>
+                    {/* What the agent is doing right now, and for how long. */}
+                    {active && !thread.approvals.length ? (
+                      liveStep ? (
+                        <LiveLine text={stepTitle(liveStep)} since={liveStep.startedAt} />
+                      ) : (
+                        <LiveLine
+                          text={thread.status === 'starting' ? 'Starting…' : 'Thinking…'}
+                          since={thread.startedAt}
+                        />
+                      )
                     ) : null}
                     {thread.error ? (
                       <div className="error-banner" role="alert">

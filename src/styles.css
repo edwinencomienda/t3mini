@@ -906,71 +906,71 @@ kbd {
   margin: 1.25rem 0;
 }
 
-/* Work log */
-.work-log {
-  font-size: 12.5px;
-  color: var(--muted-foreground);
-}
-.work-log-toggle {
-  display: inline-flex;
-  align-items: center;
+/* The agent's work inside a turn: its in-between notes and tool steps, tight together. */
+.work {
+  display: flex;
+  flex-direction: column;
   gap: 0.35rem;
-  padding: 0.15rem 0.4rem 0.15rem 0.2rem;
-  border-radius: 0.35rem;
+}
+.work > .message + .message,
+.work > .step + .message,
+.work > .message + .step {
+  margin-top: 0.35rem;
+}
+.step {
+  font-size: 13px;
   color: var(--muted-foreground);
-  font-size: 12.5px;
 }
-.work-log-toggle:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.work-log-toggle .chevron {
-  transition: transform 0.15s;
-}
-.work-log.open .chevron {
-  transform: rotate(90deg);
-}
-.work-log-list {
-  list-style: none;
-  margin: 0.35rem 0 0 0.55rem;
-  padding: 0 0 0 0.75rem;
-  border-left: 1px solid var(--border);
-}
-.work-log-list li + li {
-  margin-top: 0.1rem;
-}
-.work-log-list summary {
+.step summary {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.15rem 0.3rem;
-  border-radius: 0.3rem;
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.1rem 0.35rem 0.1rem 0.15rem;
+  margin-left: -0.15rem;
+  border-radius: 0.35rem;
   cursor: pointer;
   list-style: none;
 }
-.work-log-list summary::-webkit-details-marker {
+.step summary::-webkit-details-marker {
   display: none;
 }
-.work-log-list summary:hover {
+.step summary:hover {
   background: var(--accent);
   color: var(--foreground);
 }
-.work-log-list summary {
-  min-width: 0;
-}
-.step-label {
+.step-icon {
+  display: inline-flex;
   flex-shrink: 0;
-  color: var(--foreground);
-  font-size: 12.5px;
 }
-.step-summary {
+.step.completed .step-icon {
+  color: var(--faint);
+}
+.step.failed .step-icon,
+.step-failed {
+  color: var(--danger);
+}
+.step.running .step-icon {
+  color: var(--primary);
+}
+.step-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--muted-foreground);
+}
+.step .chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.step[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+.step-failed {
+  flex-shrink: 0;
 }
 .step-section {
   display: block;
@@ -978,20 +978,8 @@ kbd {
   font-size: 11px;
   color: var(--faint);
 }
-.work-log-list .step-output {
-  margin-top: 0.2rem;
-}
-.work-log-list li.completed svg {
-  color: var(--success);
-}
-.work-log-list li.failed svg {
-  color: var(--danger);
-}
-.work-log-list li.running svg {
-  color: var(--primary);
-}
-.work-log-list pre,
-.work-log-list p {
+.step-body pre,
+.step-body p {
   margin: 0.3rem 0 0.5rem 1.4rem;
   padding: 0.5rem 0.7rem;
   max-height: 16rem;
@@ -1002,6 +990,78 @@ kbd {
   font-size: 11.5px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.step-body .step-output {
+  margin-top: 0.2rem;
+}
+/* A finished turn's work, folded into one line above the final answer. */
+.turn-fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.35rem;
+  margin-left: -0.35rem;
+  border-radius: 0.35rem;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.turn-fold-toggle:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.turn-fold-toggle .chevron {
+  transition: transform 0.15s;
+}
+.turn-fold.open .turn-fold-toggle .chevron {
+  transform: rotate(90deg);
+}
+.turn-fold.open > .work {
+  margin: 0.5rem 0 0 0.35rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border);
+}
+/* What the agent is doing now, with a timer. */
+.live-line {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.live-dots {
+  display: grid;
+  grid-template-columns: repeat(2, 4px);
+  gap: 3px;
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.live-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.live-dots span:nth-child(2) {
+  animation-delay: 0.3s;
+}
+.live-dots span:nth-child(4) {
+  animation-delay: 0.6s;
+}
+.live-dots span:nth-child(3) {
+  animation-delay: 0.9s;
+}
+.live-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-time {
+  flex-shrink: 0;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Approvals, status, errors */
@@ -1191,27 +1251,6 @@ kbd {
   justify-content: flex-end;
   gap: 0.5rem;
 }
-.thinking {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 12.5px;
-  color: var(--muted-foreground);
-}
-.thinking span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-.thinking span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.thinking span:nth-child(3) {
-  animation-delay: 0.3s;
-  margin-right: 0.35rem;
-}
 @keyframes pulse {
   0%,
   100% {
@@ -1220,20 +1259,6 @@ kbd {
   50% {
     opacity: 1;
   }
-}
-.turn-divider {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-size: 11.5px;
-  color: var(--faint);
-}
-.turn-divider::before,
-.turn-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
 }
 .error-banner {
   display: flex;

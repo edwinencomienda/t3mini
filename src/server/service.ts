@@ -711,7 +711,7 @@ export class AgentService {
       },
       activity: (activity) => {
         const index = thread.activities.findIndex((item) => item.id === activity.id)
-        if (index < 0) thread.activities.push(activity)
+        if (index < 0) thread.activities.push({ ...activity, startedAt: new Date().toISOString() })
         else {
           const old = thread.activities[index]
           thread.activities[index] = {
@@ -719,6 +719,7 @@ export class AgentService {
             ...activity,
             label: activity.label === 'Tool' ? old.label : activity.label,
             summary: activity.summary ?? old.summary,
+            title: activity.title ?? old.title,
             detail: activity.detail ?? old.detail,
             output: activity.output ?? old.output,
           }

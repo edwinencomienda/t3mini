@@ -13,7 +13,9 @@ it('summarizes common Claude tools with the command, path, or query', () => {
   ).toEqual({
     label: 'Run',
     summary: 'git log -1 --stat',
-    detail: '# Show last commit\ngit log -1 --stat\necho done',
+    detail: 'git log -1 --stat\necho done',
+    // Claude's own description becomes the step's headline.
+    title: 'Show last commit',
   })
   expect(describeClaudeTool('Read', { file_path: '/work/app/src/a.ts' }, cwd)).toMatchObject({
     label: 'Read',

@@ -2,7 +2,7 @@
 // one-line summary (the command or path), the full input for the expanded view, and output.
 import { findClaudeTool, findTool } from '../tools'
 
-export type ToolStep = { label: string; summary?: string; detail?: string }
+export type ToolStep = { label: string; summary?: string; detail?: string; title?: string }
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -30,7 +30,8 @@ export function describeClaudeTool(name: string, rawInput: unknown, cwd: string)
       return {
         label: 'Run',
         summary: firstLine(command),
-        detail: description ? `# ${description}\n${command}` : command,
+        detail: command,
+        ...(description.trim() ? { title: firstLine(description) } : {}),
       }
     }
     case 'Read': {
