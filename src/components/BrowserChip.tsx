@@ -44,6 +44,7 @@ export function BrowserChip({ threadId, browser }: { threadId: string; browser?:
       <Popover.Trigger className="process-chip browser-chip" title="The agent’s browser">
         <Globe size={12} />
         <span>{short(browser.url)}</span>
+        {browser.tabs > 1 ? <span className="browser-chip-tabs">+{browser.tabs - 1}</span> : null}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner
@@ -57,7 +58,10 @@ export function BrowserChip({ threadId, browser }: { threadId: string; browser?:
             <div className="browser-menu-head">
               <div className="browser-menu-title">
                 <strong>{browser.title || 'Untitled page'}</strong>
-                <small>{browser.url}</small>
+                <small>
+                  {browser.url}
+                  {browser.tabs > 1 ? ` · ${browser.tabs} tabs open, showing the active one` : ''}
+                </small>
               </div>
               <button
                 type="button"

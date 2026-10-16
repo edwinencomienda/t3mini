@@ -7,8 +7,13 @@ import type { ProcessInfo } from '../processes'
 export type ThreadBrowser = {
   // The page, opening the browser if needed.
   page: () => Promise<Page>
-  // The page if it's already open.
+  // The page if it's already open (the active tab).
   openPage: () => Promise<Page | undefined>
+  // Tabs: open another (made active), list, switch to, or close one.
+  newTab: () => Promise<Page>
+  tabs: () => Promise<{ id: string; url: string; title: string; active: boolean }[]>
+  switchTab: (id: string) => Promise<Page>
+  closeTab: (id: string) => Promise<void>
   // Errors, failed requests, dialogs, and blocked addresses since the last look.
   takeLog: () => Promise<{ kind: string; text: string }[]>
   close: () => Promise<void>

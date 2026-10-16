@@ -139,7 +139,7 @@ export type ThreadGlance = Pick<
   waitingOn?: string
 }
 // A thread's open browser page (the browser_* tools), for the composer's browser chip.
-export type BrowserInfo = { threadId: string; url: string; title: string }
+export type BrowserInfo = { threadId: string; url: string; title: string; tabs: number }
 // A conversation that mentions what you searched for (command palette), with a short excerpt.
 export type MessageMatch = {
   threadId: string

@@ -125,15 +125,32 @@ export function allowRequest(raw: string, ports = blockedPorts()) {
 }
 
 type LogEntry = {
-  kind: 'error' | 'warning' | 'failed request' | 'dialog' | 'blocked'
+  kind: 'error' | 'warning' | 'failed request' | 'dialog' | 'blocked' | 'popup'
   text: string
 }
 
+// A thread's tabs: ones the agent opened, and popups pages opened (window.open, target=_blank).
+// One is active; the tools act on it. Tabs share the thread's cookies, like one browser window.
+type Tab = { id: string; page: Page; popup: boolean }
+export type TabInfo = { id: string; url: string; title: string; active: boolean }
+const maxTabs = 5
+
 class Session {
-  page?: Page
-  // While the thread's own page is being opened (so it isn't mistaken for a popup).
+  tabs: Tab[] = []
+  active?: string
+  // Tabs in the order they were last active, so closing one returns to the one before.
+  history: string[] = []
+  next = 1
+  // While the agent's own tab is being opened (so it isn't mistaken for a popup).
   opening = false
   log: LogEntry[] = []
+  activeTab() {
+    return this.tabs.find((tab) => tab.id === this.active && !tab.page.isClosed())
+  }
+  activate(id: string) {
+    this.active = id
+    this.history = [...this.history.filter((item) => item !== id), id]
+  }
   timer?: NodeJS.Timeout
   constructor(readonly context: BrowserContext) {}
   note(entry: LogEntry) {
@@ -196,18 +213,52 @@ export class BrowserManager {
     return page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', timeout: 5000 })
   }
 
-  // The thread's page, opening the browser and session if needed.
+  // The thread's active tab, opening the browser and a first tab if needed.
   async page(threadId: string): Promise<Page> {
     const session = await this.session(threadId)
-    if (!session.page || session.page.isClosed())
-      session.page = await this.newPage(session, threadId)
-    return session.page
+    return session.activeTab()?.page ?? (await this.newPage(session, threadId))
   }
-  // The thread's page if one is open (doesn't start anything).
+  // The thread's active tab if one is open (doesn't start anything).
   async openPage(threadId: string) {
     const session = await this.sessions.get(threadId)?.catch(() => undefined)
     this.touch(threadId, session)
-    return session?.page && !session.page.isClosed() ? session.page : undefined
+    return session?.activeTab()?.page
+  }
+  // Opens another tab (made active), up to the limit.
+  async newTab(threadId: string) {
+    const session = await this.session(threadId)
+    if (session.tabs.length >= maxTabs)
+      throw new BrowserError(`At most ${maxTabs} tabs are open at once. Close one first.`)
+    return this.newPage(session, threadId)
+  }
+  async tabs(threadId: string): Promise<TabInfo[]> {
+    const session = await this.sessions.get(threadId)?.catch(() => undefined)
+    this.touch(threadId, session)
+    return Promise.all(
+      (session?.tabs ?? []).map(async (tab) => ({
+        id: tab.id,
+        url: tab.page.url(),
+        title: await tab.page.title().catch(() => ''),
+        active: tab.id === session!.active,
+      })),
+    )
+  }
+  async switchTab(threadId: string, id: string) {
+    const session = await this.sessions.get(threadId)?.catch(() => undefined)
+    const tab = session?.tabs.find((item) => item.id === id)
+    if (!session || !tab) throw new BrowserError(`There's no tab ${id}. List tabs to see them.`)
+    this.touch(threadId, session)
+    session.activate(id)
+    await tab.page.bringToFront().catch(() => {})
+    this.refs.delete(threadId)
+    this.updateInfo(threadId, session)
+    return tab.page
+  }
+  async closeTab(threadId: string, id: string) {
+    const session = await this.sessions.get(threadId)?.catch(() => undefined)
+    const tab = session?.tabs.find((item) => item.id === id)
+    if (!tab) throw new BrowserError(`There's no tab ${id}. List tabs to see them.`)
+    await tab.page.close().catch(() => {})
   }
   // Errors, failed requests, and dialogs since the page was opened (and clears them).
   async takeLog(threadId: string) {
@@ -278,7 +329,7 @@ export class BrowserManager {
   private async session(threadId: string) {
     let session = this.sessions.get(threadId)
     if (!session) {
-      session = this.createSession()
+      session = this.createSession(threadId)
       this.sessions.set(threadId, session)
       session.catch(() => {
         if (this.sessions.get(threadId) === session) this.sessions.delete(threadId)
@@ -288,7 +339,7 @@ export class BrowserManager {
     this.touch(threadId, value)
     return value
   }
-  private async createSession() {
+  private async createSession(threadId: string) {
     const browser = await this.launch()
     const context = await browser.newContext({
       viewport: { width: 1280, height: 800 },
@@ -304,11 +355,15 @@ export class BrowserManager {
     await context.route('**/*', (route, request: Request) => {
       const url = request.url()
       let mainFrame = false
+      let from: Page | undefined
       try {
-        mainFrame =
-          request.isNavigationRequest() && request.frame() === request.frame().page().mainFrame()
+        from = request.frame().page()
+        mainFrame = request.isNavigationRequest() && request.frame() === from.mainFrame()
       } catch {
-        // Not tied to a page frame (e.g. a worker): only the t3 mini check applies.
+        // No frame yet: a popup's first navigation is issued before its page exists, and it's
+        // a top-level page load like any other, so the local-sites rule applies. (Other
+        // frameless requests, from workers, only get the t3 mini check.)
+        mainFrame = request.isNavigationRequest()
       }
       const refusal = !allowRequest(url, this.ports)
         ? 't3 mini itself'
@@ -317,19 +372,68 @@ export class BrowserManager {
           : undefined
       if (refusal) {
         session.note({ kind: 'blocked', text: `${url} (${refusal})` })
+        // A popup headed somewhere it can't go (e.g. a sign-in site) is closed.
+        if (mainFrame) {
+          const tab = session.tabs.find((item) => item.page === from)
+          if (tab?.popup && tab.page.url() === 'about:blank') void tab.page.close().catch(() => {})
+        }
         return route.abort('blockedbyclient')
       }
       return route.continue()
     })
-    // Popups and new tabs aren't followed: the agent works in one page.
+    // Popups (window.open, target=_blank links) open as tabs and become active, so the agent
+    // can follow them; past the tab limit they're closed.
     context.on('page', (page) => {
-      if (!session.opening) void page.close().catch(() => {})
+      if (session.opening) return
+      if (session.tabs.length >= maxTabs) {
+        session.note({
+          kind: 'blocked',
+          text: `A popup was closed: ${maxTabs} tabs are already open.`,
+        })
+        void page.close().catch(() => {})
+        return
+      }
+      this.wire(session, threadId, page, true)
     })
     return session
   }
   private async newPage(session: Session, threadId: string) {
     session.opening = true
     const page = await session.context.newPage().finally(() => (session.opening = false))
+    return this.wire(session, threadId, page, false)
+  }
+  // What the browser chip shows: the active tab's address and title, and how many are open.
+  private updateInfo(threadId: string, session: Session) {
+    const tab = session.activeTab()
+    if (!tab) return this.forget(threadId)
+    const url = tab.page.url()
+    if (url === 'about:blank') return
+    void tab.page
+      .title()
+      .catch(() => '')
+      .then((title) => {
+        const next = { threadId, url, title, tabs: session.tabs.length }
+        const current = this.info.get(threadId)
+        if (current?.url === next.url && current.title === next.title && current.tabs === next.tabs)
+          return
+        this.info.set(threadId, next)
+        this.changed()
+      })
+  }
+  // Registers a tab (the agent's or a popup), makes it active, and watches it.
+  private wire(session: Session, threadId: string, page: Page, popup: boolean) {
+    const tab: Tab = { id: `t${session.next++}`, page, popup }
+    session.tabs.push(tab)
+    session.activate(tab.id)
+    if (popup) {
+      session.note({ kind: 'popup', text: `Tab ${tab.id} opened (a popup) and is now active.` })
+      // Backstop: a popup already showing somewhere it can't be is closed right away.
+      const url = page.url()
+      if (url !== 'about:blank' && checkPageUrl(url, this.ports)) {
+        session.note({ kind: 'blocked', text: `${url} (not a local site)` })
+        void page.close().catch(() => {})
+      }
+    }
     page.on('console', (message: ConsoleMessage) => {
       const type = message.type()
       if (type === 'error' || type === 'warning')
@@ -355,32 +459,32 @@ export class BrowserManager {
       session.note({ kind: 'dialog', text: `${dialog.type()}: ${dialog.message()}` })
       void dialog.dismiss().catch(() => {})
     })
-    // The address and title the browser chip shows.
     const update = () => {
-      if (page.isClosed() || page.url() === 'about:blank') return
-      void page
-        .title()
-        .catch(() => '')
-        .then((title) => {
-          const next = { threadId, url: page.url(), title }
-          const current = this.info.get(threadId)
-          if (current?.url === next.url && current.title === next.title) return
-          this.info.set(threadId, next)
-          this.changed()
-        })
+      if (session.active === tab.id) this.updateInfo(threadId, session)
     }
     page.on('load', update)
     page.on('domcontentloaded', update)
-    page.on('close', () => this.forget(threadId))
+    // A closed tab leaves; the last remaining one becomes active.
+    page.on('close', () => {
+      session.tabs = session.tabs.filter((item) => item !== tab)
+      session.history = session.history.filter((item) => item !== tab.id)
+      if (session.active === tab.id) {
+        session.active = session.history.at(-1) ?? session.tabs.at(-1)?.id
+        this.refs.delete(threadId)
+      }
+      this.updateInfo(threadId, session)
+    })
     // A redirect that slipped past the request check still can't keep the page elsewhere.
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) update()
       if (frame !== page.mainFrame() || frame.url() === 'about:blank') return
       if (checkPageUrl(frame.url(), this.ports)) {
         session.note({ kind: 'blocked', text: `${frame.url()} (not a local site)` })
-        void page.goto('about:blank').catch(() => {})
+        if (tab.popup) void page.close().catch(() => {})
+        else void page.goto('about:blank').catch(() => {})
       }
     })
+    update()
     return page
   }
 }

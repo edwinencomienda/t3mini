@@ -9,6 +9,7 @@ import {
   browserScreenshot,
   browserSetCookie,
   browserSnapshot,
+  browserTabs,
   browserType,
   browserWaitFor,
 } from './tools/browser'
@@ -103,6 +104,13 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
           `<!doctype html><title>Account</title><h1>${signedIn ? 'Welcome back, Ada' : 'Please sign in'}</h1>`,
         )
       }
+      if (request.url === '/popups') {
+        response.setHeader('content-type', 'text/html')
+        return response.end(`<!doctype html><title>Popups</title>
+          <button onclick="window.open('/account')">Open account</button>
+          <a href="/slow" target="_blank">New tab link</a>
+          <button onclick="window.open('https://example.com/oauth')">Sign in elsewhere</button>`)
+      }
       if (request.url === '/slow') {
         response.setHeader('content-type', 'text/html')
         return response.end(`<!doctype html><title>Slow</title><p id="status">Loading…</p>
@@ -144,6 +152,10 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       openPage: () => browsers.openPage(thread),
       takeLog: () => browsers.takeLog(thread),
       close: () => browsers.close(thread),
+      newTab: () => browsers.newTab(thread),
+      tabs: () => browsers.tabs(thread),
+      switchTab: (id) => browsers.switchTab(thread, id),
+      closeTab: (id) => browsers.closeTab(thread, id),
       recordSnapshot: (snapshot) => browsers.recordSnapshot(thread, snapshot),
       refName: (ref) => browsers.refName(thread, ref),
     },
@@ -170,6 +182,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       threadId: 'thread-1',
       url: `${base}/`,
       title: 'Demo app',
+      tabs: 1,
     })
     const preview = await browsers.preview('thread-1')
     expect(preview?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]))
@@ -271,6 +284,45 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     const width = (png: string) => Buffer.from(png, 'base64').readUInt32BE(16)
     expect(width(button.image!.data)).toBeLessThan(width(whole.image!.data) / 4)
   }, 30_000)
+
+  it('opens popups as tabs, switches and closes them, and closes popups that leave', async () => {
+    const tools = context('thread-7')
+    await runTool(browserOpen, tools, { url: `${base}/popups` })
+    // window.open becomes a new, active tab.
+    const popup = await runTool(browserClick, tools, { target: 'role=button[name="Open account"]' })
+    expect(popup.text).toMatch(/A new tab opened \(t2\) and is now active/)
+    expect(popup.text).toContain('Tab t2 of 2')
+    expect(popup.text).toContain('Please sign in')
+    // So does a target=_blank link, and tabs share cookies.
+    await runTool(browserTabs, tools, { action: 'switch', tab: 't1' })
+    const link = await runTool(browserClick, tools, { target: 'text=New tab link' })
+    expect(link.text).toMatch(/A new tab opened \(t3\)/)
+    // A popup headed to an outside site is closed; the page stays.
+    await runTool(browserTabs, tools, { action: 'switch', tab: 't1' })
+    const away = await runTool(browserClick, tools, {
+      target: 'role=button[name="Sign in elsewhere"]',
+    })
+    expect(away.text).not.toMatch(/A new tab opened/)
+    expect((await runTool(browserConsole, tools, {})).text).toMatch(/\[blocked\].*example\.com/)
+    // List, close, and the chip's count.
+    let list = await runTool(browserTabs, tools, { action: 'list' })
+    expect(list.text).toMatch(/t1 \(active\): Popups/)
+    expect(list.text).toMatch(/t2: Account/)
+    expect(list.text).toMatch(/t3: Slow/)
+    expect(browsers.list().find((item) => item.threadId === 'thread-7')?.tabs).toBe(3)
+    list = await runTool(browserTabs, tools, { action: 'close', tab: 't2' })
+    expect(list.text).not.toMatch(/t2:/)
+    expect((await runTool(browserTabs, tools, { action: 'switch', tab: 't9' })).text).toMatch(
+      /no tab t9/,
+    )
+    // A new tab on request, up to the limit.
+    const opened = await runTool(browserOpen, tools, { url: `${base}/`, newTab: true })
+    expect(opened.text).toMatch(/Tab t\d+ of 3/)
+    await runTool(browserOpen, tools, { url: `${base}/`, newTab: true })
+    await runTool(browserOpen, tools, { url: `${base}/`, newTab: true })
+    const tooMany = await runTool(browserOpen, tools, { url: `${base}/`, newTab: true })
+    expect(tooMany.text).toMatch(/At most 5 tabs/)
+  }, 45_000)
 
   it('keeps each thread’s session private and closes it', async () => {
     const one = await browsers.page('private-1')

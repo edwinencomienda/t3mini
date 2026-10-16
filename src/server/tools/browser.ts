@@ -21,9 +21,36 @@ async function snapshot(context: ToolContext, page: Page) {
     tree.length > maxSnapshot
       ? `${tree.slice(0, maxSnapshot)}\n… (cut; scroll or look closer)`
       : tree
+  // With several tabs open, say which one this is.
+  const tabs = await context.browser.tabs()
+  const where =
+    tabs.length > 1 ? `Tab ${tabs.find((tab) => tab.active)?.id} of ${tabs.length} · ` : ''
   return untrusted(
-    `${await page.title().catch(() => '')} (${page.url()})\n${text || '(empty page)'}`,
+    `${where}${await page.title().catch(() => '')} (${page.url()})\n${text || '(empty page)'}`,
   )
+}
+const tabIds = async (context: ToolContext) => (await context.browser.tabs()).map((tab) => tab.id)
+// After an action: the page afterwards, and whether it opened a tab (a popup), which is now
+// the active one.
+async function after(context: ToolContext, before: string[]) {
+  let page = await context.browser.openPage()
+  if (page) await settle(page)
+  let opened = (await context.browser.tabs()).filter((tab) => !before.includes(tab.id))
+  // A new tab (now the active one) starts blank: let its first page load, or be closed if it
+  // isn't allowed.
+  if (opened.length) {
+    page = await context.browser.openPage()
+    if (page?.url() === 'about:blank')
+      await page.waitForURL((url) => url.href !== 'about:blank', { timeout: 5000 }).catch(() => {})
+    await page?.waitForLoadState('load', { timeout: 5000 }).catch(() => {})
+    page = await context.browser.openPage()
+    opened = (await context.browser.tabs()).filter((tab) => !before.includes(tab.id))
+  }
+  const note = opened.length
+    ? `A new tab opened (${opened.map((tab) => tab.id).join(', ')}) and is now active. Use browser_tabs to switch back.\n`
+    : ''
+  if (!page) return `${note}No tab is open any more. Open a page with browser_open.`
+  return note + (await snapshot(context, page))
 }
 // The thread's page, or a clear message when nothing is open yet.
 async function current(context: ToolContext) {
@@ -81,14 +108,25 @@ export const browserOpen = defineTool({
       .min(1)
       .max(2000)
       .describe('The page address, e.g. http://localhost:5173/login.'),
+    newTab: z
+      .boolean()
+      .optional()
+      .describe(
+        'Open it in a new tab (up to 5), keeping the current one. Otherwise it replaces it.',
+      ),
   },
   safety: 'approval',
   kind: 'browser',
-  summarize: (input) => input.url?.replace(/^https?:\/\//, ''),
+  summarize: (input) =>
+    input.url
+      ? `${input.url.replace(/^https?:\/\//, '')}${input.newTab ? ' · new tab' : ''}`
+      : undefined,
   async run(context, input) {
     const refusal = checkPageUrl(input.url)
     if (refusal) throw new ToolError(refusal)
-    const page = await context.browser.page()
+    const page = input.newTab
+      ? await guarded('Opening a tab', () => context.browser.newTab())
+      : await context.browser.page()
     await guarded('Opening the page', () => page.goto(input.url, { waitUntil: 'domcontentloaded' }))
     await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {})
     if (page.url() === 'about:blank')
@@ -122,9 +160,9 @@ export const browserClick = defineTool({
   summarize: (input, hints) => targetName(input.target, hints),
   async run(context, input) {
     const page = await current(context)
+    const before = await tabIds(context)
     await guarded('Clicking', () => element(page, input.target).click())
-    await settle(page)
-    return snapshot(context, page)
+    return after(context, before)
   },
 })
 
@@ -144,11 +182,11 @@ export const browserType = defineTool({
   summarize: (input, hints) => targetName(input.target, hints),
   async run(context, input) {
     const page = await current(context)
+    const before = await tabIds(context)
     const field = element(page, input.target)
     await guarded('Typing', () => field.fill(input.text))
     if (input.submit) await guarded('Submitting', () => field.press('Enter'))
-    await settle(page)
-    return snapshot(context, page)
+    return after(context, before)
   },
 })
 
@@ -163,9 +201,9 @@ export const browserPress = defineTool({
   summarize: (input) => input.key,
   async run(context, input) {
     const page = await current(context)
+    const before = await tabIds(context)
     await guarded('Pressing the key', () => page.keyboard.press(input.key))
-    await settle(page)
-    return snapshot(context, page)
+    return after(context, before)
   },
 })
 
@@ -373,10 +411,46 @@ export const browserTheme = defineTool({
   },
 })
 
+export const browserTabs = defineTool({
+  name: 'browser_tabs',
+  label: 'Tabs',
+  description:
+    'Manage your browser tabs: list them, switch to one (the other browser tools act on the ' +
+    'active tab), or close one. Popups the page opens (window.open, links that open a new tab) ' +
+    'become tabs automatically. Tabs share cookies, like one browser window.',
+  input: {
+    action: z.enum(['list', 'switch', 'close']),
+    tab: z.string().max(10).optional().describe('The tab id for switch or close, e.g. "t2".'),
+  },
+  safety: 'safe',
+  kind: 'browser',
+  summarize: (input) => (input.tab ? `${input.action} ${input.tab}` : input.action),
+  async run(context, input) {
+    if (input.action !== 'list') {
+      if (!input.tab) throw new ToolError(`Say which tab to ${input.action}, e.g. "t2".`)
+      if (input.action === 'switch') {
+        const page = await guarded('Switching tabs', () => context.browser.switchTab(input.tab!))
+        return snapshot(context, page)
+      }
+      await guarded('Closing the tab', () => context.browser.closeTab(input.tab!))
+    }
+    const tabs = await context.browser.tabs()
+    if (!tabs.length) return 'No tabs are open.'
+    return untrusted(
+      tabs
+        .map(
+          (tab) =>
+            `${tab.id}${tab.active ? ' (active)' : ''}: ${tab.title || '(untitled)'} — ${tab.url}`,
+        )
+        .join('\n'),
+    )
+  },
+})
+
 export const browserClose = defineTool({
   name: 'browser_close',
   label: 'Close page',
-  description: 'Close your browser page when you are done with it.',
+  description: 'Close your browser (all its tabs) when you are done with it.',
   input: {},
   safety: 'safe',
   kind: 'browser',
@@ -396,6 +470,7 @@ export const browserTools = [
   browserScreenshot,
   browserWaitFor,
   browserSetCookie,
+  browserTabs,
   browserConsole,
   browserResize,
   browserTheme,

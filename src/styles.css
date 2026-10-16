@@ -3996,3 +3996,10 @@ body.resizing {
   color: var(--faint);
   font-size: 11.5px;
 }
+.browser-chip .browser-chip-tabs {
+  flex-shrink: 0;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--accent);
+  font-size: 10.5px;
+}

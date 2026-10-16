@@ -804,6 +804,10 @@ export class AgentService {
         browser: {
           page: () => this.browsers.page(thread.id),
           openPage: () => this.browsers.openPage(thread.id),
+          newTab: () => this.browsers.newTab(thread.id),
+          tabs: () => this.browsers.tabs(thread.id),
+          switchTab: (id) => this.browsers.switchTab(thread.id, id),
+          closeTab: (id) => this.browsers.closeTab(thread.id, id),
           takeLog: () => this.browsers.takeLog(thread.id),
           close: () => this.browsers.close(thread.id),
           recordSnapshot: (snapshot) => this.browsers.recordSnapshot(thread.id, snapshot),
