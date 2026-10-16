@@ -7,8 +7,9 @@ import type { Activity, Message, Status } from './types'
 // - A finished turn folds its work into one line ("Worked for 2m · 12 steps"), leaving your
 //   message and the final answer in view.
 // Steps are only kept for the latest run, so older turns fold just their notes.
-// Images the agent showed you along the way are results, not working detail: when a turn
-// folds, they move from its notes to the final answer, so they stay in view.
+// Images and diagrams the agent showed you along the way are results, not working detail: when
+// a turn folds, they move from its notes to the final answer, above its text (they came first,
+// and answers refer to them as "above"), so they stay in view.
 
 export type WorkItem =
   | { kind: 'note'; message: Message; at: string }
@@ -24,7 +25,7 @@ export type Turn = {
   work: WorkItem[]
   // The agent's last message, once the turn has finished.
   answer?: Message
-  // Images (and other tool content) from the folded notes, shown with the answer.
+  // Images (and other tool content) from the folded notes, shown above the answer.
   blocks: Block[]
   done: boolean
   steps: number

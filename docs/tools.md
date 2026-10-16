@@ -1,22 +1,25 @@
 # Agent tools (developer guide)
 
-t3 mini can give agents its own tools. The first one, `show_image`, lets an agent show an image in the chat (a screenshot, a generated chart, a design export). The system is built so new tools (charts, tables, diagrams…) are one file each.
+t3 mini can give agents its own tools. `show_image` lets an agent show an image in the chat (a screenshot, a generated chart, a design export), and `show_diagram` lets it draw a Mermaid diagram. The system is built so new tools (charts, tables, diagrams…) are one file each.
 
 Status: proof of concept, working with **Claude** and **Codex**.
 
 ## How it fits together
 
-```text
+````text
 src/server/tools/
   types.ts       defineTool(), ToolContext, ToolError
   paths.ts       resolveAllowedFile(): the shared "inside the project or temp" check
   show-image.ts  the show_image tool
+  show-diagram.ts  the show_diagram tool
   rename-thread.ts  the rename_thread tool
   processes.ts   the process tools (start_process…)
   index.ts       the registry: every tool, plus Claude naming helpers
 src/blocks.ts    Block types: rich content tools add to replies (shared with the client)
+src/diagrams.ts  Mermaid diagram type detection (shared by show_diagram and the client)
 src/components/blocks.tsx   one renderer per block type
-```
+src/components/Diagram.tsx  the Mermaid diagram card (also used for ```mermaid code blocks)
+````
 
 1. **A tool** is a definition: `name`, `label` (work log), `description` (what the agent reads), `input` (a zod raw shape: validation and the agent-facing schema in one), `safety`, optional `summarize()` (work log summary), and `run(context, input)`.
 2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
@@ -71,7 +74,17 @@ Codex has a built-in image generator. Its results arrive as `imageGeneration` it
 - Effect: copies the file into `.data/attachments` under a generated id (so later changes to the original don't matter) and attaches `{ type: 'image', id, caption }` to the reply.
 - Typical use: "take a screenshot and show me" → the agent runs `screencapture -x /tmp/screen.png` (macOS asks once for Screen Recording permission for the app running the agent), then calls `show_image` with that path.
 
+## show_diagram
+
+- Input: `{ source, title? }`. `source` is Mermaid text (≤20,000 characters) starting with a diagram type; a ` ```mermaid ` fence around it is removed. `title` (≤120) is shown on the card; without it the card shows the type ("Sequence diagram").
+- Checked on the server: only that the first meaningful line (after front matter and `%%` comments) is a known Mermaid diagram type (`src/diagrams.ts`), so prose is refused with a readable error. Mermaid's parser needs a browser, so syntax errors show up in the card (the agent's description asks it to write valid Mermaid). Safety: `safe` (it only displays).
+- Effect: attaches `{ type: 'diagram', source, title }` to the reply. Only the source is saved; the browser draws it.
+- **Drawing** (`components/Diagram.tsx`): `mermaid` and `dompurify` load on demand (dynamic import) the first time a diagram appears. Renders are queued (Mermaid's config is global) and cached per source and theme, so remounts and theme switches back are instant. A `base` theme with the app's palette for light and dark mode; it redraws when the theme changes. Drop shadows are removed and boxes rounded in CSS (`.diagram-svg`). Wide diagrams scale down to at most 65% and then scroll inside the card.
+- **Security:** the source is untrusted. Mermaid runs with `securityLevel: 'strict'` (labels are cleaned, no scripts, `click` callbacks off), and the resulting SVG goes through DOMPurify (SVG, HTML and MathML profiles, `foreignObject` for labels, Mermaid's `<style>`; no `img`/`image`/`iframe`/forms) with a hook that drops every `href` that isn't an in-diagram `#fragment`. Nothing in a diagram can run code, load a resource, or open a link. The SVG is only inserted after that.
+- **Markdown:** ` ```mermaid ` code blocks in any reply use the same card; while one is still streaming (or isn't valid) the plain code block shows instead.
+- Card: title, **Diagram / Code** toggle, copy source, **Expand** (click the diagram too): a full-window view with zoom (25–400%) and **Download SVG**.
+
 ## Planned
 
-- **`show_chart`:** a `chart` block with `{ kind: 'line' | 'bar' | 'pie', title?, labels, series }` (data only, capped in size), rendered by a small chart library or plain SVG.
+- **`show_chart`:** for data charts beyond Mermaid's pie/xychart: a `chart` block with `{ kind: 'line' | 'bar' | 'pie', title?, labels, series }` (data only, capped in size), rendered by a small chart library or plain SVG.
 - **`show_table`**, and a **Settings → Tools** tab to turn tools on or off.

@@ -163,6 +163,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
   )
   expect(started.thread.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual([
     'show_image',
+    'show_diagram',
     'rename_thread',
     'start_process',
     'list_processes',

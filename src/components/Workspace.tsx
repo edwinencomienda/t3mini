@@ -83,6 +83,8 @@ import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
 import { SidebarResize } from './SidebarResize'
+import { CopyButton } from './CopyButton'
+import { Diagram } from './Diagram'
 import { LiveLine, StepRow, TodoCard, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
@@ -148,40 +150,6 @@ const starters = [
     text: 'Help me plan a new feature for this project. First, explore the code and ask me what I want to build.',
   },
 ]
-// A button that copies some text and shows a check for a moment (works on phones too: copyText
-// falls back to a hidden textarea where the Clipboard API isn't allowed).
-function CopyButton({
-  text,
-  label,
-  className,
-}: {
-  text: () => string
-  label: string
-  className: string
-}) {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(timer)
-  }, [copied])
-  return (
-    <button
-      type="button"
-      className={`icon-button ${className}`}
-      aria-label={copied ? 'Copied' : label}
-      title={copied ? 'Copied' : 'Copy'}
-      onClick={() =>
-        void copyText(text()).then(
-          () => setCopied(true),
-          () => {},
-        )
-      }
-    >
-      {copied ? <Check size={13} /> : <Copy size={13} />}
-    </button>
-  )
-}
 // A code block in a reply, with a button that copies its text.
 function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
   const block = useRef<HTMLPreElement>(null)
@@ -198,11 +166,35 @@ function CodeBlock({ children, ...props }: React.ComponentProps<'pre'>) {
     </div>
   )
 }
+// The text of a ```mermaid code block (react-markdown's <pre><code class="language-mermaid">).
+type HastNode = {
+  type: string
+  tagName?: string
+  value?: string
+  properties?: Record<string, unknown>
+  children?: HastNode[]
+}
+function mermaidSource(node: HastNode | undefined) {
+  const code = node?.children?.find((child) => child.tagName === 'code')
+  const classes = code?.properties?.className
+  if (!Array.isArray(classes) || !classes.includes('language-mermaid')) return undefined
+  const text = (code?.children ?? [])
+    .map((child) => child.value ?? '')
+    .join('')
+    .trim()
+  return text || undefined
+}
 // Links in agent replies open in a new tab so the conversation stays put. noopener/noreferrer
 // stops the opened page from controlling this tab or seeing its URL. react-markdown's default
 // URL filter still drops unsafe schemes such as javascript:.
 const markdownComponents: Components = {
-  pre: ({ node: _node, ...props }) => <CodeBlock {...props} />,
+  // ```mermaid blocks draw as diagrams; while one is still streaming (or isn't valid) it
+  // stays a plain code block.
+  pre: ({ node, ...props }) => {
+    const source = mermaidSource(node)
+    const code = <CodeBlock {...props} />
+    return source ? <Diagram source={source} fallback={code} /> : code
+  },
   a: ({ node: _node, href, children, ...props }) =>
     href?.startsWith('#') ? (
       <a href={href} {...props}>
@@ -229,15 +221,19 @@ const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
-  // images onto the final answer, and its folded notes show none).
+  // images and diagrams onto the final answer, and its folded notes show none).
+  // leading: tool content shown above the text: what the agent showed while working, before it
+  // wrote this answer (so "the diagrams above" reads right).
   function MessageView({
     message,
     meta = true,
     blocks = message.blocks,
+    leading,
   }: {
     message: Message
     meta?: boolean
     blocks?: Block[]
+    leading?: Block[]
   }) {
     return (
       <article className={`message ${message.role}`}>
@@ -281,6 +277,7 @@ const MessageView = memo(
           </>
         ) : (
           <>
+            {leading?.length ? <Blocks blocks={leading} /> : null}
             {message.text ? (
               <div className="markdown">
                 <MessageMarkdown text={message.text} />
@@ -321,7 +318,8 @@ const MessageView = memo(
     before.message.createdAt === after.message.createdAt &&
     (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
     (before.blocks ?? before.message.blocks)?.length ===
-      (after.blocks ?? after.message.blocks)?.length,
+      (after.blocks ?? after.message.blocks)?.length &&
+    before.leading?.length === after.leading?.length,
 )
 // "1 thread", "3 threads".
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -2206,10 +2204,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           workList(turn.work)
                         ) : null}
                         {turn.answer ? (
-                          <MessageView
-                            message={turn.answer}
-                            blocks={[...turn.blocks, ...(turn.answer.blocks ?? [])]}
-                          />
+                          <MessageView message={turn.answer} leading={turn.blocks} />
                         ) : null}
                       </div>
                     ))}

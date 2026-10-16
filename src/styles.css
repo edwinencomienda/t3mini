@@ -3159,6 +3159,10 @@ body.resizing {
 .message.assistant > .blocks:first-child {
   margin-top: 0;
 }
+/* Content shown while working sits above the final answer's text. */
+.blocks + .markdown {
+  margin-top: 0.75rem;
+}
 .block-image {
   margin: 0;
   max-width: 100%;
@@ -3181,6 +3185,212 @@ body.resizing {
   margin-top: 0.35rem;
   font-size: 12.5px;
   color: var(--muted-foreground);
+}
+
+/* Mermaid diagrams (show_diagram, ```mermaid blocks): a card with a small toolbar. */
+.diagram {
+  /* A wide diagram scrolls inside the card; the card never widens the chat. */
+  min-width: 0;
+  max-width: 100%;
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  overflow: hidden;
+}
+.blocks > .diagram {
+  margin: 0;
+}
+.diagram-bar,
+.diagram-preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.4rem 0.3rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.diagram-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.diagram-title svg {
+  flex-shrink: 0;
+}
+.diagram-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.diagram-actions .segmented {
+  margin-right: 0.25rem;
+}
+.diagram-actions .segmented-option {
+  height: 1.4rem;
+  font-size: 11.5px;
+}
+.diagram-actions .icon-button {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+.diagram-canvas {
+  padding: 1.25rem 1rem;
+  /* Full height: capping it would shrink tall diagrams to unreadable text. */
+  overflow-x: auto;
+  cursor: zoom-in;
+  outline: 0;
+}
+.diagram-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+.diagram-canvas .diagram-svg {
+  display: flex;
+  width: 100%;
+}
+/* Auto margins center the diagram, and fall back to the left edge when it's wider than the
+   card, so a scrolled diagram is never cut off. */
+.diagram-canvas .diagram-svg svg {
+  margin: 0 auto;
+}
+.diagram-svg svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+/* Flat, like the rest of the app: no drop shadows, softly rounded boxes. */
+.diagram-svg svg * {
+  filter: none !important;
+}
+.diagram-svg svg[aria-roledescription^='flowchart'] .node rect,
+.diagram-svg svg[aria-roledescription^='flowchart'] .cluster rect,
+.diagram-svg svg[aria-roledescription^='state'] .node rect,
+.diagram-svg svg[aria-roledescription='sequence'] rect.actor,
+.diagram-svg svg[aria-roledescription='sequence'] rect.note,
+.diagram-svg svg[aria-roledescription='sequence'] .labelBox {
+  rx: 7px;
+  ry: 7px;
+}
+.diagram-code {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  max-height: 34rem;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: var(--code-surface);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.diagram-code code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+.diagram-drawing {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  font-size: 12.5px;
+  color: var(--faint);
+  animation: diagram-pulse 1.4s ease-in-out infinite;
+}
+@keyframes diagram-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .diagram-drawing {
+    animation: none;
+  }
+}
+.diagram-error {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-surface);
+}
+.diagram-error svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.diagram-error pre {
+  margin: 0.3rem 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+/* Full-screen diagram: the card's look, filling the window. */
+.diagram-preview {
+  position: fixed;
+  inset: 1.5rem;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  outline: 0;
+}
+.diagram-preview-bar {
+  padding-left: 1rem;
+}
+.diagram-preview-bar .diagram-title {
+  font-size: 13px;
+  color: var(--foreground);
+}
+.diagram-zoom {
+  min-width: 3.2rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.diagram-zoom:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.diagram-preview-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2rem;
+}
+.diagram-preview-stage .diagram-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 100%;
+  min-height: 100%;
+}
+.diagram-preview-stage .diagram-svg svg {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+@media (max-width: 640px) {
+  .diagram-preview {
+    inset: 0;
+    border-radius: 0;
+  }
 }
 
 /* Image preview dialog: the image fits the screen on a dimmed backdrop. */

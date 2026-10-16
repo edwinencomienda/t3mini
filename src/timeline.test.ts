@@ -108,7 +108,10 @@ describe('buildTurns', () => {
       completedAt: at(10),
     })
     expect(turn!.answer?.id).toBe('final')
-    expect(turn!.blocks.map((block) => block.id)).toEqual(['one', 'two'])
+    expect(turn!.blocks.map((block) => (block.type === 'image' ? block.id : block.type))).toEqual([
+      'one',
+      'two',
+    ])
     // While the turn runs, images stay where they are.
     const [live] = buildTurns({
       messages: [user('q', 0), { ...reply('n1', 3), blocks: [image('one')] }],

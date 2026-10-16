@@ -1,4 +1,5 @@
 import type { Block, ImageBlock } from '../blocks'
+import { Diagram } from './Diagram'
 import { previewOnClick } from './ImagePreview'
 
 // Renders the rich content tools add to agent replies. Each block type gets one component;
@@ -37,6 +38,8 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
         switch (block.type) {
           case 'image':
             return <ImageView key={block.id} block={block} />
+          case 'diagram':
+            return <Diagram key={index} source={block.source} title={block.title} />
           default:
             // A block type this version doesn't know yet: skip it rather than break the chat.
             return <span key={index} hidden />
