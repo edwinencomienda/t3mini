@@ -36,6 +36,7 @@ import {
   Settings,
   Smartphone,
   Sparkles,
+  SquareCheck,
   ShieldAlert,
   Square,
   Sun,
@@ -77,6 +78,7 @@ import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
 import { Modal, ModalTitle } from './Modal'
+import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -1202,26 +1204,84 @@ export function Workspace({ threadId }: { threadId?: string }) {
   async function remove(target: Pick<ThreadSummary, 'id' | 'title'> | null = thread) {
     if (
       !target ||
-      !window.confirm(`Delete “${target.title}”? This removes the conversation from t3 mini.`)
+      !(await confirm({
+        title: 'Delete this thread?',
+        description: (
+          <>
+            <strong>{target.title}</strong> and its conversation will be removed from t3 mini. Files
+            in the project aren’t affected.
+          </>
+        ),
+        confirmLabel: 'Delete',
+        danger: true,
+      }))
     )
       return
     setBusy(true)
     try {
       await api(`threads/${target.id}`, 'DELETE', {})
-      drafts.current.delete(target.id)
-      markRead(target.id)
-      setToasts((current) => current.filter((item) => item.thread.id !== target.id))
-      if (target.id === activeId) {
-        void navigate({ to: '/' })
-        threadCache.current.delete(target.id)
-        setThread(null)
-        setDraft('')
-      }
+      forget(target.id)
     } catch (error) {
       setError((error as Error).message)
     } finally {
       setBusy(false)
     }
+  }
+  // Browser-side cleanup after a thread is deleted (the list itself updates live).
+  function forget(id: string) {
+    drafts.current.delete(id)
+    markRead(id)
+    setToasts((current) => current.filter((item) => item.thread.id !== id))
+    if (id === activeId) {
+      void navigate({ to: '/' })
+      threadCache.current.delete(id)
+      setThread(null)
+      setDraft('')
+    }
+  }
+  // Deletes the picked threads after one confirmation. Running threads are kept (stop them
+  // first, as with a single delete) and you're told how many.
+  async function removeMany(ids: string[]) {
+    const targets = threads.filter((item) => ids.includes(item.id))
+    const running = targets.filter((item) => isActive(item.status))
+    const deletable = targets.filter((item) => !isActive(item.status))
+    const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
+    if (!deletable.length) {
+      setError('Those threads are still running. Stop them before deleting.')
+      return
+    }
+    if (
+      !(await confirm({
+        title: `Delete ${plural(deletable.length, 'thread')}?`,
+        description: (
+          <>
+            {deletable.length === 1 ? 'Its conversation' : 'Their conversations'} will be removed
+            from t3 mini. Files in your projects aren’t affected.
+            {running.length ? (
+              <> {plural(running.length, 'thread')} still running will be kept.</>
+            ) : null}
+          </>
+        ),
+        confirmLabel: deletable.length === 1 ? 'Delete' : `Delete ${deletable.length}`,
+        danger: true,
+      }))
+    )
+      return
+    setBusy(true)
+    setError('')
+    let failed = 0
+    for (const target of deletable)
+      try {
+        await api(`threads/${target.id}`, 'DELETE', {})
+        forget(target.id)
+      } catch {
+        failed++
+      }
+    setPicked(new Set())
+    if (failed) setError(`Couldn't delete ${plural(failed, 'thread')}. Try again.`)
+    else if (running.length)
+      setError(`Kept ${plural(running.length, 'running thread')}. Stop them before deleting.`)
+    setBusy(false)
   }
   // Opens the new-thread dialog on the project you were last active in: the open thread's
   // project, else the most recently active project. With no projects yet, add one first.
@@ -1242,6 +1302,29 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
   }
   const copyPath = (path: string) => void copyText(path).catch(() => {})
+  // Styled confirmations (Base UI AlertDialog) instead of the browser's confirm().
+  const [confirmDialog, confirm] = useConfirm()
+  // Threads picked in the sidebar for a bulk action: ⌘/Ctrl-click toggles one, Shift-click picks
+  // a range, and right-click → Select starts picking (phones); while any are picked, a plain
+  // click toggles too. Esc clears.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const pickAnchor = useRef<string | null>(null)
+  function togglePick(id: string) {
+    pickAnchor.current = id
+    setPicked((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
+  useEffect(() => {
+    if (!picked.size) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) setPicked(new Set())
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [picked.size])
   // Threads whose title is being rewritten (Regenerate title), shown with a spinner.
   const [retitling, setRetitling] = useState<ReadonlySet<string>>(() => new Set())
   // A fresh AI title from the conversation; the sidebar updates through the live connection.
@@ -1331,6 +1414,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
         group.items.length ||
         `${group.path} ${projectName(group.path)}`.toLowerCase().includes(query),
     )
+  // Rows in sidebar order (open projects only), for Shift-click ranges; and the picked threads
+  // that still exist.
+  const visibleOrder = groups.flatMap((group) =>
+    !collapsed[group.path] || query ? group.items.map((item) => item.id) : [],
+  )
+  const pickedIds = threads.filter((item) => picked.has(item.id)).map((item) => item.id)
+  function pickRange(id: string) {
+    const from = visibleOrder.indexOf(pickAnchor.current ?? activeId ?? id)
+    const to = visibleOrder.indexOf(id)
+    if (from < 0 || to < 0) return togglePick(id)
+    const range = visibleOrder.slice(Math.min(from, to), Math.max(from, to) + 1)
+    setPicked((current) => new Set([...current, ...range]))
+  }
   const active = thread ? isActive(thread.status) : false
   // Live dictation shows in the empty composer's placeholder. A placeholder doesn't count toward
   // the textarea's height, so the box is sized to the words as if they were typed; past the
@@ -1459,6 +1555,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
 
   return (
     <div className="workspace">
+      {confirmDialog}
       {sidebarOpen ? (
         <button
           className="sidebar-scrim"
@@ -1633,20 +1730,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         <Link
                           to="/threads/$threadId"
                           params={{ threadId: item.id }}
-                          className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''}`}
+                          className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
+                          aria-selected={picked.size ? picked.has(item.id) : undefined}
                           onClick={(event) => {
                             if (busy) {
                               event.preventDefault()
                               return
                             }
+                            // Picking threads instead of opening one (middle-click still opens
+                            // a new tab).
                             if (
-                              !event.metaKey &&
-                              !event.ctrlKey &&
-                              !event.shiftKey &&
-                              !event.altKey &&
-                              event.button === 0
-                            )
-                              prepareSelection(item.id)
+                              event.button === 0 &&
+                              (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
+                            ) {
+                              event.preventDefault()
+                              if (event.shiftKey) pickRange(item.id)
+                              else togglePick(item.id)
+                              return
+                            }
+                            if (!event.altKey && event.button === 0) prepareSelection(item.id)
                           }}
                           onContextMenu={(event) => {
                             event.preventDefault()
@@ -1659,8 +1761,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           aria-disabled={busy}
                           aria-current={activeId === item.id ? 'page' : undefined}
                         >
-                          {/* While a new title is being written, a spinner stands in for the dot. */}
-                          {retitling.has(item.id) ? (
+                          {/* A picked thread shows a check, and while a new title is being written a
+                              spinner, in place of the status dot. */}
+                          {picked.has(item.id) ? (
+                            <span className="thread-pick" aria-hidden>
+                              <Check size={9} strokeWidth={3.5} />
+                            </span>
+                          ) : retitling.has(item.id) ? (
                             <LoaderCircle
                               size={12}
                               className="status-spinner thread-retitling"
@@ -1722,6 +1829,27 @@ export function Workspace({ threadId }: { threadId?: string }) {
             </div>
           ) : null}
         </nav>
+        {pickedIds.length ? (
+          <div className="selection-bar" role="toolbar" aria-label="Selected threads">
+            <span>{pickedIds.length} selected</span>
+            <button
+              type="button"
+              className="link-button selection-cancel"
+              onClick={() => setPicked(new Set())}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="secondary selection-delete"
+              disabled={busy}
+              onClick={() => void removeMany(pickedIds)}
+            >
+              <Trash2 size={13} />
+              Delete
+            </button>
+          </div>
+        ) : null}
         <ProviderUpdates
           enabled={Boolean(bootstrap && !bootstrap.remote)}
           onUpdated={updatedProvider}
@@ -2298,7 +2426,23 @@ export function Workspace({ threadId }: { threadId?: string }) {
       {menu
         ? (() => {
             let items: MenuItem[] = []
-            if (menu.kind === 'thread') {
+            if (menu.kind === 'thread' && picked.has(menu.id) && pickedIds.length > 1) {
+              // Right-click inside a selection acts on all of it.
+              items = [
+                {
+                  label: `Delete ${pickedIds.length} threads`,
+                  icon: <Trash2 size={14} />,
+                  danger: true,
+                  disabled: busy,
+                  onSelect: () => void removeMany(pickedIds),
+                },
+                {
+                  label: 'Clear selection',
+                  icon: <X size={14} />,
+                  onSelect: () => setPicked(new Set()),
+                },
+              ]
+            } else if (menu.kind === 'thread') {
               const target = threads.find((item) => item.id === menu.id)
               if (!target) return null
               items = [
@@ -2317,6 +2461,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   label: 'Copy project path',
                   icon: <Copy size={14} />,
                   onSelect: () => copyPath(target.cwd),
+                },
+                {
+                  label: picked.has(target.id) ? 'Unselect' : 'Select',
+                  icon: <SquareCheck size={14} />,
+                  onSelect: () => togglePick(target.id),
                 },
                 'separator',
                 {

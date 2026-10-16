@@ -334,6 +334,48 @@ kbd {
   color: var(--foreground);
   font-weight: 500;
 }
+/* Threads picked for a bulk action (⌘/Ctrl-click, Shift-click, or right-click → Select). */
+.thread-row.picked {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--foreground);
+}
+.thread-pick {
+  /* Same footprint as the status dot it replaces, so titles don't shift. */
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+}
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0.6rem 0.5rem;
+  padding: 0.45rem 0.45rem 0.45rem 0.75rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+}
+.selection-bar > span {
+  flex: 1;
+  font-weight: 500;
+}
+.selection-bar .selection-cancel {
+  color: var(--muted-foreground);
+}
+.selection-bar .selection-cancel:hover {
+  color: var(--foreground);
+}
+.selection-bar .selection-delete {
+  gap: 0.35rem;
+  color: var(--danger);
+}
 .thread-row[aria-disabled='true'] {
   cursor: progress;
 }
@@ -1514,6 +1556,51 @@ kbd {
 }
 .new-dialog .agent-settings {
   margin-left: -0.5rem;
+}
+/* Confirmations (ConfirmDialog): a small dialog with a title, a sentence, and the choices. */
+.new-dialog.confirm-dialog {
+  width: min(24rem, calc(100vw - 2rem));
+  padding: 1.1rem 1.15rem 1rem;
+}
+.confirm-title {
+  margin: 0 0 0.4rem;
+  font-size: 15px;
+  font-weight: 600;
+}
+.confirm-description {
+  margin: 0 0 1.1rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+.confirm-description strong {
+  font-weight: 500;
+  color: var(--foreground);
+  word-break: break-word;
+}
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 2rem;
+  padding: 0 0.85rem;
+  border-radius: var(--radius);
+  /* A solid red in both themes (the dark theme's --danger is lightened for text, too pale
+     under white). */
+  background: #dc2626;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.danger-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.danger-button:focus-visible,
+.confirm-dialog .secondary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 .dialog-actions {
   display: flex;
