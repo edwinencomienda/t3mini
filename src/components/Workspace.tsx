@@ -77,6 +77,7 @@ import { Blocks } from './blocks'
 import type { Block } from '../blocks'
 import { ProcessIndicator } from './Processes'
 import { BrowserChip } from './BrowserChip'
+import { BackgroundMusic } from './BackgroundMusic'
 import { ProjectAvatar, useProjectIcons } from './ProjectAvatar'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
@@ -278,6 +279,8 @@ const MessageView = memo(
               <span className="message-note">
                 Sent as a follow-up · the agent couldn’t drop the earlier attempt
               </span>
+            ) : message.answered ? (
+              <span className="message-note">Answered the question</span>
             ) : null}
           </>
         ) : (
@@ -568,6 +571,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // Working background music is playing in this tab (shows the radio character).
+  const [musicPlaying, setMusicPlaying] = useState(false)
   const projectIcons = useProjectIcons()
   // How the sidebar lists threads: under their projects, or one list (remembered per browser).
   const [groupBy, setGroupBy] = useState<'project' | 'none'>('project')
@@ -1687,6 +1692,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
   toggleChangesRef.current = () => {
     if (thread && git?.branch) toggleDiff(!diffOpen)
   }
+  const musicAgent: Provider =
+    thread?.provider ??
+    threads.find((item) => item.status === 'starting' || item.status === 'working')?.provider ??
+    'claude'
   // The conversation one turn at a time (see timeline.ts). While the agent works, the step
   // it's on shows in the live line at the bottom instead of in the list.
   const turns = thread ? buildTurns(thread) : []
@@ -1866,6 +1875,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
   return (
     <div className="workspace">
       {confirmDialog}
+      {/* Working background music (off unless turned on in Settings). */}
+      <BackgroundMusic
+        working={threads.some((item) => item.status === 'starting' || item.status === 'working')}
+        onPlayingChange={setMusicPlaying}
+      />
       {sidebarOpen ? (
         <button
           className="sidebar-scrim"
@@ -2191,6 +2205,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
               </button>
             ) : null}
             <div className="topbar-title">
+              {musicPlaying ? (
+                // The open thread's agent (or a working one's) with its radio.
+                <img
+                  className={`music-mascot ${musicAgent}`}
+                  src={`/mascots/${musicAgent}-radio.gif`}
+                  alt=""
+                  width={32}
+                  height={32}
+                  title="Working background music is playing"
+                />
+              ) : null}
               {thread && retitling.has(thread.id) ? (
                 <LoaderCircle
                   size={13}

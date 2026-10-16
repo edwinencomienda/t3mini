@@ -583,6 +583,23 @@ export class AgentService {
       ...(attachments.length ? { attachments } : {}),
     }
     const running = this.runs.get(id)
+    // The agent is waiting on its question: a message you send instead of picking an option is
+    // your answer ("Something else"), for each question in it.
+    const question = running && thread.approvals.find((item) => item.questions?.length)
+    if (running && question && text.trim() && running.approvals.has(question.id)) {
+      thread.messages.push({ ...message, answered: true })
+      thread.updatedAt = message.createdAt
+      this.approve(
+        id,
+        question.id,
+        true,
+        Object.fromEntries(question.questions!.map((item) => [item.question, text.trim()])),
+      )
+      // Images can't go into an answer; they follow as a message the agent sees next.
+      if (images.length)
+        void running.steer?.({ prompt: 'Images for my answer above.', images }).catch(() => false)
+      return { accepted: true, answered: true }
+    }
     if (running) return this.steer(thread, running, message, images)
     const previous = structuredClone(thread)
     thread.messages.push(message)

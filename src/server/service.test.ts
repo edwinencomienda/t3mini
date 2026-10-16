@@ -314,6 +314,33 @@ it('keeps a project’s place in the sidebar after its threads are deleted', asy
   await store.load()
   expect(store.projects.get(older)?.lastActiveAt).toBeTruthy()
 })
+it('answers a waiting question with the message you send instead of picking', async () => {
+  const created = await thread()
+  await service.send(created.id, { text: 'Build it' })
+  await started
+  const asked = context.ask!({
+    id: 'question-1',
+    title: 'Claude has a question',
+    questions: [
+      { question: 'Which footer?', options: [{ label: 'One row' }, { label: 'Two columns' }] },
+    ],
+  })
+  expect(service.get(created.id).status).toBe('waiting')
+  // Sending a message answers it, as "Something else".
+  expect(await service.send(created.id, { text: '  Neither, keep the old one  ' })).toMatchObject({
+    answered: true,
+  })
+  expect(await asked).toEqual({ 'Which footer?': 'Neither, keep the old one' })
+  const current = service.get(created.id)
+  expect(current.status).toBe('working')
+  expect(current.approvals).toEqual([])
+  expect(current.messages.at(-1)).toMatchObject({
+    role: 'user',
+    text: 'Neither, keep the old one',
+    answered: true,
+  })
+  await settle(created.id, finish)
+})
 it('renames a project label without touching its folder, and resets it with an empty name', async () => {
   const created = await thread()
   const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })

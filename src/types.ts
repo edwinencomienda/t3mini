@@ -23,6 +23,8 @@ export type Message = {
   turn?: TurnCheckpoint
   // An edit that couldn't rewind the agent, so it went out as a follow-up instead.
   rewindFailed?: boolean
+  // Sent while the agent was waiting on its question, so it answered that question.
+  answered?: boolean
 }
 export type TurnCheckpoint = {
   // Claude: the turn was the session's first (an edit starts a new session), or the last

@@ -20,6 +20,9 @@ import {
 import { themeLabels, themes, type Theme } from '../theme'
 import { saveMascots, useMascotSetting } from '../mascots'
 import { saveProjectIcons, useProjectIcons } from './ProjectAvatar'
+import { Input } from '@base-ui/react/input'
+import { Slider } from '@base-ui/react/slider'
+import { parseYouTube, saveMusic, useMusicSettings } from '../background-music'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
@@ -204,6 +207,11 @@ export function SettingsDialog({
   const [permission, setPermission] = useState<DesktopPermission>(desktopPermission)
   const mascotsOn = useMascotSetting()
   const projectIconsOn = useProjectIcons()
+  const music = useMusicSettings()
+  // The link as typed, saved once it's a YouTube link (or cleared).
+  const [musicUrl, setMusicUrl] = useState('')
+  useEffect(() => setMusicUrl(music.url), [music.url])
+  const musicValid = !musicUrl.trim() || Boolean(parseYouTube(musicUrl))
   // Account emails are hidden until you choose to show them (not remembered).
   const [showEmails, setShowEmails] = useState(false)
   // Who each agent is signed in as; loaded when the Agents tab opens.
@@ -312,6 +320,63 @@ export function SettingsDialog({
                     onChange={(enabled) => saveProjectIcons(enabled)}
                   />
                 </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>Working background music</strong>
+                    <small>
+                      Plays a YouTube video or playlist (lofi, anyone?) while any agent is working,
+                      and fades out when they’re done. One song at a time, in the tab you used last.
+                    </small>
+                  </div>
+                  <Toggle
+                    label="Working background music"
+                    checked={music.enabled}
+                    onChange={(enabled) => saveMusic({ enabled })}
+                  />
+                </div>
+                {music.enabled ? (
+                  <div className="setting-row music-settings">
+                    <label className="music-field">
+                      <span>YouTube link</span>
+                      <Input
+                        className="music-url"
+                        placeholder="https://www.youtube.com/watch?v=…"
+                        value={musicUrl}
+                        maxLength={500}
+                        spellCheck={false}
+                        onValueChange={(value: string) => {
+                          setMusicUrl(value)
+                          if (!value.trim() || parseYouTube(value)) saveMusic({ url: value.trim() })
+                        }}
+                      />
+                      {!musicValid ? (
+                        <small className="music-invalid">
+                          That isn’t a YouTube video or playlist link.
+                        </small>
+                      ) : null}
+                    </label>
+                    <div className="music-field">
+                      <span>Volume · {music.volume}%</span>
+                      <Slider.Root
+                        className="music-volume"
+                        value={music.volume}
+                        min={0}
+                        max={100}
+                        step={5}
+                        onValueChange={(value) =>
+                          saveMusic({ volume: Array.isArray(value) ? value[0]! : value })
+                        }
+                      >
+                        <Slider.Control className="music-volume-control">
+                          <Slider.Track className="music-volume-track">
+                            <Slider.Indicator className="music-volume-indicator" />
+                            <Slider.Thumb className="music-volume-thumb" aria-label="Volume" />
+                          </Slider.Track>
+                        </Slider.Control>
+                      </Slider.Root>
+                    </div>
+                  </div>
+                ) : null}
               </section>
             ) : null}
             {tab === 'notifications' ? (
