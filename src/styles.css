@@ -2626,15 +2626,53 @@ body.resizing {
     opacity: 1;
   }
 }
-/* Not grouped: each thread names its project. */
+/* Not grouped: each thread shows its title, and its project on a second line. */
+.thread-lines {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.thread-lines .thread-title {
+  flex: none;
+}
 .thread-project {
-  flex-shrink: 0;
-  max-width: 40%;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  margin-top: 0.3rem;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.thread-project > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
-  color: var(--faint);
+}
+.thread-project svg {
+  flex-shrink: 0;
+}
+/* Two-line rows grow to fit, and keep the status dot and the time on the first line. */
+.thread-row:has(.thread-lines) {
+  align-items: flex-start;
+  height: auto;
+  padding-top: 0.35rem;
+  padding-bottom: 0.4rem;
+}
+.thread-row:has(.thread-lines) .thread-title {
+  line-height: 1.35;
+}
+.thread-row:has(.thread-lines) > .status-dot,
+.thread-row:has(.thread-lines) > .thread-pick {
+  margin-top: 0.3rem;
+}
+.thread-row:has(.thread-lines) > .live-dots,
+.thread-row:has(.thread-lines) > .status-spinner {
+  margin-top: 0.2rem;
+}
+.thread-row:has(.thread-lines) > .thread-time {
+  margin-top: 0.1rem;
 }
 
 /* Picker option badges (e.g. Codex service tier) */

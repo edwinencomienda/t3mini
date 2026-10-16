@@ -1731,7 +1731,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   )
 
   // One thread in the sidebar (with its project's name when the list isn't grouped).
-  const threadRow = (item: ThreadSummary, project?: string) =>
+  const threadRow = (item: ThreadSummary, showProject = false) =>
     renaming?.id === item.id ? (
       <div className="thread-row selected renaming" key={item.id}>
         <StatusDot status={item.status} unread={unread.has(item.id)} />
@@ -1821,8 +1821,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ) : (
             <StatusDot status={item.status} unread={unread.has(item.id)} />
           )}
-          <span className="thread-title">{item.title}</span>
-          {project ? <span className="thread-project">{project}</span> : null}
+          {showProject ? (
+            // Not grouped: the title, and its project under it.
+            <span className="thread-lines">
+              <span className="thread-title">{item.title}</span>
+              <span className="thread-project">
+                {projectIcons ? (
+                  <ProjectAvatar
+                    path={item.cwd}
+                    name={projectName(item.cwd)}
+                    icon={projects.find((project) => project.path === item.cwd)?.icon}
+                  />
+                ) : (
+                  <Folder size={14} />
+                )}
+                <span>{projectName(item.cwd)}</span>
+              </span>
+            </span>
+          ) : (
+            <span className="thread-title">{item.title}</span>
+          )}
           <span className="thread-time">{threadTime(item, now)}</span>
         </ThreadPreviewTrigger>
         <button
@@ -1961,7 +1979,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           {groupBy === 'none' && groups.length ? (
             // One list, newest message first, each thread with its project's name.
             <section className="project recents">
-              {visibleThreads.map((item) => threadRow(item, projectName(item.cwd)))}
+              {visibleThreads.map((item) => threadRow(item, true))}
             </section>
           ) : null}
           {(groupBy === 'none' ? [] : groups).map(({ path: cwd, items }) => (
