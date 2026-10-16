@@ -19,16 +19,18 @@ src/server/tools/types.ts    ToolContext.browser (the thread's session) and Tool
 
 ## Tools
 
-| Tool                                             | Does                                                                                                                | Safety   |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | -------- |
-| `browser_open`                                   | Open a local URL; returns an accessibility snapshot                                                                 | approval |
-| `browser_snapshot`                               | Read the page (`page.ariaSnapshot({ mode: 'ai' })`, refs like `e12`)                                                | safe     |
-| `browser_click`, `browser_type`, `browser_press` | Use the page, by ref (`e12`) or Playwright selector                                                                 | approval |
-| `browser_scroll`                                 | Scroll, or bring an element into view                                                                               | safe     |
-| `browser_screenshot`                             | PNG for the agent; `show: true` also puts it in the chat                                                            | safe     |
-| `browser_console`                                | Console errors/warnings, page errors, failed and 4xx/5xx requests, dialogs, blocked addresses (since the last look) | safe     |
-| `browser_resize`, `browser_theme`                | Phone/tablet/desktop size; light/dark                                                                               | safe     |
-| `browser_close`                                  | Close the session                                                                                                   | safe     |
+| Tool                                             | Does                                                                                                                                                          | Safety   |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `browser_open`                                   | Open a local URL; returns an accessibility snapshot                                                                                                           | approval |
+| `browser_snapshot`                               | Read the page (`page.ariaSnapshot({ mode: 'ai' })`, refs like `e12`)                                                                                          | safe     |
+| `browser_click`, `browser_type`, `browser_press` | Use the page, by ref (`e12`) or Playwright selector                                                                                                           | approval |
+| `browser_scroll`                                 | Scroll, or bring an element into view                                                                                                                         | safe     |
+| `browser_screenshot`                             | PNG for the agent, of the page or one element (`target`); `show: true` also puts it in the chat                                                               | safe     |
+| `browser_wait_for`                               | Wait for text or an element to appear (or `gone`), or the address to contain something; up to 30 s                                                            | safe     |
+| `browser_set_cookie`                             | Set a cookie on a local site (e.g. a test user's session to test signed in); the value is a `secretInputs` field, hidden in the work log and approval prompts | approval |
+| `browser_console`                                | Console errors/warnings, page errors, failed and 4xx/5xx requests, dialogs, blocked addresses (since the last look)                                           | safe     |
+| `browser_resize`, `browser_theme`                | Phone/tablet/desktop size; light/dark                                                                                                                         | safe     |
+| `browser_close`                                  | Close the session                                                                                                                                             | safe     |
 
 `approval` tools go through Allow once / Decline unless the thread runs with full access, like the process tools.
 

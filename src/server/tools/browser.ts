@@ -195,28 +195,132 @@ export const browserScreenshot = defineTool({
   label: 'Screenshot',
   description:
     'Take a screenshot of the open page so you can see it (layout, styling, what a change looks ' +
-    'like). Set show to also put it in the chat for the user, e.g. to share a result.',
+    'like), or of one element with target (e.g. a switch, a card, a dialog). Set show to also ' +
+    'put it in the chat for the user, e.g. to share a result.',
   input: {
+    target: describeTarget
+      .optional()
+      .describe('Only this element (a ref like "e12" or a selector), instead of the page.'),
     fullPage: z.boolean().optional().describe('Capture the whole page, not just the visible part.'),
     show: z.boolean().optional().describe('Also show the screenshot to the user in the chat.'),
     caption: z.string().max(300).optional().describe('Caption when shown in the chat.'),
   },
   safety: 'safe',
   kind: 'browser',
-  summarize: (input) => (input.show ? 'shown in chat' : undefined),
+  summarize: (input, hints) =>
+    [input.target ? targetName(input.target, hints) : '', input.show ? 'shown in chat' : '']
+      .filter(Boolean)
+      .join(' · ') || undefined,
   async run(context, input) {
     const page = await current(context)
     const data = await guarded('Taking the screenshot', () =>
-      page.screenshot({ fullPage: Boolean(input.fullPage), type: 'png', animations: 'disabled' }),
+      input.target
+        ? element(page, input.target).screenshot({ type: 'png', animations: 'disabled' })
+        : page.screenshot({
+            fullPage: Boolean(input.fullPage),
+            type: 'png',
+            animations: 'disabled',
+          }),
     )
     if (input.show) {
       const { id } = await context.saveImage(data)
       context.attach({ type: 'image', id, ...(input.caption ? { caption: input.caption } : {}) })
     }
     return {
-      text: `Screenshot of ${page.url()}${input.show ? ', also shown to the user' : ''}.`,
+      text: `Screenshot of ${input.target ? `${input.target} on ` : ''}${page.url()}${input.show ? ', also shown to the user' : ''}.`,
       image: { data, mimeType: 'image/png' },
     }
+  },
+})
+
+export const browserWaitFor = defineTool({
+  name: 'browser_wait_for',
+  label: 'Wait for',
+  description:
+    'Wait until something happens on the open page before going on: some text or an element ' +
+    'appears (or, with gone, disappears), or the address changes to contain a given piece ' +
+    '(e.g. "/dashboard" after signing in). Use it after actions that load or redirect, instead ' +
+    'of guessing. Returns the page afterwards. Waits up to 15 seconds by default.',
+  input: {
+    text: z.string().min(1).max(500).optional().describe('Text to wait for on the page.'),
+    target: describeTarget.optional().describe('An element to wait for (ref or selector).'),
+    url: z
+      .string()
+      .min(1)
+      .max(2000)
+      .optional()
+      .describe('Wait until the page address contains this, e.g. "/dashboard".'),
+    gone: z.boolean().optional().describe('Wait for the text or element to disappear instead.'),
+    seconds: z.number().min(1).max(30).optional().describe('How long to wait at most (1–30).'),
+  },
+  safety: 'safe',
+  kind: 'browser',
+  summarize: (input, hints) =>
+    input.url ??
+    (input.text ? `"${input.text}"` : input.target ? targetName(input.target, hints) : undefined),
+  async run(context, input) {
+    if (!input.text && !input.target && !input.url)
+      throw new ToolError('Say what to wait for: text, target, or url.')
+    const page = await current(context)
+    const timeout = (input.seconds ?? 15) * 1000
+    const state = input.gone ? 'hidden' : 'visible'
+    await guarded('Waiting', async () => {
+      if (input.url) await page.waitForURL((url) => url.href.includes(input.url!), { timeout })
+      if (input.text) await page.getByText(input.text).first().waitFor({ state, timeout })
+      if (input.target) await element(page, input.target).waitFor({ state, timeout })
+    })
+    await settle(page)
+    return snapshot(context, page)
+  },
+})
+
+export const browserSetCookie = defineTool({
+  name: 'browser_set_cookie',
+  label: 'Set cookie',
+  description:
+    'Set a cookie in your browser for a local site, e.g. to sign in as a test user you created ' +
+    '(put their session cookie here, then open the page). Local sites only; the value is never ' +
+    'shown in the chat. Cookies stay in this thread’s private browser until it closes.',
+  input: {
+    url: z
+      .string()
+      .min(1)
+      .max(2000)
+      .describe('The site it belongs to, e.g. http://localhost:3000.'),
+    name: z.string().min(1).max(200).describe('The cookie name, e.g. "better-auth.session_token".'),
+    value: z.string().max(4096).describe('The cookie value.'),
+    httpOnly: z.boolean().optional(),
+    secure: z.boolean().optional(),
+    sameSite: z.enum(['Strict', 'Lax', 'None']).optional(),
+  },
+  safety: 'approval',
+  kind: 'browser',
+  secretInputs: ['value'],
+  summarize: (input) =>
+    input.name
+      ? `${input.name}${input.url ? ` · ${input.url.replace(/^https?:\/\//, '')}` : ''}`
+      : undefined,
+  async run(context, input) {
+    const refusal = checkPageUrl(input.url)
+    if (refusal) throw new ToolError(refusal)
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(input.name))
+      throw new ToolError('That isn’t a valid cookie name.')
+    if (/[;\r\n]/.test(input.value))
+      throw new ToolError('Cookie values can’t contain ; or line breaks.')
+    const page = await context.browser.page()
+    await guarded('Setting the cookie', () =>
+      page.context().addCookies([
+        {
+          name: input.name,
+          value: input.value,
+          url: new URL(input.url).origin,
+          ...(input.httpOnly !== undefined ? { httpOnly: input.httpOnly } : {}),
+          ...(input.secure !== undefined ? { secure: input.secure } : {}),
+          ...(input.sameSite ? { sameSite: input.sameSite } : {}),
+        },
+      ]),
+    )
+    return `Cookie "${input.name}" set for ${new URL(input.url).origin}. Open or reload the page to use it.`
   },
 })
 
@@ -290,6 +394,8 @@ export const browserTools = [
   browserPress,
   browserScroll,
   browserScreenshot,
+  browserWaitFor,
+  browserSetCookie,
   browserConsole,
   browserResize,
   browserTheme,

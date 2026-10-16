@@ -1,6 +1,6 @@
 // Turns provider tool calls into readable work-log steps: a short label ("Run", "Read"), a
 // one-line summary (the command or path), the full input for the expanded view, and output.
-import { findClaudeTool, findTool } from '../tools'
+import { findClaudeTool, findTool, maskInput } from '../tools'
 import type { StepHints } from '../tools/types'
 
 export type ToolStep = {
@@ -146,7 +146,7 @@ export function describeClaudeTool(
     return {
       label: own.label,
       summary,
-      detail: json(rawInput),
+      detail: json(maskInput(own, rawInput)),
       ...(own.kind === 'browser' ? { browser: true } : {}),
     }
   }
@@ -259,7 +259,7 @@ export function describeCodexItem(
       return {
         label: own?.label ?? (string(item.tool) || 'Use tool'),
         summary,
-        detail: json(item.arguments),
+        detail: json(maskInput(own, item.arguments)),
         ...(own?.kind === 'browser' ? { browser: true } : {}),
       }
     }

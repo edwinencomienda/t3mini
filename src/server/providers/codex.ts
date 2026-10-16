@@ -7,7 +7,7 @@ import { codexPolicy, threadSettings } from '../provider-settings'
 import { readCodexModels } from '../models'
 import { describeCodexItem } from './activity'
 import { codexPlan } from './todos'
-import { findTool, runTool, toolJsonSchema, tools } from '../tools'
+import { findTool, maskInput, runTool, toolJsonSchema, tools } from '../tools'
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -148,7 +148,7 @@ export const runCodex: Runner = async (ctx) => {
         .approve({
           id: String(id),
           title: `Allow ${definition.label}?`,
-          detail: JSON.stringify(params.arguments ?? {}, null, 2),
+          detail: JSON.stringify(maskInput(definition, params.arguments ?? {}), null, 2),
         })
         .catch(() => false)
       if (!allowed) return reply(false, 'The user declined this tool request.')

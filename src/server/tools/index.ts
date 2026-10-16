@@ -20,6 +20,13 @@ export const tools: ToolDefinition<any>[] = [
 export const mcpServerName = 't3mini'
 export const claudeToolName = (name: string) => `mcp__${mcpServerName}__${name}`
 export const findTool = (name: string) => tools.find((tool) => tool.name === name)
+// A tool's input as shown to people (work log, approval prompts): secret inputs hidden.
+export function maskInput(definition: ToolDefinition<any> | undefined, input: unknown) {
+  if (!definition?.secretInputs?.length || !input || typeof input !== 'object') return input
+  const shown: Record<string, unknown> = { ...(input as Record<string, unknown>) }
+  for (const key of definition.secretInputs) if (key in shown) shown[key] = '••••••'
+  return shown
+}
 // Runs a tool for any agent: validates the input against the tool's schema, runs it, and turns
 // failures into a message the agent can read. Never throws.
 export async function runTool(

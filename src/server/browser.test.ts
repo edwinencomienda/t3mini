@@ -7,10 +7,13 @@ import {
   browserConsole,
   browserOpen,
   browserScreenshot,
+  browserSetCookie,
   browserSnapshot,
   browserType,
+  browserWaitFor,
 } from './tools/browser'
-import { runTool } from './tools'
+import { maskInput, runTool } from './tools'
+import { describeClaudeTool } from './providers/activity'
 import type { ToolContext } from './tools/types'
 
 const t3 = new Set([4310, 4311])
@@ -91,6 +94,19 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       if (request.url === '/away') {
         response.writeHead(302, { location: 'http://example.com/' })
         return response.end()
+      }
+      if (request.url === '/account') {
+        // Signed in when the test session cookie is there.
+        const signedIn = /(?:^|; )session=test-token(?:;|$)/.test(request.headers.cookie ?? '')
+        response.setHeader('content-type', 'text/html')
+        return response.end(
+          `<!doctype html><title>Account</title><h1>${signedIn ? 'Welcome back, Ada' : 'Please sign in'}</h1>`,
+        )
+      }
+      if (request.url === '/slow') {
+        response.setHeader('content-type', 'text/html')
+        return response.end(`<!doctype html><title>Slow</title><p id="status">Loading…</p>
+          <script>setTimeout(() => { document.querySelector('#status').textContent = 'Ready!'; history.pushState({}, '', '/slow/done') }, 1200)</script>`)
       }
       if (request.url === '/missing') {
         response.writeHead(404)
@@ -193,6 +209,67 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     await runTool(browserClick, tools, { target: 'text=Leave' })
     const page = await browsers.openPage('thread-3')
     expect(page?.url()).not.toContain('example.com')
+  }, 30_000)
+
+  it('waits for text, an element, or an address instead of guessing', async () => {
+    const tools = context('thread-4')
+    await runTool(browserOpen, tools, { url: `${base}/slow` })
+    const ready = await runTool(browserWaitFor, tools, { text: 'Ready!', url: '/slow/done' })
+    expect(ready.ok).toBe(true)
+    expect(ready.text).toContain('Ready!')
+    const timedOut = await runTool(browserWaitFor, tools, { text: 'Never shown', seconds: 1 })
+    expect(timedOut).toMatchObject({ ok: false })
+    expect(timedOut.text).toMatch(/Waiting failed/)
+    expect((await runTool(browserWaitFor, tools, {})).text).toMatch(/Say what to wait for/)
+  }, 30_000)
+
+  it('signs in with a cookie on local sites only, and never shows its value', async () => {
+    const tools = context('thread-5')
+    expect((await runTool(browserOpen, tools, { url: `${base}/account` })).text).toContain(
+      'Please sign in',
+    )
+    const set = await runTool(browserSetCookie, tools, {
+      url: base,
+      name: 'session',
+      value: 'test-token',
+      httpOnly: true,
+    })
+    expect(set.ok).toBe(true)
+    expect(set.text).not.toContain('test-token')
+    expect((await runTool(browserOpen, tools, { url: `${base}/account` })).text).toContain(
+      'Welcome back, Ada',
+    )
+    const outside = await runTool(browserSetCookie, tools, {
+      url: 'https://example.com',
+      name: 'session',
+      value: 'x',
+    })
+    expect(outside.text).toMatch(/Only local sites/)
+    expect(
+      (await runTool(browserSetCookie, tools, { url: base, name: 'a b', value: 'x' })).text,
+    ).toMatch(/valid cookie name/)
+    // The work log and approval prompts hide the value.
+    const step = describeClaudeTool(
+      'mcp__t3mini__browser_set_cookie',
+      { url: base, name: 'session', value: 'test-token' },
+      '/tmp',
+    )
+    expect(step.detail).not.toContain('test-token')
+    expect(step.summary).toContain('session')
+    expect(maskInput(browserSetCookie, { name: 'session', value: 'test-token' })).toEqual({
+      name: 'session',
+      value: '••••••',
+    })
+  }, 30_000)
+
+  it('screenshots a single element', async () => {
+    const tools = context('thread-6')
+    await runTool(browserOpen, tools, { url: `${base}/` })
+    const whole = await runTool(browserScreenshot, tools, {})
+    const button = await runTool(browserScreenshot, tools, { target: 'role=button[name="Greet"]' })
+    expect(button.ok).toBe(true)
+    const width = (png: string) => Buffer.from(png, 'base64').readUInt32BE(16)
+    expect(width(button.image!.data)).toBeLessThan(width(whole.image!.data) / 4)
   }, 30_000)
 
   it('keeps each thread’s session private and closes it', async () => {

@@ -65,6 +65,8 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   summarize?: (input: z.infer<z.ZodObject<Shape>>, hints?: StepHints) => string | undefined
   // Browser tools are marked in the work log (a globe) and the live line.
   kind?: 'browser'
+  // Inputs never shown in the work log or approval prompts (e.g. a login cookie's value).
+  secretInputs?: string[]
   // Returns a short message for the agent. Throw ToolError for a clear refusal.
   run: (context: ToolContext, input: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>
 }

@@ -5,7 +5,7 @@ import {
   tool,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { claudeToolName, mcpServerName, runTool, tools } from '../tools'
+import { claudeToolName, findClaudeTool, maskInput, mcpServerName, runTool, tools } from '../tools'
 import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { applyClaudeTodo, taskCreated, todoTools } from './todos'
@@ -229,7 +229,7 @@ export const runClaude: Runner = async (ctx) => {
         const allow = await ctx.approve({
           id: options.toolUseID,
           title: `Allow ${toolName}?`,
-          detail: JSON.stringify(input, null, 2),
+          detail: JSON.stringify(maskInput(findClaudeTool(toolName), input), null, 2),
         })
         return allow
           ? { behavior: 'allow', updatedInput: input }
