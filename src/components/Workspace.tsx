@@ -273,6 +273,8 @@ const MessageView = memo(
     (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
     (before.message.blocks?.length ?? 0) === (after.message.blocks?.length ?? 0),
 )
+// "1 thread", "3 threads".
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 // The composer grows with its text (or a live dictation preview) up to this height, then scrolls.
 const composerMaxHeight = 240
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
@@ -1245,7 +1247,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const targets = threads.filter((item) => ids.includes(item.id))
     const running = targets.filter((item) => isActive(item.status))
     const deletable = targets.filter((item) => !isActive(item.status))
-    const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
     if (!deletable.length) {
       setError('Those threads are still running. Stop them before deleting.')
       return
@@ -1293,12 +1294,41 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   const openNewThreadRef = useRef(openNewThread)
   openNewThreadRef.current = openNewThread
+  // Removes a project from the sidebar after confirming, deleting its threads with it (the folder
+  // and its files are never touched).
   async function removeProject(path: string) {
+    const owned = threads.filter((item) => item.cwd === path)
+    const name = projectName(path)
+    const confirmed = await confirm({
+      title: owned.length
+        ? `Remove ${name} and its ${plural(owned.length, 'thread')}?`
+        : `Remove ${name}?`,
+      description: owned.length ? (
+        <>
+          {owned.length === 1 ? 'Its thread' : `All ${owned.length} of its threads`} and{' '}
+          {owned.length === 1 ? 'its conversation' : 'their conversations'} will be deleted from t3
+          mini. The project folder and its files aren’t touched.
+        </>
+      ) : (
+        <>It’s only removed from the sidebar. The project folder and its files aren’t touched.</>
+      ),
+      confirmLabel: owned.length ? `Remove and delete ${plural(owned.length, 'thread')}` : 'Remove',
+      danger: true,
+    })
+    if (!confirmed) return
+    setBusy(true)
+    setError('')
     try {
-      await api('projects', 'DELETE', { path })
+      await api('projects', 'DELETE', { path, threads: owned.length > 0 })
+      for (const item of owned) forget(item.id)
+      setPicked(
+        (current) => new Set([...current].filter((id) => !owned.some((item) => item.id === id))),
+      )
       setProjects((current) => current.filter((project) => project.path !== path))
     } catch (error) {
       setError((error as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
   const copyPath = (path: string) => void copyText(path).catch(() => {})
@@ -2481,7 +2511,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               ]
             } else {
               const path = menu.path
-              const hasThreads = threads.some((item) => item.cwd === path)
+              const runningHere = threads.some((item) => item.cwd === path && isActive(item.status))
               items = [
                 {
                   label: 'New thread here',
@@ -2499,8 +2529,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   label: 'Remove project',
                   icon: <Trash2 size={14} />,
                   danger: true,
-                  disabled: hasThreads,
-                  title: hasThreads ? 'Delete this project’s threads first.' : undefined,
+                  disabled: runningHere || busy,
+                  title: runningHere
+                    ? 'Stop the running threads in this project first.'
+                    : undefined,
                   onSelect: () => void removeProject(path),
                 },
               ]

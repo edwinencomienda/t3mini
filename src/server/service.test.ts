@@ -276,6 +276,38 @@ it('renames a project label without touching its folder, and resets it with an e
   ).rejects.toThrow('Project not found')
   await expect(service.renameProject({ path: created.cwd, name: 'x'.repeat(81) })).rejects.toThrow()
 })
+it('removes a project together with its threads, unless one is running', async () => {
+  const { mkdir, realpath } = await import('node:fs/promises')
+  await mkdir(join(directory, 'busy-project'))
+  const busy = await realpath(join(directory, 'busy-project'))
+  const first = await service.create({ provider: 'codex', cwd: busy })
+  const second = await service.create({ provider: 'codex', cwd: busy })
+  const elsewhere = await thread()
+  await service.addProject({ path: busy })
+  // Without asking for its threads to go too, it's refused as before.
+  await expect(service.removeProject({ path: busy })).rejects.toThrow(
+    'Delete this project’s threads',
+  )
+  // A running thread blocks it, and nothing is deleted.
+  await service.send(first.id, { text: 'Work' })
+  await started
+  await expect(service.removeProject({ path: busy, threads: true })).rejects.toThrow(
+    'Stop the running threads',
+  )
+  expect(service.get(second.id)).toBeTruthy()
+  await settle(first.id, finish)
+  expect(await service.removeProject({ path: busy, threads: true })).toEqual({
+    ok: true,
+    deletedThreads: 2,
+  })
+  expect(() => service.get(first.id)).toThrow('Thread not found')
+  expect(() => service.get(second.id)).toThrow('Thread not found')
+  expect(service.projects().map((project) => project.path)).not.toContain(busy)
+  // Other projects' threads stay, and the deletion is saved.
+  expect(service.get(elsewhere.id)).toBeTruthy()
+  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
+  expect(saved.map((item: { id: string }) => item.id)).toEqual([elsewhere.id])
+})
 it('switches agents only before the first message', async () => {
   const created = await thread()
   const switched = await service.updateSettings(created.id, {

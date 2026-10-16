@@ -248,21 +248,47 @@ export class AgentService {
     this.notify()
     return this.projects().find((item) => item.path === path)!
   }
+  // Removes a project from the sidebar. With `threads: true` its threads are deleted too (none
+  // may be running); otherwise it must have none. The folder on disk is never touched.
   async removeProject(input: unknown) {
-    const { path } = projectSchema.parse(input)
-    if ([...this.store.threads.values()].some((thread) => thread.cwd === path))
+    const { path, threads: withThreads } = projectSchema
+      .extend({ threads: z.boolean().default(false) })
+      .parse(input)
+    const owned = [...this.store.threads.values()].filter((thread) => thread.cwd === path)
+    if (owned.length && !withThreads)
       throw new HttpError(409, 'Delete this project’s threads before removing it.')
+    if (
+      owned.some(
+        (thread) =>
+          isActive(thread.status) ||
+          this.runs.has(thread.id) ||
+          this.settingsUpdates.has(thread.id),
+      )
+    )
+      throw new HttpError(409, 'Stop the running threads in this project first.')
     const project = this.projectStore.projects.get(path)
-    if (!project) throw new HttpError(404, 'Project not found.')
-    this.projectStore.projects.delete(path)
-    try {
-      await this.projectStore.save()
-    } catch {
-      this.projectStore.projects.set(path, project)
-      throw new HttpError(500, 'Could not remove the project.')
+    if (!project && !owned.length) throw new HttpError(404, 'Project not found.')
+    if (owned.length) {
+      for (const thread of owned) this.store.threads.delete(thread.id)
+      try {
+        await this.store.save()
+      } catch {
+        for (const thread of owned) this.store.threads.set(thread.id, thread)
+        throw new HttpError(500, 'Could not delete the project’s threads.')
+      }
+    }
+    if (project) {
+      this.projectStore.projects.delete(path)
+      try {
+        await this.projectStore.save()
+      } catch {
+        this.projectStore.projects.set(path, project)
+        this.notify()
+        throw new HttpError(500, 'Could not remove the project.')
+      }
     }
     this.notify()
-    return { ok: true }
+    return { ok: true, deletedThreads: owned.length }
   }
   get(id: string) {
     const thread = this.store.threads.get(id)
