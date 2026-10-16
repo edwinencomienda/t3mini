@@ -167,7 +167,7 @@ export const DiffPanel = memo(function DiffPanel({
   const [error, setError] = useState('')
   const [view, setView] = useState<DiffView>(loadDiffView)
   const [reload, setReload] = useState(0)
-  // null = default width (half the space); set once the user drags the handle.
+  // null = default width (40% of the space, at most 36rem); set once the user drags the handle.
   const [width, setWidth] = useState<number | null>(null)
   const panel = useRef<HTMLElement>(null)
   // Files start collapsed; this holds the ones the user opened (or closed again).
@@ -216,9 +216,11 @@ export const DiffPanel = memo(function DiffPanel({
       handle.removeEventListener('pointerup', stop)
       handle.removeEventListener('pointercancel', stop)
       document.body.classList.remove('resizing')
+      handle.classList.remove('dragging')
       saveWidth(latest)
     }
     document.body.classList.add('resizing')
+    handle.classList.add('dragging')
     handle.addEventListener('pointermove', move)
     handle.addEventListener('pointerup', stop)
     handle.addEventListener('pointercancel', stop)

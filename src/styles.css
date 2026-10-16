@@ -202,11 +202,13 @@ kbd {
   /* Base UI portals popups to <body>; keep the app's own layers below them. */
   isolation: isolate;
   display: grid;
-  grid-template-columns: 16.5rem minmax(0, 1fr);
+  /* --sidebar-width is set when you drag the sidebar's edge (SidebarResize). */
+  grid-template-columns: var(--sidebar-width, 16.5rem) minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
 }
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2308,12 +2310,30 @@ a.git-branch:focus-visible .git-branch-external {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: var(--diff-width, min(50%, 56rem));
+  width: var(--diff-width, min(40%, 36rem));
   min-width: 20rem;
   border-left: 1px solid var(--border);
   background: var(--card);
 }
 /* A wide, invisible grab area on the panel's left edge with a thin highlight on hover. */
+.sidebar-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  z-index: 5;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+:root[data-sidebar='hidden'] .sidebar-resize {
+  display: none;
+}
+@media (max-width: 760px) {
+  .sidebar-resize {
+    display: none;
+  }
+}
 .diff-resize {
   position: absolute;
   top: 0;
@@ -2324,6 +2344,7 @@ a.git-branch:focus-visible .git-branch-external {
   cursor: col-resize;
   touch-action: none;
 }
+.sidebar-resize::after,
 .diff-resize::after {
   content: '';
   position: absolute;
@@ -2336,9 +2357,13 @@ a.git-branch:focus-visible .git-branch-external {
 }
 .diff-resize:hover::after,
 .diff-resize:focus-visible::after,
-body.resizing .diff-resize::after {
+.diff-resize.dragging::after,
+.sidebar-resize:hover::after,
+.sidebar-resize:focus-visible::after,
+.sidebar-resize.dragging::after {
   background: var(--primary);
 }
+.sidebar-resize:focus-visible,
 .diff-resize:focus-visible {
   outline: 0;
 }

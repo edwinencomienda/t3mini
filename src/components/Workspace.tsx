@@ -81,6 +81,7 @@ import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
+import { SidebarResize } from './SidebarResize'
 import { LiveLine, StepRow, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
@@ -2006,6 +2007,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             <Settings size={14} />
           </button>
         </div>
+        <SidebarResize />
       </aside>
       <main className="main">
         <div className="main-column">
@@ -2387,8 +2389,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                                   onChange: (provider, model) => {
                                     if (provider === thread.provider) return
                                     const remembered = settingsFor(provider)
+                                    // Your last model for that agent keeps its effort and tier.
                                     void updateSettings(
-                                      model === undefined
+                                      model === undefined || model === remembered.model
                                         ? remembered
                                         : { ...remembered, model, effort: '', serviceTier: '' },
                                       provider,

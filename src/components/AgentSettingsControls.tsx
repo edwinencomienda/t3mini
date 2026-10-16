@@ -9,6 +9,7 @@ import {
   type ModelCatalog,
 } from '../agent-settings'
 import type { Provider } from '../types'
+import { loadPreferences } from '../preferences'
 import { ProviderIcon } from './ProviderIcon'
 
 type Option = { value: string; label: string; description?: string; badge?: string }
@@ -357,6 +358,20 @@ export function AgentSettingsControls({
   const tier = tiers.find((item) => item.id === value.serviceTier)
   // The list under the selected tab: this thread's agent, or the other one to switch to.
   const listed = otherTab ? browsing.catalog : catalog
+  // The other agent's tab (while the switch saves, or when its CLI is missing) shows your last
+  // choices for that agent, which a switch reuses.
+  const remembered = otherTab ? loadPreferences().settings[tab] : undefined
+  const rememberedModel = remembered
+    ? browsing.catalog.models.find((item) => item.id === remembered.model)
+    : undefined
+  const rememberedText = remembered
+    ? [
+        rememberedModel?.label || remembered.model || 'Provider default',
+        remembered.effort ? effortLabel(remembered.effort) : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'Choose'
   const listLoading = otherTab ? browsing.loading : loading
   const modelOptions: Option[] = listLoading
     ? []
@@ -401,9 +416,9 @@ export function AgentSettingsControls({
   const modelRow: MenuRow = {
     key: 'model',
     label: 'Model',
-    text: otherTab ? 'Choose' : modelText,
-    // In the other agent's tab nothing is selected yet.
-    value: otherTab ? '\u0000' : value.model,
+    text: otherTab ? rememberedText : modelText,
+    // In the other agent's tab: your last model there, else nothing selected yet.
+    value: otherTab ? (remembered ? remembered.model : '\u0000') : value.model,
     options: modelOptions,
     // Picking from the other agent's tab switches the thread to that agent.
     onSelect: (model) =>
@@ -486,7 +501,7 @@ export function AgentSettingsControls({
           </>
         }
         rows={rows}
-        disabled={disabled || loading}
+        disabled={disabled}
         busy={busy}
         placement={placement}
         onOpenChange={(open) => {
@@ -494,7 +509,15 @@ export function AgentSettingsControls({
         }}
         header={
           agent ? (
-            <Tabs.Root value={tab} onValueChange={(next: Provider) => setTab(next)}>
+            <Tabs.Root
+              value={tab}
+              onValueChange={(next: Provider) => {
+                setTab(next)
+                // Picking the other agent's tab switches to it right away, with your last
+                // model and effort for that agent. (Without its CLI you can only browse.)
+                if (next !== provider && canSwitch && agent.installed[next]) agent.onChange(next)
+              }}
+            >
               <Tabs.List className="picker-tabs" aria-label="Agent">
                 {(['claude', 'codex'] as const).map((item) => {
                   const blocked = item !== provider && !canSwitch

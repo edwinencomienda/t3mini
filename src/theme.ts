@@ -49,6 +49,22 @@ export function saveSidebarHidden(hidden: boolean) {
   }
 }
 
-// Runs inline in <head> before first paint, so a saved theme or hidden sidebar never flashes.
-// Static string: it reads only this app's own storage keys and writes whitelisted values.
-export const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(key)});if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;if(localStorage.getItem(${JSON.stringify(sidebarKey)})==='1')document.documentElement.dataset.sidebar='hidden'}catch(e){}`
+// The sidebar's width in pixels after you drag its edge (wide screens), as a CSS variable on
+// <html>; none means the default width.
+const sidebarWidthKey = 't3-mini:sidebar-width'
+export const sidebarWidthLimits = { min: 208, max: 480 }
+export function saveSidebarWidth(width: number | null) {
+  if (width === null) document.documentElement.style.removeProperty('--sidebar-width')
+  else document.documentElement.style.setProperty('--sidebar-width', `${width}px`)
+  try {
+    if (width === null) localStorage.removeItem(sidebarWidthKey)
+    else localStorage.setItem(sidebarWidthKey, String(width))
+  } catch {
+    // Storage can be unavailable; the width still applies for this page.
+  }
+}
+
+// Runs inline in <head> before first paint, so a saved theme, hidden sidebar, or sidebar width
+// never flashes. Static string: it reads only this app's own storage keys and writes
+// whitelisted values (the width only as a number within the limits).
+export const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(key)});if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;if(localStorage.getItem(${JSON.stringify(sidebarKey)})==='1')document.documentElement.dataset.sidebar='hidden';var w=Math.round(Number(localStorage.getItem(${JSON.stringify(sidebarWidthKey)})));if(w>=${sidebarWidthLimits.min}&&w<=${sidebarWidthLimits.max})document.documentElement.style.setProperty('--sidebar-width',w+'px')}catch(e){}`
