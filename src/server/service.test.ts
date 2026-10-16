@@ -1001,6 +1001,47 @@ describe('AI thread titles', () => {
     expect(calls).toEqual(['claudeSession native-session'])
   })
 
+  it('uses Claude’s session title as soon as Claude starts replying', async () => {
+    make(writer())
+    const created = await titled.create({ provider: 'claude', cwd: directory })
+    await titled.send(created.id, { text: 'Explain the tool system please' })
+    await started
+    context.text('reply', 'The tool system')
+    context.text('reply', ' has a registry…')
+    await settled()
+    expect(titled.get(created.id)).toMatchObject({
+      title: 'Claude session title',
+      titleSource: 'ai',
+    })
+    // One look while replying (throttled); none needed at the end.
+    expect(calls).toEqual(['claudeSession native-session'])
+    await settleTitled(created.id)
+    expect(calls).toEqual(['claudeSession native-session'])
+  })
+
+  it('looks again at the end when the title wasn’t ready while Claude replied', async () => {
+    let ready = false
+    make(
+      writer({
+        claudeSession: async (sessionId) => {
+          calls.push(`claudeSession ${sessionId}`)
+          return ready ? 'Claude session title' : undefined
+        },
+      }),
+    )
+    const created = await titled.create({ provider: 'claude', cwd: directory })
+    await titled.send(created.id, { text: 'Explain the tool system please' })
+    await started
+    context.text('reply', 'Early reply')
+    await settled()
+    expect(titled.get(created.id).titleSource).toBe('message')
+    ready = true
+    await settleTitled(created.id)
+    await settled()
+    expect(titled.get(created.id)).toMatchObject({ title: 'Claude session title' })
+    expect(calls).toEqual(['claudeSession native-session', 'claudeSession native-session'])
+  })
+
   it('never replaces a title you or the agent chose', async () => {
     make(writer())
     const created = await titled.create({ provider: 'codex', cwd: directory })

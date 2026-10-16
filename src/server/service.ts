@@ -546,7 +546,8 @@ export class AgentService {
       this.store.threads.set(id, previous)
       throw error
     }
-    // Codex doesn't name threads, so one is written right away; Claude's arrives with its reply.
+    // Codex doesn't name threads, so one is written right away; Claude's is read back as soon as
+    // it starts replying (see lookForTitle).
     if (firstMessage && thread.provider === 'codex') void this.autoTitle(id)
     return { accepted: true }
   }
@@ -673,6 +674,17 @@ export class AgentService {
     const working = () => {
       if (!thread.approvals.length) thread.status = 'working'
     }
+    // Claude Code writes its session title a moment after the prompt, before its first reply, so
+    // look for it as soon as the agent starts answering instead of only when the turn ends.
+    // While it's still missing, look again at most every 3 seconds.
+    let titleCheckedAt = 0
+    const lookForTitle = () => {
+      if (thread.provider !== 'claude' || thread.titleSource !== 'message' || !thread.sessionId)
+        return
+      if (Date.now() - titleCheckedAt < 3_000) return
+      titleCheckedAt = Date.now()
+      void this.autoTitle(thread.id)
+    }
     // The message that started this turn records how to take the turn back (for editing it
     // after a stop). Claude: resume from the conversation's latest entry and drop this prompt.
     const started = run.messageId
@@ -724,6 +736,7 @@ export class AgentService {
           })
         working()
         touch()
+        lookForTitle()
       },
       activity: (activity) => {
         const index = thread.activities.findIndex((item) => item.id === activity.id)
@@ -742,6 +755,7 @@ export class AgentService {
         }
         working()
         touch()
+        lookForTitle()
       },
       tools: {
         cwd: thread.cwd,
@@ -862,7 +876,8 @@ export class AgentService {
           'Could not save conversations. Check disk space and permissions, then restart the server.'
       }
       this.notify()
-      // Claude has written its title by now (if not, the next turn tries again).
+      // A last look in case the title wasn't written yet during the turn (if not, the next turn
+      // tries again).
       if (thread.provider === 'claude' && thread.titleSource === 'message' && thread.sessionId)
         void this.autoTitle(thread.id)
     }
