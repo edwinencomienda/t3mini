@@ -36,6 +36,7 @@ const noTitles: TitleWriter = {
   nameCodexThread: async () => {},
 }
 import { BrowserManager } from './browser'
+import { ProjectIcons } from './project-icons'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
@@ -165,6 +166,7 @@ export class AgentService {
   private listeners = new Set<() => void>()
   private timer?: NodeJS.Timeout
   private persistenceError?: string
+  readonly icons: ProjectIcons
   constructor(
     readonly store: ThreadStore,
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
@@ -176,6 +178,8 @@ export class AgentService {
     // The agents' browser sessions (browser_* tools); nothing starts until a tool uses it.
     readonly browsers = new BrowserManager(),
   ) {
+    // Project icons for the sidebar avatars, looked up in the background.
+    this.icons = new ProjectIcons(() => this.notify())
     // Process status changes (started, URL found, exited) go out with the live updates.
     processes.subscribe(() => this.notify())
     // An agent's browser opening, moving to another page, or closing shows in its chip.
@@ -224,6 +228,7 @@ export class AgentService {
         project.addedAt = thread.createdAt
       projects.set(thread.cwd, project)
     }
+    for (const project of projects.values()) if (this.icons.known(project.path)) project.icon = true
     return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
   }
   // A saved project keeps its place in the sidebar after its threads are deleted: it remembers

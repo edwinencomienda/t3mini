@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Provider } from './types'
+import { switchSetting } from './switch-setting'
 
 // Animated Claude and Codex characters for the working line (public/mascots), picked by what
 // the agent is doing. A per-browser setting (Settings → Appearance) turns them off in favor of
@@ -24,36 +25,10 @@ const lift: Record<string, number> = {
 }
 export const mascotLift = (provider: Provider, mood: Mood) => lift[`${provider}-${mood}`] ?? 0
 
-const key = 't3-mini:mascots'
-const listeners = new Set<(on: boolean) => void>()
-
-function stored() {
-  try {
-    return localStorage.getItem(key) !== 'off'
-  } catch {
-    return true
-  }
-}
-export function saveMascots(on: boolean) {
-  try {
-    if (on) localStorage.removeItem(key)
-    else localStorage.setItem(key, 'off')
-  } catch {
-    // Storage can be unavailable; the choice still applies until reload.
-  }
-  listeners.forEach((listener) => listener(on))
-}
+const setting = switchSetting('t3-mini:mascots')
+export const saveMascots = setting.save
 // The saved choice (on unless turned off), for the Settings switch.
-export function useMascotSetting() {
-  // Off during the server render and first paint; the saved choice is read after mount.
-  const [on, setOn] = useState(false)
-  useEffect(() => {
-    setOn(stored())
-    listeners.add(setOn)
-    return () => void listeners.delete(setOn)
-  }, [])
-  return on
-}
+export const useMascotSetting = () => setting.useSetting()
 // Whether to show the characters now: the setting, unless Reduce motion is on.
 export function useMascots() {
   const on = useMascotSetting()

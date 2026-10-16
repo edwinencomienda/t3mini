@@ -77,6 +77,7 @@ import { Blocks } from './blocks'
 import type { Block } from '../blocks'
 import { ProcessIndicator } from './Processes'
 import { BrowserChip } from './BrowserChip'
+import { ProjectAvatar, useProjectIcons } from './ProjectAvatar'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
@@ -567,6 +568,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const projectIcons = useProjectIcons()
   // How the sidebar lists threads: under their projects, or one list (remembered per browser).
   const [groupBy, setGroupBy] = useState<'project' | 'none'>('project')
   useEffect(() => {
@@ -1973,7 +1975,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
               >
                 {renamingProject?.path === cwd ? (
                   <div className="project-toggle renaming">
-                    {collapsed[cwd] ? <Folder size={14} /> : <FolderOpen size={14} />}
+                    {projectIcons ? (
+                      <ProjectAvatar
+                        path={cwd}
+                        name={projectName(cwd)}
+                        icon={projects.find((project) => project.path === cwd)?.icon}
+                      />
+                    ) : collapsed[cwd] ? (
+                      <Folder size={14} />
+                    ) : (
+                      <FolderOpen size={14} />
+                    )}
                     <input
                       className="thread-rename"
                       aria-label="Project name"
@@ -2013,7 +2025,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     aria-expanded={!collapsed[cwd]}
                     title={cwd}
                   >
-                    {collapsed[cwd] ? <Folder size={14} /> : <FolderOpen size={14} />}
+                    {projectIcons ? (
+                      <ProjectAvatar
+                        path={cwd}
+                        name={projectName(cwd)}
+                        icon={projects.find((project) => project.path === cwd)?.icon}
+                      />
+                    ) : collapsed[cwd] ? (
+                      <Folder size={14} />
+                    ) : (
+                      <FolderOpen size={14} />
+                    )}
                     <span>{projectName(cwd)}</span>
                   </button>
                 )}

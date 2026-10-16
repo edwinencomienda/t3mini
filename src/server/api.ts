@@ -223,6 +223,23 @@ export async function handleApi(request: Request) {
         }
       }
     }
+    // A project's own icon for its sidebar avatar (only for projects listed in the sidebar).
+    if (parts[0] === 'projects' && parts[1] === 'icon' && !parts[2] && request.method === 'GET') {
+      const path = url.searchParams.get('path') ?? ''
+      if (!service.projects().some((project) => project.path === path))
+        return Response.json({ error: 'Project not found.' }, { status: 404 })
+      const icon = await service.icons.read(path).catch(() => undefined)
+      if (!icon) return Response.json({ error: 'No icon.' }, { status: 404 })
+      return new Response(new Uint8Array(icon.data), {
+        headers: {
+          'content-type': icon.mimeType,
+          'cache-control': 'private, max-age=300',
+          'x-content-type-options': 'nosniff',
+          // An SVG opened directly could run scripts on this origin; this keeps it inert.
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        },
+      })
+    }
     if (parts[0] === 'projects' && parts[1] === 'rename' && !parts[2] && request.method === 'POST')
       return Response.json(await service.renameProject(await request.json()))
     if (parts[0] === 'projects' && !parts[1]) {

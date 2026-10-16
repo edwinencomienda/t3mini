@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { themeLabels, themes, type Theme } from '../theme'
 import { saveMascots, useMascotSetting } from '../mascots'
+import { saveProjectIcons, useProjectIcons } from './ProjectAvatar'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
@@ -202,6 +203,7 @@ export function SettingsDialog({
 }) {
   const [permission, setPermission] = useState<DesktopPermission>(desktopPermission)
   const mascotsOn = useMascotSetting()
+  const projectIconsOn = useProjectIcons()
   // Account emails are hidden until you choose to show them (not remembered).
   const [showEmails, setShowEmails] = useState(false)
   // Who each agent is signed in as; loaded when the Agents tab opens.
@@ -294,6 +296,20 @@ export function SettingsDialog({
                     label="Working animations"
                     checked={mascotsOn}
                     onChange={(enabled) => saveMascots(enabled)}
+                  />
+                </div>
+                <div className="setting-row">
+                  <div>
+                    <strong>Project icons</strong>
+                    <small>
+                      Show each project’s own icon, or its first letter, in the sidebar. Off shows
+                      folder icons.
+                    </small>
+                  </div>
+                  <Toggle
+                    label="Project icons"
+                    checked={projectIconsOn}
+                    onChange={(enabled) => saveProjectIcons(enabled)}
                   />
                 </div>
               </section>

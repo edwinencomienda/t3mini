@@ -161,6 +161,8 @@ export type ProjectSummary = {
   // sidebar keeps projects in this order so they don't jump around with activity.
   addedAt: string
   threadCount: number
+  // It has its own icon (a favicon or app icon), served at /api/projects/icon?path=…
+  icon?: boolean
 }
 export type ProviderHealth = { installed: boolean; version?: string }
 export type Bootstrap = {

@@ -4036,3 +4036,31 @@ body.resizing {
   background: var(--accent);
   font-size: 10.5px;
 }
+
+/* Project avatars in the sidebar (Base UI Avatar): the project's own icon, or its first
+   letter on a color while it loads or when there's none. */
+.project-avatar {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.project-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.project-avatar-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: oklch(0.62 0.12 var(--avatar-hue));
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
