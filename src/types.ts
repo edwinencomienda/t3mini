@@ -167,7 +167,26 @@ export type ProjectSummary = {
   icon?: boolean
 }
 export type ProviderHealth = { installed: boolean; version?: string }
+// View settings shared by every browser and window (kept on the server, sent with live
+// updates), unlike per-browser ones such as the theme.
+export type UiSettings = {
+  groupBy: 'project' | 'none'
+  theme?: 'system' | 'light' | 'dark'
+  projectIcons?: boolean
+  // Working animations (the agent characters).
+  animations?: boolean
+  // The agent and settings new threads start with.
+  agent?: {
+    provider?: Provider
+    cwd?: string
+    settings: Partial<Record<Provider, import('./agent-settings').AgentSettings>>
+  }
+  collapsed?: Record<string, boolean>
+  music?: { enabled: boolean; url: string; volume: number }
+  musicPosition?: { source: string; time: number; index?: number }
+}
 export type Bootstrap = {
+  ui?: UiSettings
   threads: ThreadSummary[]
   projects: ProjectSummary[]
   providers: Record<Provider, ProviderHealth>

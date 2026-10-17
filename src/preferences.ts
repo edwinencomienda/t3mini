@@ -1,5 +1,6 @@
 import { defaultPermission, isPermissionMode, type AgentSettings } from './agent-settings'
 import type { Provider } from './types'
+import { registerShared, shareSetting } from './shared-settings'
 
 // The last choices made in this browser, so new threads start where the user left off.
 // Stored per provider because model and effort ids are provider-specific.
@@ -47,18 +48,32 @@ export function settingsFor(provider: Provider, preferences = loadPreferences())
 }
 
 export function rememberChoice(provider: Provider, settings: AgentSettings, cwd?: string) {
+  const current = loadPreferences()
+  const next: Preferences = {
+    ...current,
+    provider,
+    ...(cwd ? { cwd } : {}),
+    settings: { ...current.settings, [provider]: settings },
+  }
+  store(next)
+  // The same defaults in every browser and window (see shared-settings.ts).
+  shareSetting({ agent: next })
+}
+function store(preferences: Preferences) {
   try {
-    const current = loadPreferences()
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        ...current,
-        provider,
-        ...(cwd ? { cwd } : {}),
-        settings: { ...current.settings, [provider]: settings },
-      }),
-    )
+    localStorage.setItem(key, JSON.stringify(preferences))
   } catch {
     // Storage can be unavailable (private windows, blocked site data); defaults still work.
   }
 }
+registerShared(
+  'agent',
+  () => {
+    if (typeof localStorage === 'undefined') return undefined
+    const preferences = loadPreferences()
+    return preferences.provider || Object.keys(preferences.settings).length
+      ? preferences
+      : undefined
+  },
+  (agent) => store(agent),
+)

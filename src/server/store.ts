@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { Project, Thread } from '../types'
+import type { Project, Thread, UiSettings } from '../types'
+import { readUiSettings } from './ui-settings'
 import { isActive } from '../types'
 import { legacyPermission } from '../agent-settings'
 
@@ -80,5 +81,25 @@ export class ProjectStore {
     return write
   }
 }
+// View settings shared across browsers (see UiSettings), in .data/ui.json.
+export class UiStore {
+  settings: UiSettings = { groupBy: 'project' }
+  private queue: Promise<void> = Promise.resolve()
+  constructor(readonly path: string) {}
+  async load() {
+    try {
+      this.settings = readUiSettings(JSON.parse(await readFile(this.path, 'utf8'))) as UiSettings
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+    }
+  }
+  save() {
+    const contents = JSON.stringify(this.settings)
+    const write = this.queue.then(() => writeAtomic(this.path, contents))
+    this.queue = write.catch(() => {})
+    return write
+  }
+}
+export const uiStorePath = (threadStorePath: string) => join(dirname(threadStorePath), 'ui.json')
 export const projectStorePath = (threadStorePath: string) =>
   join(dirname(threadStorePath), 'projects.json')

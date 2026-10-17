@@ -1,4 +1,5 @@
 import { existsSync, readdirSync } from 'node:fs'
+import { lookup } from 'node:dns/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserInfo } from '../types'
@@ -95,11 +96,42 @@ export function blockedPorts() {
 const localHosts = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0'])
 const isLocalHost = (hostname: string) =>
   localHosts.has(hostname) || hostname.endsWith('.localhost')
+// Local development domains (Laravel Herd and Valet's .test, mDNS .local…): endings reserved
+// for private use, so no public site can have one. Allowed only when the name resolves to
+// this machine, checked when the page is opened.
+const devEndings = ['.test', '.local', '.internal', '.home.arpa', '.lan']
+const isDevHost = (hostname: string) => devEndings.some((ending) => hostname.endsWith(ending))
 const portOf = (url: URL) => Number(url.port || (url.protocol === 'https:' ? 443 : 80))
 
-// Whether a page may be opened: an http(s) URL on this machine, and not t3 mini itself.
-// Returns the reason when it isn't.
-export function checkPageUrl(raw: string, ports = blockedPorts()): string | undefined {
+// Whether a name resolves only to this machine (127.0.0.0/8, ::1), remembered for a minute.
+export type Resolver = (hostname: string) => Promise<boolean>
+const resolved = new Map<string, { at: number; local: Promise<boolean> }>()
+export const resolvesToThisMachine: Resolver = (hostname) => {
+  const cached = resolved.get(hostname)
+  if (cached && Date.now() - cached.at < 60_000) return cached.local
+  const local = lookup(hostname, { all: true })
+    .then(
+      (addresses) =>
+        addresses.length > 0 &&
+        addresses.every(
+          ({ address }) =>
+            address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.'),
+        ),
+    )
+    .catch(() => false)
+  resolved.set(hostname, { at: Date.now(), local })
+  if (resolved.size > 200) resolved.delete(resolved.keys().next().value!)
+  return local
+}
+
+// Whether a page may be opened: an http(s) URL on this machine (localhost, or a local
+// development domain that resolves here), and not t3 mini itself. Returns the reason when it
+// isn't.
+export async function checkPageUrl(
+  raw: string,
+  ports = blockedPorts(),
+  resolve: Resolver = resolvesToThisMachine,
+): Promise<string | undefined> {
   let url: URL
   try {
     url = new URL(raw)
@@ -108,17 +140,24 @@ export function checkPageUrl(raw: string, ports = blockedPorts()): string | unde
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:')
     return 'Only http:// and https:// pages can be opened.'
-  if (!isLocalHost(url.hostname.toLowerCase()))
-    return `Only local sites can be opened (localhost, 127.0.0.1, *.localhost), not ${url.hostname}.`
+  const hostname = url.hostname.toLowerCase()
+  if (!isLocalHost(hostname)) {
+    if (!isDevHost(hostname))
+      return `Only local sites can be opened (localhost, 127.0.0.1, *.localhost, or a local development domain like app.test), not ${url.hostname}.`
+    if (!(await resolve(hostname)))
+      return `${url.hostname} doesn’t point to this Mac, so it can’t be opened.`
+  }
   if (ports.has(portOf(url))) return 'That address is t3 mini itself, which the browser can’t open.'
   return undefined
 }
-// Requests the page itself may make (any request to t3 mini is refused).
+// Requests the page itself may make (any request to t3 mini is refused, including through a
+// local development domain).
 export function allowRequest(raw: string, ports = blockedPorts()) {
   try {
     const url = new URL(raw)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return true
-    return !(isLocalHost(url.hostname.toLowerCase()) && ports.has(portOf(url)))
+    const hostname = url.hostname.toLowerCase()
+    return !((isLocalHost(hostname) || isDevHost(hostname)) && ports.has(portOf(url)))
   } catch {
     return true
   }
@@ -186,6 +225,7 @@ export class BrowserManager {
   constructor(
     private readonly ports = blockedPorts(),
     private readonly executable: () => string | undefined = findBrowser,
+    private readonly resolve: Resolver = resolvesToThisMachine,
   ) {}
 
   subscribe(listener: () => void) {
@@ -352,7 +392,7 @@ export class BrowserManager {
     const session = new Session(context)
     // Every request goes through here: nothing may reach t3 mini, and the page itself (its
     // top-level document) stays on local sites.
-    await context.route('**/*', (route, request: Request) => {
+    await context.route('**/*', async (route, request: Request) => {
       const url = request.url()
       let mainFrame = false
       let from: Page | undefined
@@ -367,7 +407,7 @@ export class BrowserManager {
       }
       const refusal = !allowRequest(url, this.ports)
         ? 't3 mini itself'
-        : mainFrame && checkPageUrl(url, this.ports)
+        : mainFrame && (await checkPageUrl(url, this.ports, this.resolve))
           ? 'not a local site'
           : undefined
       if (refusal) {
@@ -429,10 +469,12 @@ export class BrowserManager {
       session.note({ kind: 'popup', text: `Tab ${tab.id} opened (a popup) and is now active.` })
       // Backstop: a popup already showing somewhere it can't be is closed right away.
       const url = page.url()
-      if (url !== 'about:blank' && checkPageUrl(url, this.ports)) {
-        session.note({ kind: 'blocked', text: `${url} (not a local site)` })
-        void page.close().catch(() => {})
-      }
+      if (url !== 'about:blank')
+        void checkPageUrl(url, this.ports, this.resolve).then((refusal) => {
+          if (!refusal) return
+          session.note({ kind: 'blocked', text: `${url} (not a local site)` })
+          void page.close().catch(() => {})
+        })
     }
     page.on('console', (message: ConsoleMessage) => {
       const type = message.type()
@@ -478,11 +520,13 @@ export class BrowserManager {
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) update()
       if (frame !== page.mainFrame() || frame.url() === 'about:blank') return
-      if (checkPageUrl(frame.url(), this.ports)) {
-        session.note({ kind: 'blocked', text: `${frame.url()} (not a local site)` })
+      const url = frame.url()
+      void checkPageUrl(url, this.ports, this.resolve).then((refusal) => {
+        if (!refusal || page.isClosed() || page.url() !== url) return
+        session.note({ kind: 'blocked', text: `${url} (not a local site)` })
         if (tab.popup) void page.close().catch(() => {})
         else void page.goto('about:blank').catch(() => {})
-      }
+      })
     })
     update()
     return page

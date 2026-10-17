@@ -20,7 +20,8 @@ import type { ToolContext } from './tools/types'
 const t3 = new Set([4310, 4311])
 
 describe('where the agent’s browser may go', () => {
-  it('opens local sites only, never t3 mini itself', () => {
+  it('opens local sites only, never t3 mini itself', async () => {
+    const neverResolves = async () => false
     for (const url of [
       'http://localhost:5173/',
       'https://localhost:3000/login',
@@ -29,15 +30,29 @@ describe('where the agent’s browser may go', () => {
       'http://myapp.localhost:5173',
       'http://0.0.0.0:3000',
     ])
-      expect(checkPageUrl(url, t3), url).toBeUndefined()
-    expect(checkPageUrl('https://example.com', t3)).toMatch(/Only local sites/)
-    expect(checkPageUrl('http://localhost.example.com', t3)).toMatch(/Only local sites/)
-    expect(checkPageUrl('http://192.168.1.10:5173', t3)).toMatch(/Only local sites/)
-    expect(checkPageUrl('file:///etc/passwd', t3)).toMatch(/http/)
-    expect(checkPageUrl('javascript:alert(1)', t3)).toMatch(/http/)
-    expect(checkPageUrl('not a url', t3)).toMatch(/valid URL/)
-    expect(checkPageUrl('http://localhost:4310/', t3)).toMatch(/t3 mini itself/)
-    expect(checkPageUrl('http://127.0.0.1:4311/pair', t3)).toMatch(/t3 mini itself/)
+      expect(await checkPageUrl(url, t3, neverResolves), url).toBeUndefined()
+    expect(await checkPageUrl('https://example.com', t3)).toMatch(/Only local sites/)
+    expect(await checkPageUrl('http://localhost.example.com', t3)).toMatch(/Only local sites/)
+    expect(await checkPageUrl('http://192.168.1.10:5173', t3)).toMatch(/Only local sites/)
+    expect(await checkPageUrl('file:///etc/passwd', t3)).toMatch(/http/)
+    expect(await checkPageUrl('javascript:alert(1)', t3)).toMatch(/http/)
+    expect(await checkPageUrl('not a url', t3)).toMatch(/valid URL/)
+    expect(await checkPageUrl('http://localhost:4310/', t3)).toMatch(/t3 mini itself/)
+    expect(await checkPageUrl('http://127.0.0.1:4311/pair', t3)).toMatch(/t3 mini itself/)
+  })
+  it('opens local development domains (app.test…) only when they point to this machine', async () => {
+    const here = async (host: string) => host === 'myapp.test' || host === 'printer.local'
+    expect(await checkPageUrl('http://myapp.test/dashboard', t3, here)).toBeUndefined()
+    expect(await checkPageUrl('https://printer.local', t3, here)).toBeUndefined()
+    expect(await checkPageUrl('http://elsewhere.test', t3, here)).toMatch(
+      /doesn’t point to this Mac/,
+    )
+    // A public domain is refused even if it resolves here; only reserved endings count.
+    expect(await checkPageUrl('http://rebind.example.com', t3, async () => true)).toMatch(
+      /Only local sites/,
+    )
+    expect(await checkPageUrl('http://myapp.test:4310', t3, here)).toMatch(/t3 mini itself/)
+    expect(allowRequest('http://myapp.test:4310/api/threads', t3)).toBe(false)
   })
   it('lets pages load assets anywhere except t3 mini', () => {
     expect(allowRequest('https://fonts.googleapis.com/css', t3)).toBe(true)

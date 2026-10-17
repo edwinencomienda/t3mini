@@ -2,7 +2,7 @@ import { Avatar } from '@base-ui/react/avatar'
 import { switchSetting } from '../switch-setting'
 
 // Settings → Appearance → Project icons: avatars (on) or the plain folder icons (off).
-const setting = switchSetting('t3-mini:project-icons')
+const setting = switchSetting('t3-mini:project-icons', 'projectIcons')
 export const saveProjectIcons = setting.save
 // Starts on so the sidebar doesn't flash folders before the saved choice is read.
 export const useProjectIcons = () => setting.useSetting(true)

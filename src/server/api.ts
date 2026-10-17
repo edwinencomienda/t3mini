@@ -223,6 +223,11 @@ export async function handleApi(request: Request) {
         }
       }
     }
+    // View settings shared by every browser (Group by…).
+    if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'POST')
+      return Response.json(await service.updateUi(await request.json()))
+    if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'GET')
+      return Response.json(service.ui.settings)
     // A project's own icon for its sidebar avatar (only for projects listed in the sidebar).
     if (parts[0] === 'projects' && parts[1] === 'icon' && !parts[2] && request.method === 'GET') {
       const path = url.searchParams.get('path') ?? ''

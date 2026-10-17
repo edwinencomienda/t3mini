@@ -1,3 +1,4 @@
+import { registerShared, shareSetting } from './shared-settings'
 export type Theme = 'system' | 'light' | 'dark'
 export const themes: Theme[] = ['system', 'light', 'dark']
 export const themeLabels: Record<Theme, string> = {
@@ -22,7 +23,8 @@ export function applyTheme(theme: Theme) {
   if (theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = theme
 }
-export function saveTheme(theme: Theme) {
+// Applies a theme and keeps this browser's copy (read before first paint by themeScript).
+function adoptTheme(theme: Theme) {
   applyTheme(theme)
   try {
     if (theme === 'system') localStorage.removeItem(key)
@@ -31,6 +33,26 @@ export function saveTheme(theme: Theme) {
     // Storage can be unavailable; the choice still applies for this page.
   }
 }
+// Your choice, shared with every browser and window (see shared-settings.ts).
+export function saveTheme(theme: Theme) {
+  adoptTheme(theme)
+  shareSetting({ theme })
+}
+// The theme changed from another browser or window.
+const themeListeners = new Set<(theme: Theme) => void>()
+export function onThemeChange(listener: (theme: Theme) => void) {
+  themeListeners.add(listener)
+  return () => void themeListeners.delete(listener)
+}
+registerShared(
+  'theme',
+  () => (typeof localStorage === 'undefined' || loadTheme() === 'system' ? undefined : loadTheme()),
+  (theme) => {
+    if (theme === loadTheme()) return
+    adoptTheme(theme)
+    themeListeners.forEach((listener) => listener(theme))
+  },
+)
 export const nextTheme = (theme: Theme) => themes[(themes.indexOf(theme) + 1) % themes.length]!
 
 // Whether the sidebar is hidden on wide screens. Kept as an attribute on <html> so CSS can

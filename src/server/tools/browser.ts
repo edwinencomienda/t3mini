@@ -122,7 +122,7 @@ export const browserOpen = defineTool({
       ? `${input.url.replace(/^https?:\/\//, '')}${input.newTab ? ' · new tab' : ''}`
       : undefined,
   async run(context, input) {
-    const refusal = checkPageUrl(input.url)
+    const refusal = await checkPageUrl(input.url)
     if (refusal) throw new ToolError(refusal)
     const page = input.newTab
       ? await guarded('Opening a tab', () => context.browser.newTab())
@@ -339,7 +339,7 @@ export const browserSetCookie = defineTool({
       ? `${input.name}${input.url ? ` · ${input.url.replace(/^https?:\/\//, '')}` : ''}`
       : undefined,
   async run(context, input) {
-    const refusal = checkPageUrl(input.url)
+    const refusal = await checkPageUrl(input.url)
     if (refusal) throw new ToolError(refusal)
     if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(input.name))
       throw new ToolError('That isn’t a valid cookie name.')

@@ -79,6 +79,7 @@ import { ProcessIndicator } from './Processes'
 import { BrowserChip } from './BrowserChip'
 import { BackgroundMusic } from './BackgroundMusic'
 import { ProjectAvatar, useProjectIcons } from './ProjectAvatar'
+import { applyShared, registerShared, shareSetting } from '../shared-settings'
 import type { ProcessInfo } from '../server/processes'
 import { ImagePreview, previewOnClick } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
@@ -86,6 +87,7 @@ import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
+import { Autocomplete } from '@base-ui/react/autocomplete'
 import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
@@ -114,6 +116,7 @@ import {
   saveTheme,
   themeLabels,
   type Theme,
+  onThemeChange,
 } from '../theme'
 import remarkGfm from 'remark-gfm'
 import {
@@ -122,6 +125,7 @@ import {
   type Activity,
   type Bootstrap,
   type BrowserInfo,
+  type UiSettings,
   type GitInfo,
   type PullRequest,
   type Message,
@@ -333,6 +337,7 @@ const MessageView = memo(
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 // The composer grows with its text (or a live dictation preview) up to this height, then scrolls.
 const composerMaxHeight = 240
+// Where Group by was saved per browser before it moved to the server (read once, then removed).
 const groupByKey = 't3-mini:sidebar-group'
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 // A project's name: the one you gave it in the sidebar, else its folder name.
@@ -472,21 +477,58 @@ export function Workspace({ threadId }: { threadId?: string }) {
       // Everything expanded by default.
     }
   }, [])
+  // This browser's copy of the collapsed projects (shown at once on load).
+  const keepCollapsed = (next: Record<string, boolean>) => {
+    try {
+      const paths = Object.keys(next).filter((path) => next[path])
+      localStorage.setItem('t3-mini:collapsed-projects', JSON.stringify(paths))
+    } catch {
+      // Still applies for this session.
+    }
+  }
   function setCollapsed(
     update:
       Record<string, boolean> | ((current: Record<string, boolean>) => Record<string, boolean>),
   ) {
     setCollapsedState((current) => {
       const next = typeof update === 'function' ? update(current) : update
-      try {
-        const paths = Object.keys(next).filter((path) => next[path])
-        localStorage.setItem('t3-mini:collapsed-projects', JSON.stringify(paths))
-      } catch {
-        // Still applies for this session.
-      }
+      keepCollapsed(next)
+      // The same in every browser and window (see shared-settings.ts).
+      shareSetting({
+        collapsed: Object.fromEntries(
+          Object.keys(next)
+            .filter((path) => next[path])
+            .map((path) => [path, true]),
+        ),
+      })
       return next
     })
   }
+  useEffect(
+    () =>
+      registerShared(
+        'collapsed',
+        () => {
+          try {
+            const saved: unknown = JSON.parse(
+              localStorage.getItem('t3-mini:collapsed-projects') || '[]',
+            )
+            return Array.isArray(saved) && saved.length
+              ? Object.fromEntries(
+                  saved.filter((path) => typeof path === 'string').map((path) => [path, true]),
+                )
+              : undefined
+          } catch {
+            return undefined
+          }
+        },
+        (shared) => {
+          setCollapsedState(shared)
+          keepCollapsed(shared)
+        },
+      ),
+    [],
+  )
   // The composer's text lives in the textarea itself (uncontrolled), so typing doesn't
   // re-render the page; the page only tracks whether there's anything to send.
   const draftText = useRef('')
@@ -574,27 +616,22 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Working background music is playing in this tab (shows the radio character).
   const [musicPlaying, setMusicPlaying] = useState(false)
   const projectIcons = useProjectIcons()
-  // How the sidebar lists threads: under their projects, or one list (remembered per browser).
+  // How the sidebar lists threads: under their projects, or one list. Kept on the server, so
+  // every browser and window shows the same (it arrives with the bootstrap and live updates).
   const [groupBy, setGroupBy] = useState<'project' | 'none'>('project')
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(groupByKey) === 'none') setGroupBy('none')
-    } catch {
-      // Storage unavailable: grouped by project.
-    }
-  }, [])
   function changeGroupBy(next: 'project' | 'none') {
     setGroupBy(next)
-    try {
-      if (next === 'none') localStorage.setItem(groupByKey, 'none')
-      else localStorage.removeItem(groupByKey)
-    } catch {
-      // The choice still applies until reload.
-    }
+    void api('ui-settings', 'POST', { groupBy: next }).catch((error: Error) =>
+      setError(error.message),
+    )
   }
   // 'system' on the server render; the saved choice is read after mount (already applied by the head script).
   const [theme, setTheme] = useState<Theme>('system')
-  useEffect(() => setTheme(loadTheme()), [])
+  useEffect(() => {
+    setTheme(loadTheme())
+    // Changed in another browser or window.
+    return onThemeChange(setTheme)
+  }, [])
   function changeTheme(next: Theme) {
     setTheme(next)
     saveTheme(next)
@@ -641,6 +678,18 @@ export function Workspace({ threadId }: { threadId?: string }) {
     api<Bootstrap>('bootstrap', 'GET', undefined, controller.signal)
       .then((data) => {
         setBootstrap(data)
+        if (data.ui) {
+          setGroupBy(data.ui.groupBy)
+          applyShared(data.ui)
+        }
+        // Once: a choice this browser saved before the setting moved to the server.
+        try {
+          if (localStorage.getItem(groupByKey) === 'none' && data.ui?.groupBy !== 'none')
+            changeGroupBy('none')
+          localStorage.removeItem(groupByKey)
+        } catch {
+          // Storage unavailable: nothing to carry over.
+        }
         setThreads(data.threads)
         setProjects(data.projects ?? [])
       })
@@ -710,11 +759,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
           thread: Thread | null
           processes?: ProcessInfo[]
           browsers?: BrowserInfo[]
+          ui?: UiSettings
           persistenceError?: string
         }
         setProjects(data.projects ?? [])
         setProcesses(data.processes ?? [])
         setBrowsers(data.browsers ?? [])
+        if (data.ui) {
+          setGroupBy(data.ui.groupBy)
+          applyShared(data.ui)
+        }
         announce(threadEvents(statuses.current, data.threads), data.projects ?? [])
         statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
         setThreads(data.threads)
@@ -1264,7 +1318,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
         cwd,
         ...settingsFor(provider, preferences),
       })
-      setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
+      setThreads((current) => [
+        { ...created, lastMessageAt: created.createdAt },
+        ...current.filter((item) => item.id !== created.id),
+      ])
       select(created.id)
       revealThread(created.id)
     } catch (error) {
@@ -2225,8 +2282,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
               ) : null}
               <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
               {thread ? (
-                <span className="chip" title={thread.cwd}>
-                  <FolderOpen size={12} />
+                <span className="chip project-chip" title={thread.cwd}>
+                  {projectIcons ? (
+                    <ProjectAvatar
+                      path={thread.cwd}
+                      name={folder ?? ''}
+                      icon={projects.find((project) => project.path === thread.cwd)?.icon}
+                    />
+                  ) : (
+                    <FolderOpen size={12} />
+                  )}
                   {folder}
                 </span>
               ) : null}
@@ -2914,8 +2979,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
       {newThreadProject !== null && bootstrap ? (
         <NewThread
           bootstrap={bootstrap}
-          projects={projectPaths}
+          projects={projects}
           projectName={projectName}
+          projectIcons={projectIcons}
           initialProject={newThreadProject}
           onAddProject={() => {
             setNewThreadProject(null)
@@ -2924,7 +2990,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
           onClose={() => setNewThreadProject(null)}
           onCreated={(created) => {
             setNewThreadProject(null)
-            setThreads((current) => [{ ...created, lastMessageAt: created.createdAt }, ...current])
+            setThreads((current) => [
+              { ...created, lastMessageAt: created.createdAt },
+              ...current.filter((item) => item.id !== created.id),
+            ])
             select(created.id)
             revealThread(created.id)
           }}
@@ -2954,26 +3023,29 @@ function NewThread({
   bootstrap,
   projects,
   projectName,
+  projectIcons,
   initialProject,
   onAddProject,
   onClose,
   onCreated,
 }: {
   bootstrap: Bootstrap
-  projects: string[]
+  // Most recently active first.
+  projects: ProjectSummary[]
   projectName: (path: string) => string
+  projectIcons: boolean
   initialProject: string
   onAddProject: () => void
   onClose: () => void
   onCreated: (thread: Thread) => void
 }) {
-  const [cwd, setCwd] = useState(initialProject)
+  const [query, setQuery] = useState('')
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  async function create(event: FormEvent) {
-    event.preventDefault()
+  const [busy, setBusy] = useState<string | null>(null)
+  const [now] = useState(() => Date.now())
+  async function create(cwd: string) {
     if (busy) return
-    setBusy(true)
+    setBusy(cwd)
     setError('')
     try {
       // Agent, model, effort, and permissions start from your last choices; change them in the
@@ -2986,69 +3058,116 @@ function NewThread({
       onCreated(created)
     } catch (error) {
       setError((error as Error).message)
-      setBusy(false)
+      setBusy(null)
     }
   }
-  const options = (projects.includes(cwd) ? projects : [cwd, ...projects]).map((path) => ({
-    value: path,
-    label: projectName(path),
-    description: path,
-  }))
+  // The project you're in first (Enter picks it, like before), then the rest by recent activity.
+  const ordered = [
+    ...projects.filter((project) => project.path === initialProject),
+    ...projects.filter((project) => project.path !== initialProject),
+  ]
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const shown = ordered.filter((project) => {
+    const text = `${projectName(project.path)} ${project.path}`.toLowerCase()
+    return words.every((word) => text.includes(word))
+  })
   return (
     <Modal
-      className="new-dialog"
+      className="new-dialog new-thread-dialog"
       onClose={() => {
         if (!busy) onClose()
       }}
     >
-      <form onSubmit={create}>
-        <div className="dialog-top">
-          <ModalTitle render={<h2 />}>New thread</ModalTitle>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Close new thread"
-            disabled={busy}
-            onClick={onClose}
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="field project-field">
-          <span className="field-label">Project</span>
-          <Picker
-            label="Project"
-            icon={<Folder size={14} />}
-            text={projectName(cwd)}
-            value={cwd}
-            options={options}
-            disabled={busy}
-            placement="down"
-            onSelect={setCwd}
-            action={{
-              label: 'Add project…',
-              icon: <FolderPlus size={14} />,
-              onSelect: onAddProject,
-            }}
+      <div className="dialog-top">
+        <ModalTitle render={<h2 />}>New thread</ModalTitle>
+        <button
+          className="icon-button"
+          type="button"
+          aria-label="Close new thread"
+          disabled={Boolean(busy)}
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      {/* Base UI Autocomplete, inline: type to filter, ↑/↓ to move, Enter or click to create. */}
+      <Autocomplete.Root
+        inline
+        open
+        items={shown}
+        filteredItems={shown}
+        // The first match is always the one Enter picks (the current project when not searching).
+        autoHighlight="always"
+        value={query}
+        onValueChange={(value, details) => {
+          if (details.reason !== 'item-press') setQuery(value)
+        }}
+        itemToStringValue={(project: ProjectSummary) => projectName(project.path)}
+      >
+        <label className="palette-search project-search">
+          <Search size={15} aria-hidden />
+          <Autocomplete.Input
+            className="palette-input"
+            placeholder="Search projects…"
+            autoFocus
+            maxLength={200}
+            disabled={Boolean(busy)}
           />
-          <small className="field-hint" title={cwd}>
-            {cwd}
-          </small>
+        </label>
+        <Autocomplete.Empty className="palette-empty">
+          {query ? 'No project matches.' : 'No projects yet.'}
+        </Autocomplete.Empty>
+        <Autocomplete.List className="palette-list project-list">
+          {(project: ProjectSummary) => (
+            <Autocomplete.Item
+              key={project.path}
+              value={project}
+              className="palette-item project-item"
+              onClick={() => void create(project.path)}
+              disabled={Boolean(busy)}
+            >
+              <span className="project-item-icon">
+                {projectIcons ? (
+                  <ProjectAvatar
+                    path={project.path}
+                    name={projectName(project.path)}
+                    icon={project.icon}
+                  />
+                ) : (
+                  <Folder size={15} />
+                )}
+              </span>
+              <span className="palette-text">
+                <span className="palette-label">{projectName(project.path)}</span>
+                <span className="palette-detail" title={project.path}>
+                  {project.path}
+                </span>
+              </span>
+              <span className="palette-hint">
+                {busy === project.path ? (
+                  <LoaderCircle size={13} className="status-spinner" aria-label="Creating" />
+                ) : project.path === initialProject ? (
+                  'Current'
+                ) : (
+                  relativeTime(project.lastActiveAt, now)
+                )}
+              </span>
+            </Autocomplete.Item>
+          )}
+        </Autocomplete.List>
+      </Autocomplete.Root>
+      {error ? (
+        <div className="error-banner new-thread-error" role="alert">
+          {error}
         </div>
-        {error ? (
-          <div className="error-banner" role="alert">
-            {error}
-          </div>
-        ) : null}
-        <div className="dialog-actions">
-          <button className="secondary" type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className="primary" autoFocus disabled={busy}>
-            {busy ? 'Creating…' : 'Create thread'}
-          </button>
-        </div>
-      </form>
+      ) : null}
+      <div className="new-thread-footer">
+        <button type="button" className="secondary" onClick={onAddProject} disabled={Boolean(busy)}>
+          <FolderPlus size={14} />
+          Add project…
+        </button>
+        <span className="new-thread-keys">↑↓ to move · Enter to start</span>
+      </div>
     </Modal>
   )
 }

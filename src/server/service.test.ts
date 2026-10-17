@@ -341,6 +341,62 @@ it('answers a waiting question with the message you send instead of picking', as
   })
   await settle(created.id, finish)
 })
+it('shares the sidebar Group by setting across every browser, and keeps it', async () => {
+  expect(service.snapshot().ui).toEqual({ groupBy: 'project' })
+  let updates = 0
+  const unsubscribe = service.subscribe(() => updates++)
+  expect(await service.updateUi({ groupBy: 'none' })).toEqual({ groupBy: 'none' })
+  unsubscribe()
+  // Every open window hears about it, and it's in the next snapshot.
+  expect(updates).toBeGreaterThan(0)
+  expect(service.snapshot().ui).toEqual({ groupBy: 'none' })
+  // Saved, so a restart keeps it.
+  const { UiStore, uiStorePath } = await import('./store')
+  const store = new UiStore(uiStorePath(join(directory, 'threads.json')))
+  await store.load()
+  expect(store.settings).toEqual({ groupBy: 'none' })
+  await expect(service.updateUi({ groupBy: 'sideways' })).rejects.toThrow()
+  await expect(service.updateUi({ fontSize: 40 })).rejects.toThrow()
+})
+it('shares view settings across browsers, checks them, and keeps the music spot quiet', async () => {
+  let updates = 0
+  const unsubscribe = service.subscribe(() => updates++)
+  await service.updateUi({
+    theme: 'dark',
+    projectIcons: false,
+    animations: true,
+    collapsed: { '/work/app': true },
+    music: { enabled: true, url: 'https://youtu.be/jfKfPfyJRdk', volume: 30 },
+    agent: {
+      provider: 'codex',
+      settings: { codex: { model: 'gpt-6-luna', effort: 'high', permissionMode: 'full-access' } },
+    },
+  })
+  expect(updates).toBe(1)
+  // The music's spot is saved often, so on its own it isn't broadcast.
+  await service.updateUi({ musicPosition: { source: 'jfKfPfyJRdk:', time: 42 } })
+  expect(updates).toBe(1)
+  unsubscribe()
+  expect(service.snapshot().ui).toMatchObject({
+    groupBy: 'project',
+    theme: 'dark',
+    projectIcons: false,
+    musicPosition: { time: 42 },
+  })
+  for (const bad of [
+    { theme: 'neon' },
+    { music: { enabled: true, url: 'x', volume: 400 } },
+    { agent: { settings: { codex: { model: 'x', effort: 'y', permissionMode: 'root' } } } },
+    { collapsed: { a: 'yes' } },
+  ])
+    await expect(service.updateUi(bad), JSON.stringify(bad)).rejects.toThrow()
+  // A damaged file keeps the good fields and drops the rest.
+  const { readUiSettings } = await import('./ui-settings')
+  expect(readUiSettings({ theme: 'light', projectIcons: 'nope', groupBy: 'sideways' })).toEqual({
+    groupBy: 'project',
+    theme: 'light',
+  })
+})
 it('renames a project label without touching its folder, and resets it with an empty name', async () => {
   const created = await thread()
   const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })

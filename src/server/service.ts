@@ -19,7 +19,14 @@ import {
   type Thread,
   type ThreadSummary,
 } from '../types'
-import { ProjectStore, ThreadStore, defaultStorePath, projectStorePath } from './store'
+import {
+  ProjectStore,
+  ThreadStore,
+  defaultStorePath,
+  projectStorePath,
+  UiStore,
+  uiStorePath,
+} from './store'
 import { UploadError, Uploads, attachmentSchema } from './uploads'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
@@ -36,6 +43,7 @@ const noTitles: TitleWriter = {
   nameCodexThread: async () => {},
 }
 import { BrowserManager } from './browser'
+import { uiChange } from './ui-settings'
 import { ProjectIcons } from './project-icons'
 import { ProcessManager } from './processes'
 import { runCodex } from './providers/codex'
@@ -167,6 +175,8 @@ export class AgentService {
   private timer?: NodeJS.Timeout
   private persistenceError?: string
   readonly icons: ProjectIcons
+  // View settings shared by every browser (Group by…).
+  readonly ui: UiStore
   constructor(
     readonly store: ThreadStore,
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
@@ -178,6 +188,7 @@ export class AgentService {
     // The agents' browser sessions (browser_* tools); nothing starts until a tool uses it.
     readonly browsers = new BrowserManager(),
   ) {
+    this.ui = new UiStore(uiStorePath(store.path))
     // Project icons for the sidebar avatars, looked up in the background.
     this.icons = new ProjectIcons(() => this.notify())
     // Process status changes (started, URL found, exited) go out with the live updates.
@@ -243,6 +254,22 @@ export class AgentService {
     } catch {
       // Kept in memory until the next save; only the order is at stake.
     }
+  }
+  // Changes shared view settings (see ui-settings.ts); every open window gets them with the
+  // next live update. The music's position is saved often, so on its own it isn't broadcast:
+  // a window reads it when it starts the music.
+  async updateUi(input: unknown) {
+    const change = uiChange.parse(input)
+    const previous = { ...this.ui.settings }
+    Object.assign(this.ui.settings, change)
+    try {
+      await this.ui.save()
+    } catch {
+      this.ui.settings = previous
+      throw new HttpError(500, 'Could not save the setting.')
+    }
+    if (Object.keys(change).some((key) => key !== 'musicPosition')) this.notify()
+    return this.ui.settings
   }
   async addProject(input: unknown) {
     const path = await resolveFolder(projectSchema.parse(input).path)
@@ -415,6 +442,7 @@ export class AgentService {
       thread: id ? (this.store.threads.get(id) ?? null) : null,
       processes: this.processes.list(),
       browsers: this.browsers.list(),
+      ui: this.ui.settings,
       persistenceError: this.persistenceError,
     }
   }
@@ -435,6 +463,7 @@ export class AgentService {
       vscodeAvailable(),
     ])
     return {
+      ui: this.ui.settings,
       threads: this.list(),
       projects: this.projects(),
       providers: { codex, claude },
@@ -1346,6 +1375,7 @@ export function getService() {
     await store.load()
     const service = new AgentService(store, undefined, undefined, undefined, undefined, titleWriter)
     await service.projectStore.load()
+    await service.ui.load()
     // Load the agents' model lists now, so creating the first thread doesn't wait for them.
     warmModels()
     return service

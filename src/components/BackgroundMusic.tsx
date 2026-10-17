@@ -8,6 +8,7 @@ import {
   useMusicSettings,
 } from '../background-music'
 import { isNotifyingTab } from '../notifications'
+import { fetchShared } from '../shared-settings'
 
 // The hidden music player (see music.ts). It plays while `working` (any agent is working) in
 // the one tab that plays sounds, fading in and out; elsewhere it stays paused. The embed is
@@ -65,6 +66,7 @@ export function BackgroundMusic({
   }
   // Where to start: the saved spot, read when the player is created.
   const [from, setFrom] = useState<{ time: number; index?: number } | undefined>()
+  const starting = useRef(false)
   useEffect(() => {
     // The player's own reports, from the embed only.
     const onMessage = (event: MessageEvent) => {
@@ -108,9 +110,27 @@ export function BackgroundMusic({
     if (!source) return
     const check = () => {
       const shouldPlay = working && isNotifyingTab()
-      if (shouldPlay && !needed) {
-        setFrom(loadPosition(sourceKey))
-        setNeeded(true)
+      if (shouldPlay && !needed && !starting.current) {
+        // Start from the latest spot: the server's (maybe from another browser) when it's for
+        // this song, else this browser's. Don't wait more than a moment for it.
+        starting.current = true
+        const local = loadPosition(sourceKey)
+        void Promise.race([
+          fetchShared(),
+          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 1500)),
+        ]).then((shared) => {
+          const position = shared?.musicPosition
+          setFrom(
+            position?.source === sourceKey
+              ? {
+                  time: position.time,
+                  ...(position.index !== undefined ? { index: position.index } : {}),
+                }
+              : local,
+          )
+          setNeeded(true)
+          starting.current = false
+        })
       }
       if (!ready) return
       if (shouldPlay && !playing.current) {

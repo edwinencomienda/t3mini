@@ -25,7 +25,7 @@ const lift: Record<string, number> = {
 }
 export const mascotLift = (provider: Provider, mood: Mood) => lift[`${provider}-${mood}`] ?? 0
 
-const setting = switchSetting('t3-mini:mascots')
+const setting = switchSetting('t3-mini:mascots', 'animations')
 export const saveMascots = setting.save
 // The saved choice (on unless turned off), for the Settings switch.
 export const useMascotSetting = () => setting.useSetting()

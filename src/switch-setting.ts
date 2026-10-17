@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { registerShared, shareSetting } from './shared-settings'
 
-// An on/off appearance setting kept per browser (on unless turned off), shared live by every
-// component using it: the Settings switch flips it and the UI follows right away.
-export function switchSetting(key: string) {
+// An on/off appearance setting (on unless turned off), shared by every browser and window
+// through the server (`field`), with this browser's copy in localStorage so it applies at once.
+// Every component using it follows right away.
+export function switchSetting(key: string, field: 'projectIcons' | 'animations') {
   const listeners = new Set<(on: boolean) => void>()
   const stored = () => {
     try {
@@ -11,7 +13,8 @@ export function switchSetting(key: string) {
       return true
     }
   }
-  function save(on: boolean) {
+  // This browser's copy, and everything showing it.
+  function adopt(on: boolean) {
     try {
       if (on) localStorage.removeItem(key)
       else localStorage.setItem(key, 'off')
@@ -20,6 +23,18 @@ export function switchSetting(key: string) {
     }
     listeners.forEach((listener) => listener(on))
   }
+  function save(on: boolean) {
+    adopt(on)
+    shareSetting({ [field]: on })
+  }
+  registerShared(
+    field,
+    // Carried over only when turned off here (on is the default).
+    () => (typeof localStorage !== 'undefined' && !stored() ? false : undefined),
+    (on) => {
+      if (on !== stored()) adopt(on)
+    },
+  )
   // Off during the server render and first paint unless `initial` says otherwise; the saved
   // choice is read after mount.
   function useSetting(initial = false) {
