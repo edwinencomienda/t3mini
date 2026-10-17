@@ -60,10 +60,10 @@ import {
   isNotifyingTab,
   loadNotificationPreferences,
   markTabAlive,
+  setServerTab,
+  setTabView,
   markTabVisited,
   tabHeartbeatMs,
-  loadUnread,
-  saveUnread,
   requestDesktopPermission,
   saveNotificationPreferences,
   threadEvents,
@@ -760,11 +760,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
           processes?: ProcessInfo[]
           browsers?: BrowserInfo[]
           ui?: UiSettings
+          activeTab?: string | null
           persistenceError?: string
         }
         setProjects(data.projects ?? [])
         setProcesses(data.processes ?? [])
         setBrowsers(data.browsers ?? [])
+        // Which tab, in any browser or profile, notifies and plays music.
+        if (data.activeTab !== undefined) setServerTab(data.activeTab)
         if (data.ui) {
           setGroupBy(data.ui.groupBy)
           applyShared(data.ui)
@@ -888,22 +891,63 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setToasts((current) => current.filter((item) => item.thread.id !== activeId))
     markRead(activeId)
   }, [activeId])
-  const [unread, setUnread] = useState<Set<string>>(() => new Set())
-  useEffect(() => {
-    // The thread open on page load counts as seen.
-    const saved = loadUnread()
-    if (selectedId.current && saved.delete(selectedId.current)) saveUnread(saved)
-    setUnread(saved)
-  }, [])
+  // Unread threads come from the server (finished or failed while nobody was looking), so every
+  // browser and device agrees. Opening one marks it read everywhere; `seen` hides the dot here
+  // right away, before the server's update arrives.
+  const [seen, setSeen] = useState<Set<string>>(() => new Set())
+  const unread = new Set(
+    threads.filter((item) => item.unread && !seen.has(item.id)).map((item) => item.id),
+  )
+  const unreadRef = useRef(unread)
+  unreadRef.current = unread
   function markRead(id: string) {
-    setUnread((current) => {
-      if (!current.has(id)) return current
-      const next = new Set(current)
-      next.delete(id)
-      saveUnread(next)
-      return next
+    if (!unreadRef.current.has(id)) return
+    setSeen((current) => new Set(current).add(id))
+    void api(`threads/${id}/read`, 'POST', {}).catch(() => {
+      // Not saved: show it as unread again.
+      setSeen((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
     })
   }
+  // The thread you're looking at is read, including one that was unread when the page loaded
+  // (the thread list arrives after the page does).
+  useEffect(() => {
+    if (activeId && document.visibilityState === 'visible' && unread.has(activeId))
+      markRead(activeId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads, activeId])
+  // Forget `seen` entries once the server agrees, so a thread can be unread again later.
+  useEffect(() => {
+    setSeen((current) => {
+      const still = [...current].filter((id) =>
+        threads.some((item) => item.id === id && item.unread),
+      )
+      return still.length === current.size ? current : new Set(still)
+    })
+  }, [threads])
+  // Tell the server which thread this tab shows and whether you're looking at it.
+  useEffect(() => {
+    const update = () => {
+      const visible = document.visibilityState === 'visible'
+      setTabView({
+        ...(activeId ? { viewing: activeId } : {}),
+        watching:
+          visible && (document.hasFocus() || window.matchMedia('(pointer: coarse)').matches),
+      })
+    }
+    update()
+    window.addEventListener('focus', update)
+    window.addEventListener('blur', update)
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      window.removeEventListener('focus', update)
+      window.removeEventListener('blur', update)
+      document.removeEventListener('visibilitychange', update)
+    }
+  }, [activeId])
   useEffect(() => {
     // Coming back to the window counts as seeing the thread that's open, and makes this the
     // tab that notifies.
@@ -945,17 +989,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const preferences = notifyRef.current
     // With several tabs open, only the one you used last chimes and sends desktop notifications.
     const notifier = isNotifyingTab()
-    const finished = events.filter((event) => event.kind === 'completed' || event.kind === 'failed')
     if (notifier && preferences.sound && events.some((event) => event.kind === 'completed'))
       playSound(preferences.soundName)
-    const unseen = finished.filter((event) => !(focused && event.thread.id === selectedId.current))
-    if (unseen.length)
-      setUnread((current) => {
-        const next = new Set(current)
-        for (const event of unseen) next.add(event.thread.id)
-        saveUnread(next)
-        return next
-      })
+    // (Unread markers are set by the server, which knows whether you're watching anywhere.)
     for (const event of events) {
       // No toast for the thread already on screen, focused or not.
       const onScreen = visible && event.thread.id === selectedId.current
@@ -969,7 +1005,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
           // e.g. "t3-mini · Claude finished", with the thread's title underneath.
           const notification = new Notification(
             `${projectLabel(projects, event.thread.cwd)} · ${names[event.thread.provider]} ${eventLabel(event).toLowerCase()}`,
-            { body: event.thread.title, tag: event.thread.id },
+            // One entry per thread (tag), but a newer one still pops up (renotify) instead of
+            // silently replacing the last in Notification Center.
+            {
+              body: event.thread.title,
+              tag: event.thread.id,
+              renotify: true,
+            } as NotificationOptions,
           )
           notification.onclick = () => {
             window.focus()

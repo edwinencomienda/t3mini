@@ -43,6 +43,7 @@ const noTitles: TitleWriter = {
   nameCodexThread: async () => {},
 }
 import { BrowserManager } from './browser'
+import { TabRegistry } from './tabs'
 import { uiChange } from './ui-settings'
 import { ProjectIcons } from './project-icons'
 import { ProcessManager } from './processes'
@@ -105,6 +106,7 @@ const summary = (thread: Thread): ThreadSummary => ({
   status: thread.status,
   updatedAt: thread.updatedAt,
   lastMessageAt: lastMessageAt(thread),
+  ...(thread.unread ? { unread: true } : {}),
   ...(thread.status === 'waiting'
     ? {
         waitingFor: thread.approvals.some((item) => item.questions?.length)
@@ -175,6 +177,8 @@ export class AgentService {
   private timer?: NodeJS.Timeout
   private persistenceError?: string
   readonly icons: ProjectIcons
+  // Open tabs everywhere, to pick the one that notifies (see tabs.ts).
+  readonly tabs = new TabRegistry(() => this.notify())
   // View settings shared by every browser (Group by…).
   readonly ui: UiStore
   constructor(
@@ -254,6 +258,14 @@ export class AgentService {
     } catch {
       // Kept in memory until the next save; only the order is at stake.
     }
+  }
+  // You've seen a thread (opened it in any browser): it's no longer unread anywhere.
+  async markRead(id: string) {
+    const thread = this.get(id)
+    if (!thread.unread) return { ok: true }
+    delete thread.unread
+    this.changed()
+    return { ok: true }
   }
   // Changes shared view settings (see ui-settings.ts); every open window gets them with the
   // next live update. The music's position is saved often, so on its own it isn't broadcast:
@@ -443,6 +455,7 @@ export class AgentService {
       processes: this.processes.list(),
       browsers: this.browsers.list(),
       ui: this.ui.settings,
+      activeTab: this.tabs.leader() ?? null,
       persistenceError: this.persistenceError,
     }
   }
@@ -956,6 +969,12 @@ export class AgentService {
           : activity,
       )
       thread.completedAt = new Date().toISOString()
+      // Unread unless you're looking at it somewhere (any browser, profile, or phone).
+      if (
+        (thread.status === 'completed' || thread.status === 'failed') &&
+        !this.tabs.isWatching(thread.id)
+      )
+        thread.unread = true
       touch()
       this.runs.delete(thread.id)
       // Messages queued during the turn go out together as the next turn, unless it was stopped.

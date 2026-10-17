@@ -102,21 +102,12 @@ export async function requestDesktopPermission(): Promise<DesktopPermission> {
 }
 
 // Threads that finished while you weren't looking, so the sidebar can mark them until opened.
-const unreadKey = 't3-mini:unread'
-export function loadUnread(): Set<string> {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(unreadKey) || '[]')
-    return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : [])
-  } catch {
-    return new Set()
-  }
-}
-export function saveUnread(ids: Set<string>) {
-  try {
-    localStorage.setItem(unreadKey, JSON.stringify([...ids]))
-  } catch {
-    // Without storage the indicator still works until reload.
-  }
+// Unread markers used to be kept here per browser; they're on the server now (Thread.unread).
+// Clear the old copy once.
+try {
+  if (typeof localStorage !== 'undefined') localStorage.removeItem('t3-mini:unread')
+} catch {
+  // Nothing to clear.
 }
 
 // Open t3 mini tabs in this browser, so only one of them notifies: the one you used last.
@@ -169,23 +160,62 @@ function updateTabs(change: (tabs: Record<string, TabRecord>, now: number) => vo
     // Without storage every tab notifies on its own, as before.
   }
 }
+// The same reports go to the t3 mini server, which sees the tabs of every browser profile
+// (each profile has its own localStorage) and phone, and picks one tab for all of them. Its
+// choice arrives with live updates (setServerTab); localStorage is the fallback while the
+// server's choice isn't known.
+let serverTab: string | null | undefined
+// The thread this tab shows and whether you're looking at it, sent with every report, so the
+// server doesn't mark a thread you're watching unread when it finishes.
+let view: { viewing?: string; watching?: boolean } = {}
+export function setTabView(next: { viewing?: string; watching: boolean }) {
+  if (next.viewing === view.viewing && next.watching === view.watching) return
+  view = next
+  report('alive')
+}
+export const setServerTab = (id: string | null | undefined) => {
+  serverTab = id
+}
+function report(event: 'visit' | 'alive' | 'leave') {
+  if (typeof fetch === 'undefined') return
+  void fetch('/api/tabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: tabId, event, ...view }),
+    // Still sent while the page is closing.
+    keepalive: true,
+  })
+    .then((response) => (response.ok ? response.json() : undefined))
+    .then((data?: { activeTab?: string | null }) => {
+      if (data && 'activeTab' in data) serverTab = data.activeTab
+    })
+    .catch(() => {})
+}
 // This tab is being used (focused or shown).
-export const markTabVisited = () =>
+export const markTabVisited = () => {
   updateTabs((tabs, now) => {
     tabs[tabId] = { visitedAt: now, aliveAt: now }
   })
+  report('visit')
+}
 // This tab is still open (also registers a tab opened in the background).
-export const markTabAlive = () =>
+export const markTabAlive = () => {
   updateTabs((tabs, now) => {
     tabs[tabId] = { visitedAt: tabs[tabId]?.visitedAt ?? 0, aliveAt: now }
   })
+  report('alive')
+}
 // This tab is closing.
-export const forgetTab = () =>
+export const forgetTab = () => {
   updateTabs((tabs) => {
     delete tabs[tabId]
   })
-// Whether this tab is the one that notifies. With no record at all (storage blocked), yes.
+  report('leave')
+}
+// Whether this tab is the one that notifies (and plays music): the server's choice across
+// every browser, else this browser's own record; with neither (storage blocked), yes.
 export function isNotifyingTab() {
+  if (serverTab) return serverTab === tabId
   const tab = notifyingTab(loadTabs(), Date.now())
   return tab === undefined || tab === tabId
 }

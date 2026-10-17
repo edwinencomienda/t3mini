@@ -397,6 +397,31 @@ it('shares view settings across browsers, checks them, and keeps the music spot 
     theme: 'light',
   })
 })
+it('marks a finished thread unread for every device, unless you are watching it', async () => {
+  // Nobody looking: it finishes unread, in the shared thread list.
+  const first = await thread()
+  await service.send(first.id, { text: 'Go' })
+  await started
+  await settle(first.id, finish)
+  expect(service.list().find((item) => item.id === first.id)?.unread).toBe(true)
+  // Opening it anywhere clears it for everyone.
+  await service.markRead(first.id)
+  expect(service.list().find((item) => item.id === first.id)?.unread).toBeUndefined()
+  // A tab showing it, with you looking: it finishes read.
+  started = new Promise((resolve) => (markStarted = resolve))
+  service.tabs.report('tab-on-phone', 'visit', Date.now(), { viewing: first.id, watching: true })
+  await service.send(first.id, { text: 'Again' })
+  await started
+  await settle(first.id, finish)
+  expect(service.get(first.id).unread).toBeUndefined()
+  // The tab is open but you've switched away: unread again.
+  started = new Promise((resolve) => (markStarted = resolve))
+  service.tabs.report('tab-on-phone', 'alive', Date.now(), { viewing: first.id, watching: false })
+  await service.send(first.id, { text: 'Once more' })
+  await started
+  await settle(first.id, finish)
+  expect(service.get(first.id).unread).toBe(true)
+})
 it('renames a project label without touching its folder, and resets it with an empty name', async () => {
   const created = await thread()
   const renamed = await service.renameProject({ path: created.cwd, name: '  Client site  ' })

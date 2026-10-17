@@ -103,6 +103,8 @@ export type Thread = {
   background?: BackgroundTask[]
   // The agent's latest to-do checklist (kept across turns: Claude's tasks live for the session).
   todos?: Todo[]
+  // Finished or failed while nobody was looking at it (cleared when opened anywhere).
+  unread?: boolean
   // Where the title came from: your first message (replaced by an AI title once there is one),
   // an AI, or a rename by you or the agent (never replaced automatically).
   titleSource?: 'message' | 'ai' | 'custom'
@@ -116,6 +118,8 @@ export type ThreadSummary = Pick<
   lastMessageAt: string
   // While waiting: on a yes/no approval, or on answers to the agent's question.
   waitingFor?: 'approval' | 'question'
+  // Finished or failed while nobody was looking (shared by every browser and device).
+  unread?: boolean
 }
 // A quick look at a thread for the sidebar's hover card: its settings, size, and the start and
 // latest reply of the conversation (shortened).

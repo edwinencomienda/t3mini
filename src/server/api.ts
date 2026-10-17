@@ -223,6 +223,22 @@ export async function handleApi(request: Request) {
         }
       }
     }
+    // Open tabs report focus, heartbeats, and closing, so one tab in all browsers notifies.
+    if (parts[0] === 'tabs' && !parts[1] && request.method === 'POST') {
+      const { id, event, viewing, watching } = z
+        .object({
+          id: z.string().regex(/^[a-z0-9-]{8,64}$/),
+          event: z.enum(['visit', 'alive', 'leave']),
+          viewing: z.string().max(100).optional(),
+          watching: z.boolean().optional(),
+        })
+        .parse(await request.json())
+      service.tabs.report(id, event, Date.now(), {
+        ...(viewing ? { viewing } : {}),
+        ...(watching !== undefined ? { watching } : {}),
+      })
+      return Response.json({ activeTab: service.tabs.leader() ?? null })
+    }
     // View settings shared by every browser (Group by…).
     if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'POST')
       return Response.json(await service.updateUi(await request.json()))
@@ -333,6 +349,8 @@ export async function handleApi(request: Request) {
         await service.browsers.close(id)
         return Response.json({ ok: true })
       }
+      if (id && parts[2] === 'read' && request.method === 'POST')
+        return Response.json(await service.markRead(id))
       if (id && parts[2] === 'glance' && request.method === 'GET')
         return Response.json(service.glance(id))
       if (id && parts[2] === 'pull-request' && request.method === 'GET')
