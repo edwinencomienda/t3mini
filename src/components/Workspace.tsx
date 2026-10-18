@@ -91,6 +91,7 @@ import { Autocomplete } from '@base-ui/react/autocomplete'
 import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
+import { ScrollToBottom } from './ScrollToBottom'
 import { Celebration, LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
 import { buildTurns, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
@@ -2581,6 +2582,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             </div>
             {thread || !activeId ? (
               <footer className="composer-area">
+                <ScrollToBottom scrollArea={scrollArea} stickToBottom={stickToBottom} />
                 {error ? (
                   <div className="error-banner" role="alert">
                     <span>{error}</span>
