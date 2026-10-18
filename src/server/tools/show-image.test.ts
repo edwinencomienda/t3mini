@@ -29,6 +29,7 @@ beforeEach(async () => {
     saveImage: (bytes) => uploads.saveImage(bytes),
     processes: {} as never,
     browser: {} as never,
+    saveHtml: async () => ({ id: 'x.html' }),
     rename: vi.fn(),
   }
 })

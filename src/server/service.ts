@@ -883,6 +883,7 @@ export class AgentService {
           refName: (ref) => this.browsers.refName(thread.id, ref),
         },
         saveImage: (bytes) => this.uploads.saveImage(bytes),
+        saveHtml: (html) => this.uploads.saveHtml(html),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
         // written anything since the user's message, it gets a reply of its own.

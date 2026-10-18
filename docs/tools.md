@@ -1,6 +1,6 @@
 # Agent tools (developer guide)
 
-t3 mini can give agents its own tools. `show_image` lets an agent show an image in the chat (a screenshot, a generated chart, a design export), and `show_diagram` lets it draw a Mermaid diagram. The system is built so new tools (charts, tables, diagrams…) are one file each.
+t3 mini can give agents its own tools. `show_image` lets an agent show an image in the chat (a screenshot, a generated chart, a design export), `show_diagram` lets it draw a Mermaid diagram, and `show_html` lets it show a small interactive HTML page in a sealed sandbox. The system is built so new tools (charts, tables, diagrams…) are one file each.
 
 Status: proof of concept, working with **Claude** and **Codex**.
 
@@ -12,6 +12,7 @@ src/server/tools/
   paths.ts       resolveAllowedFile(): the shared "inside the project or temp" check
   show-image.ts  the show_image tool
   show-diagram.ts  the show_diagram tool
+  show-html.ts   the show_html tool
   rename-thread.ts  the rename_thread tool
   processes.ts   the process tools (start_process…)
   browser.ts     the browser tools (browser_open…, see docs/browser.md)
@@ -20,10 +21,11 @@ src/blocks.ts    Block types: rich content tools add to replies (shared with the
 src/diagrams.ts  Mermaid diagram type detection (shared by show_diagram and the client)
 src/components/blocks.tsx   one renderer per block type
 src/components/Diagram.tsx  the Mermaid diagram card (also used for ```mermaid code blocks)
+src/components/HtmlView.tsx the sandboxed HTML card (show_html)
 ````
 
 1. **A tool** is a definition: `name`, `label` (work log), `description` (what the agent reads), `input` (a zod raw shape: validation and the agent-facing schema in one), `safety`, optional `summarize()` (work log summary), and `run(context, input)`.
-2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
+2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `saveHtml(html)` (store an HTML page with the uploads), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
 3. **The Claude adapter** (`providers/claude.ts`) turns the registry into an in-process MCP server with the SDK's `createSdkMcpServer()` + `tool()`, named `t3mini`. Claude sees `mcp__t3mini__<name>`. `safe` tools go in `allowedTools` and are allowed in `canUseTool`, so they never prompt. A thrown `ToolError` goes back to Claude as a readable error (`isError: true`); other errors become "<Label> failed."
 4. **Blocks**: `attach()` appends a `Block` to the latest assistant message of the turn, or creates an assistant message holding only the block if the agent hasn't written anything since the user's message. Blocks are saved with the thread (`Message.blocks`) and rendered by `components/blocks.tsx` under the message text.
 5. **The Codex adapter** (`providers/codex.ts`) declares every tool as a `dynamicTools` entry (`type: 'function'`, `inputSchema` from `toolJsonSchema()`) on `thread/start`, and answers the app-server's `item/tool/call` requests with `{ success, contentItems: [{ type: 'inputText', text }] }`. Codex saves dynamic tools with the thread (session `dynamic_tools`), so resumed turns keep them; `thread/resume` can't add them, so **Codex threads created before a tool existed don't have it**. `approval` tools go through Allow once / Decline before running. The feature is experimental in the app-server; t3 mini already initializes with `capabilities.experimentalApi: true`.
@@ -84,6 +86,18 @@ Codex has a built-in image generator. Its results arrive as `imageGeneration` it
 - **Security:** the source is untrusted. Mermaid runs with `securityLevel: 'strict'` (labels are cleaned, no scripts, `click` callbacks off), and the resulting SVG goes through DOMPurify (SVG, HTML and MathML profiles, `foreignObject` for labels, Mermaid's `<style>`; no `img`/`image`/`iframe`/forms) with a hook that drops every `href` that isn't an in-diagram `#fragment`. Nothing in a diagram can run code, load a resource, or open a link. The SVG is only inserted after that.
 - **Markdown:** ` ```mermaid ` code blocks in any reply use the same card; while one is still streaming (or isn't valid) the plain code block shows instead.
 - Card: title, **Diagram / Code** toggle, copy source, **Expand** (click the diagram too): a full-window view with zoom (25–400%) and **Download SVG**.
+
+## show_html
+
+- Input: `{ html, title? }`. `html` is a complete page or a fragment with inline `<style>` and `<script>` (JavaScript works), up to 200 KB; `title` (≤120) is shown on the card. Empty or oversized HTML is refused with a readable error. Safety: `safe` (it only displays, sealed off as below).
+- Effect: saves the page with the uploads (`<attachments>/html/<uuid>.html`, mode 0600) and attaches `{ type: 'html', id, title }` to the reply. `GET /api/html/:id` returns it as **plain text** (`nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`), so opening the URL directly never runs it; only the card does. Ids are checked against `<uuid>.html`, so no other file can be read.
+- **The card** (`components/HtmlView.tsx`): title, **Reload**, **View source**, **Copy HTML**, **Expand** (full-window). Its height follows the page (a small script inside posts only a number, clamped to 40–720 px; messages from anything but the card's own frame are ignored). The app's theme colors are passed in as CSS variables (`--background`, `--foreground`, `--card`, `--muted`, `--muted-foreground`, `--border`, `--primary`, `--font-sans`, `--font-mono`) with the right `color-scheme`, and the page is rebuilt when the theme changes.
+- **Security:** the HTML is untrusted (the agent may have copied it, or been tricked by something it read). It runs in an `<iframe sandbox="allow-scripts" srcdoc>`:
+  - **No `allow-same-origin`:** the page gets an opaque (`null`) origin, so it can't read t3 mini's page, cookies, `localStorage`, or call its API (which runs commands).
+  - **No other sandbox flags:** no popups, forms, top-level navigation, `alert`/`confirm`, downloads, or pointer lock.
+  - **Our CSP comes first in `<head>`:** `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`, so no network at all (no fetch, WebSockets, external scripts, styles, fonts, or images). The agent's HTML goes in `<body>`, where a CSP `<meta>` is ignored, so it can't loosen this. `referrerpolicy="no-referrer"`.
+  - **Known limit:** browsers can't stop a sandboxed page from navigating its own frame (`location = 'https://…'`), so one request can leave, carrying only what the page itself contains (nothing from t3 mini). The card notices the second `load`, removes the frame, and shows "The page tried to go to another address, so it was stopped" with **Run again**; it never restarts on its own, so a page can't loop.
+- Tested by hand with a hostile page: parent access, cookies, storage, fetch to t3 mini and outside, image beacons, popups, top navigation, form submit and `alert` were all blocked; self-navigation got out once and was stopped.
 
 ## Planned
 

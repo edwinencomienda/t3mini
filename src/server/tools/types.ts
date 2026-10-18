@@ -46,6 +46,8 @@ export type ToolContext = {
   attach: (block: Block) => void
   // Stores image bytes with the thread's uploads and returns the id to reference.
   saveImage: (bytes: Buffer) => Promise<{ id: string }>
+  // Stores an HTML page for show_html and returns the id to reference.
+  saveHtml: (html: string) => Promise<{ id: string }>
   // Long-running processes (dev servers…) in this thread's project.
   processes: ProjectProcesses
   // Renames this thread (never another one) and returns the saved title.

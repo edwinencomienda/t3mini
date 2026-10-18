@@ -160,6 +160,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     cwd: '/tmp',
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'shot' })),
+    saveHtml: async () => ({ id: 'x.html' }),
     processes: {} as never,
     rename: vi.fn(),
     browser: {

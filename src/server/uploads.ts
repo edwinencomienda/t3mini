@@ -57,6 +57,8 @@ const safeName = (name: string) =>
     .replace(/^\.+/, '')
     .slice(-80) || 'file'
 
+export const maxHtmlBytes = 200 * 1024
+const htmlId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.html$/
 export class Uploads {
   constructor(readonly directory: string) {}
   async save(input: unknown) {
@@ -98,6 +100,22 @@ export class Uploads {
         return { id, name, mimeType: extensionTypes[id.split('.').pop()!]! }
       }),
     )
+  }
+  // Stores an agent's HTML page (show_html) under a generated id. It's only ever served as plain
+  // text and shown inside a sandboxed frame (see HtmlView.tsx), never as a page of this site.
+  async saveHtml(html: string) {
+    const bytes = Buffer.from(html, 'utf8')
+    if (!html.trim()) throw new UploadError('The HTML is empty.')
+    if (bytes.length > maxHtmlBytes)
+      throw new UploadError(`HTML can be up to ${maxHtmlBytes / 1024} KB. Keep it smaller.`)
+    await mkdir(join(this.directory, 'html'), { recursive: true, mode: 0o700 })
+    const id = `${crypto.randomUUID()}.html`
+    await writeFile(join(this.directory, 'html', id), bytes, { mode: 0o600, flag: 'wx' })
+    return { id }
+  }
+  async readHtml(id: string) {
+    if (!htmlId.test(id)) throw new UploadError('Invalid page.')
+    return readFile(join(this.directory, 'html', id), 'utf8')
   }
   imagePath(id: string) {
     if (!imageId.test(id)) throw new UploadError('Invalid image.')

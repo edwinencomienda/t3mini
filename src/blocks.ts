@@ -4,4 +4,7 @@
 export type ImageBlock = { type: 'image'; id: string; caption?: string }
 // A Mermaid diagram, drawn in the browser (see src/diagrams.ts). Only the source text is saved.
 export type DiagramBlock = { type: 'diagram'; source: string; title?: string }
-export type Block = ImageBlock | DiagramBlock
+// A small HTML page from the agent (show_html), shown in a sealed sandbox (HtmlView.tsx). The
+// page itself is stored with the uploads; the block only references it.
+export type HtmlBlock = { type: 'html'; id: string; title?: string }
+export type Block = ImageBlock | DiagramBlock | HtmlBlock

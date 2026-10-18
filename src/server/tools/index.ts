@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { showImage } from './show-image'
 import { showDiagram } from './show-diagram'
+import { showHtml } from './show-html'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
 import { browserTools } from './browser'
@@ -10,6 +11,7 @@ import { ToolError, type ToolContext, type ToolDefinition } from './types'
 export const tools: ToolDefinition<any>[] = [
   showImage,
   showDiagram,
+  showHtml,
   renameThread,
   ...processTools,
   ...browserTools,

@@ -4290,3 +4290,85 @@ body.resizing {
 .project-chip .project-avatar-letter {
   font-size: 9px;
 }
+
+/* An agent's HTML page (show_html), sandboxed in a card. */
+.html-card {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  overflow: hidden;
+}
+.html-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.html-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.html-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+.html-card-actions .icon-button,
+.html-card-actions .html-copy {
+  width: 1.7rem;
+  height: 1.7rem;
+}
+.html-card-actions .icon-button.active {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.html-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  transition: height 0.15s;
+}
+.html-source {
+  margin: 0;
+  max-height: 28rem;
+  overflow: auto;
+  padding: 0.75rem 0.9rem;
+  background: var(--code-surface);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.html-card-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.html-card-note.warning {
+  border-top: 1px solid var(--border);
+  color: var(--warning);
+}
+.new-dialog.html-dialog {
+  width: min(64rem, calc(100vw - 2rem));
+  padding: 0.5rem;
+}
+.html-card-note .html-run-again {
+  margin-left: auto;
+  height: 1.8rem;
+  padding: 0 0.7rem;
+  font-size: 12.5px;
+}

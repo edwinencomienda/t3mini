@@ -10,6 +10,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   saveImage: vi.fn(),
   processes: {} as never,
   browser: {} as never,
+  saveHtml: async () => ({ id: 'x.html' }),
   rename,
 })
 
