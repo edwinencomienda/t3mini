@@ -1105,7 +1105,6 @@ kbd {
   border-radius: 0.85rem;
   border: 1px solid var(--border);
   background: var(--card);
-  box-shadow: var(--shadow);
 }
 .question-eyebrow {
   display: flex;
@@ -4724,4 +4723,36 @@ body.resizing {
   .compact-glyph {
     animation: none;
   }
+}
+
+/* Group by date: a small heading over each section (Today, Yesterday, This week, Older) that
+   folds it; the chevron shows on hover (right: folded, down: open). */
+.date-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.6rem 0.2rem;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--faint);
+  text-align: left;
+}
+.date-heading:hover {
+  color: var(--muted-foreground);
+}
+.date-chevron {
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    transform 0.15s;
+}
+.date-heading:hover .date-chevron,
+.date-heading:focus-visible .date-chevron {
+  opacity: 1;
+}
+.date-heading.open .date-chevron {
+  transform: rotate(90deg);
 }

@@ -95,6 +95,7 @@ import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
 import { ScrollToBottom } from './ScrollToBottom'
+import { dateSections } from '../sidebar-groups'
 import {
   Celebration,
   CompactMarker,
@@ -145,6 +146,7 @@ import {
   type Provider,
   type Status,
   type Thread,
+  type GroupBy,
   type ThreadSummary,
 } from '../types'
 
@@ -376,12 +378,19 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 const composerMaxHeight = 240
 // Where Group by was saved per browser before it moved to the server (read once, then removed).
 const groupByKey = 't3-mini:sidebar-group'
+const dateFoldedKey = 't3-mini:date-sections-folded'
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 // A project's name: the one you gave it in the sidebar, else its folder name.
 const projectLabel = (projects: ProjectSummary[], path: string) =>
   projects.find((project) => project.path === path)?.name || folderName(path)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
+// Group by: what each choice is called in the menu, and the trigger's description.
+const groupLabels: Record<GroupBy, { label: string; summary: string }> = {
+  project: { label: 'Project', summary: 'Grouped by project' },
+  date: { label: 'Date', summary: 'Grouped by date' },
+  none: { label: 'None', summary: 'Not grouped' },
+}
 function relativeTime(iso: string, now: number) {
   const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
   if (seconds < 60) return 'now'
@@ -389,7 +398,8 @@ function relativeTime(iso: string, now: number) {
   if (minutes < 60) return `${minutes}m`
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h`
-  const days = Math.round(hours / 24)
+  // Whole days, so a thread from yesterday reads "1d", matching Group by date's sections.
+  const days = Math.max(1, Math.floor((now - Date.parse(iso)) / 86_400_000))
   if (days < 7) return `${days}d`
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
@@ -537,6 +547,27 @@ export function Workspace({ threadId }: { threadId?: string }) {
   toggleSidebarRef.current = toggleSidebar
   // Collapsed projects in the sidebar, remembered across reloads.
   const [collapsed, setCollapsedState] = useState<Record<string, boolean>>({})
+  // Group by date: which sections are folded (this browser only). Older starts folded.
+  const [dateFolded, setDateFolded] = useState<Record<string, boolean>>({ Older: true })
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(dateFoldedKey) ?? 'null')
+      if (saved && typeof saved === 'object') setDateFolded(saved as Record<string, boolean>)
+    } catch {
+      // Unreadable: keep the defaults.
+    }
+  }, [])
+  function toggleDateSection(label: string) {
+    setDateFolded((current) => {
+      const next = { ...current, [label]: !current[label] }
+      try {
+        localStorage.setItem(dateFoldedKey, JSON.stringify(next))
+      } catch {
+        // Storage unavailable: it still applies until the page reloads.
+      }
+      return next
+    })
+  }
   useEffect(() => {
     try {
       const saved: unknown = JSON.parse(localStorage.getItem('t3-mini:collapsed-projects') || '[]')
@@ -717,10 +748,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Working background music is playing in this tab (shows the radio character).
   const [musicPlaying, setMusicPlaying] = useState(false)
   const projectIcons = useProjectIcons()
-  // How the sidebar lists threads: under their projects, or one list. Kept on the server, so
-  // every browser and window shows the same (it arrives with the bootstrap and live updates).
-  const [groupBy, setGroupBy] = useState<'project' | 'none'>('project')
-  function changeGroupBy(next: 'project' | 'none') {
+  // How the sidebar lists threads: under their projects, one list, or one list by date. Kept on
+  // the server, so every browser and window shows the same (it arrives with the bootstrap and
+  // live updates).
+  const [groupBy, setGroupBy] = useState<GroupBy>('project')
+  function changeGroupBy(next: GroupBy) {
     setGroupBy(next)
     void api('ui-settings', 'POST', { groupBy: next }).catch((error: Error) =>
       setError(error.message),
@@ -1873,11 +1905,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Rows in sidebar order (open projects only), for Shift-click ranges; and the picked threads
   // that still exist.
   const visibleOrder =
-    groupBy === 'none'
-      ? visibleThreads.map((item) => item.id)
-      : groups.flatMap((group) =>
-          !collapsed[group.path] || query ? group.items.map((item) => item.id) : [],
+    groupBy === 'date'
+      ? dateSections(visibleThreads, now).flatMap((section) =>
+          !dateFolded[section.label] || query ? section.items.map((item) => item.id) : [],
         )
+      : groupBy !== 'project'
+        ? visibleThreads.map((item) => item.id)
+        : groups.flatMap((group) =>
+            !collapsed[group.path] || query ? group.items.map((item) => item.id) : [],
+          )
   const pickedIds = threads.filter((item) => picked.has(item.id)).map((item) => item.id)
   function pickRange(id: string) {
     const from = visibleOrder.indexOf(pickAnchor.current ?? activeId ?? id)
@@ -2259,11 +2295,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
         </label>
         {groups.length ? (
           <div className="sidebar-section">
-            <span>{groupBy === 'none' ? 'Recents' : 'Projects'}</span>
-            {/* View options (like Claude Desktop): group threads by project, or not at all. */}
+            <span>{groupBy === 'project' ? 'Projects' : 'Recents'}</span>
+            {/* View options (like Claude Desktop): group threads by project, by date, or not at
+                all. */}
             <SettingsMenu
               label="Sidebar view"
-              text={groupBy === 'none' ? 'Not grouped' : 'Grouped by project'}
+              text={groupLabels[groupBy].summary}
               title="View options"
               triggerClassName="icon-button sidebar-view"
               trigger={<Settings2 size={13} />}
@@ -2272,18 +2309,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 {
                   key: 'group',
                   label: 'Group by',
-                  text: groupBy === 'none' ? 'None' : 'Project',
+                  text: groupLabels[groupBy].label,
                   value: groupBy,
-                  options: [
-                    { value: 'project', label: 'Project' },
-                    { value: 'none', label: 'None' },
-                  ],
-                  onSelect: (value) => changeGroupBy(value === 'none' ? 'none' : 'project'),
+                  options: (['project', 'date', 'none'] as const).map((value) => ({
+                    value,
+                    label: groupLabels[value].label,
+                  })),
+                  onSelect: (value) =>
+                    changeGroupBy(value === 'none' || value === 'date' ? value : 'project'),
                   closeOnSelect: true,
                 },
               ]}
             />
-            {groupBy === 'none'
+            {groupBy !== 'project'
               ? null
               : (() => {
                   const anyExpanded = groups.some((group) => !collapsed[group.path])
@@ -2313,7 +2351,33 @@ export function Workspace({ threadId }: { threadId?: string }) {
               {visibleThreads.map((item) => threadRow(item, true))}
             </section>
           ) : null}
-          {(groupBy === 'none' ? [] : groups).map(({ path: cwd, items }) => (
+          {groupBy === 'date' && groups.length
+            ? // The same list, split by when you last wrote in each thread (its own order, so
+              // each section stays in one piece). Empty sections are left out.
+              // Each section folds from its heading (the chevron shows on hover); search opens all.
+              dateSections(visibleThreads, now).map((section) => {
+                const open = !dateFolded[section.label] || Boolean(query)
+                return (
+                  <section
+                    className="project recents"
+                    key={section.label}
+                    aria-label={section.label}
+                  >
+                    <button
+                      type="button"
+                      className={`date-heading ${open ? 'open' : ''}`}
+                      aria-expanded={open}
+                      onClick={() => toggleDateSection(section.label)}
+                    >
+                      <span>{section.label}</span>
+                      <ChevronRight size={12} className="date-chevron" aria-hidden />
+                    </button>
+                    {open ? section.items.map((item) => threadRow(item, true)) : null}
+                  </section>
+                )
+              })
+            : null}
+          {(groupBy === 'project' ? groups : []).map(({ path: cwd, items }) => (
             <section className="project" key={cwd}>
               <div
                 className="project-header"

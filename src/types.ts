@@ -195,8 +195,10 @@ export type ProjectSummary = {
 export type ProviderHealth = { installed: boolean; version?: string }
 // View settings shared by every browser and window (kept on the server, sent with live
 // updates), unlike per-browser ones such as the theme.
+// How the sidebar lists threads: under their projects, one list, or one list by date.
+export type GroupBy = 'project' | 'none' | 'date'
 export type UiSettings = {
-  groupBy: 'project' | 'none'
+  groupBy: GroupBy
   theme?: 'system' | 'light' | 'dark'
   projectIcons?: boolean
   // Working animations (the agent characters).

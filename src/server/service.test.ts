@@ -355,6 +355,7 @@ it('shares the sidebar Group by setting across every browser, and keeps it', asy
   const store = new UiStore(uiStorePath(join(directory, 'threads.json')))
   await store.load()
   expect(store.settings).toEqual({ groupBy: 'none' })
+  expect(await service.updateUi({ groupBy: 'date' })).toEqual({ groupBy: 'date' })
   await expect(service.updateUi({ groupBy: 'sideways' })).rejects.toThrow()
   await expect(service.updateUi({ fontSize: 40 })).rejects.toThrow()
 })

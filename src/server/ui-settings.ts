@@ -13,7 +13,7 @@ const agentSettings = z.object({
   serviceTier: text(50).optional(),
 })
 export const uiFields = {
-  groupBy: z.enum(['project', 'none']),
+  groupBy: z.enum(['project', 'none', 'date']),
   theme: z.enum(['system', 'light', 'dark']),
   projectIcons: z.boolean(),
   animations: z.boolean(),
