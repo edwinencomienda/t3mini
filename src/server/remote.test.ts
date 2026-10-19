@@ -89,7 +89,8 @@ afterEach(async () => {
   vi.useRealTimers()
   await access.disable()
   await new Promise((resolve) => upstream.close(resolve))
-  await rm(directory, { recursive: true, force: true })
+  // A background "last seen" save may still be writing; retry instead of failing on it.
+  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 })
 
 it('is off until enabled, and only pairs while on', async () => {
