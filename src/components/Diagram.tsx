@@ -43,16 +43,16 @@ const palettes = {
     note: '#fffbeb',
     noteBorder: '#fcd34d',
   },
-  // The diagram sits on a card (--card, #222222 in dark): boxes a step lighter, labels on the
+  // The diagram sits on a card (--card, #1c1c1c in dark): boxes a step lighter, labels on the
   // card's own color.
   dark: {
-    background: '#222222',
-    node: '#2a2a2d',
+    background: '#1c1c1c',
+    node: '#252528',
     nodeBorder: '#45454c',
     text: '#f4f4f5',
     muted: '#a1a1aa',
     line: '#7a7a82',
-    cluster: '#262628',
+    cluster: '#212123',
     clusterBorder: '#38383d',
     accent: '#1e1b4b',
     accentBorder: '#4338ca',
