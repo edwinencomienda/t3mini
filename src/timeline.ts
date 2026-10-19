@@ -149,6 +149,14 @@ export function foldLabel(turn: Turn, status?: Status) {
   const notes = turn.work.length - turn.steps
   if (turn.steps) parts.push(`${turn.steps} ${turn.steps === 1 ? 'step' : 'steps'}`)
   else if (notes) parts.push(`${notes} ${notes === 1 ? 'message' : 'messages'}`)
+  // The conversation was compacted in this turn (the divider is inside the fold).
+  if (
+    turn.work.some(
+      (item) =>
+        item.kind === 'step' && item.activity.compact && item.activity.status === 'completed',
+    )
+  )
+    parts.push('compacted')
   return parts.join(' · ')
 }
 

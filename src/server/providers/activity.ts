@@ -2,6 +2,7 @@
 // one-line summary (the command or path), the full input for the expanded view, and output.
 import { findClaudeTool, findTool, maskInput } from '../tools'
 import type { StepHints } from '../tools/types'
+import type { Activity } from '../../types'
 
 export type ToolStep = {
   label: string
@@ -12,6 +13,8 @@ export type ToolStep = {
   todo?: boolean
   // A browser tool call.
   browser?: boolean
+  // Compacting the conversation (see Activity.compact).
+  compact?: Activity['compact']
 }
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -240,6 +243,9 @@ export function describeCodexItem(
     }
     case 'webSearch':
       return { label: 'Search the web', summary: string(item.query) }
+    // Codex compacting the conversation (no token counts reported).
+    case 'contextCompaction':
+      return { label: 'Compact', compact: {} }
     case 'mcpToolCall':
       return {
         label: string(item.tool) || 'Use tool',

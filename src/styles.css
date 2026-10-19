@@ -4632,3 +4632,96 @@ body.resizing {
 .thread-end span {
   flex-shrink: 0;
 }
+
+/* The agent compacting the conversation. While it runs: four lines squeezing together and
+   spreading apart before the live line's text. Afterwards: a divider across the work with how
+   much it shrank. */
+.compact-glyph {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  width: 12px;
+  height: 14px;
+  flex-shrink: 0;
+  animation: compact-squeeze 1.6s ease-in-out infinite;
+}
+.compact-glyph span {
+  display: block;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.compact-glyph span:nth-child(2),
+.compact-glyph span:nth-child(3) {
+  margin-inline: 2px;
+}
+.compact-glyph.still {
+  gap: 1.5px;
+  animation: none;
+}
+@keyframes compact-squeeze {
+  0%,
+  100% {
+    gap: 3px;
+    opacity: 1;
+  }
+  50% {
+    gap: 0.5px;
+    opacity: 0.7;
+  }
+}
+.live-line .compact-glyph {
+  color: var(--primary);
+}
+.compact-marker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.35rem 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.compact-rule {
+  flex: 1;
+  min-width: 1rem;
+  height: 1px;
+  background: var(--border);
+}
+.compact-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 0.5rem;
+  max-width: 80%;
+}
+.compact-label > span:first-of-type + span {
+  color: var(--foreground);
+}
+.compact-meter {
+  display: inline-block;
+  width: 3rem;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+.compact-meter span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+}
+.compact-details {
+  font-variant-numeric: tabular-nums;
+}
+.compact-marker.failed .compact-label,
+.compact-error {
+  color: var(--danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .compact-glyph {
+    animation: none;
+  }
+}

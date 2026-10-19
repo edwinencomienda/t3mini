@@ -15,6 +15,7 @@ import {
   tools,
 } from '../tools'
 import type { PromptImage, Runner } from './types'
+import type { Activity } from '../../types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { applyClaudeTodo, taskCreated, todoTools } from './todos'
 import { claudeSettings, threadSettings } from '../provider-settings'
@@ -134,6 +135,11 @@ export const runClaude: Runner = async (ctx) => {
   ctx.signal.addEventListener('abort', abort, { once: true })
   let gotResult = false
   let streamed = false
+  // A compaction in progress: its step id, what's known so far, and which of its two closing
+  // messages (the status saying how it went, the boundary with the counts) have arrived.
+  let compacting:
+    | { id: string; compact: NonNullable<Activity['compact']>; ended?: boolean; counted?: boolean }
+    | undefined
   let assistantId = String(crypto.randomUUID())
   const toolIds = new Set<string>()
   // t3 mini's own tools (show_image…) run in this process as an MCP server for this turn.
@@ -285,7 +291,53 @@ export const runClaude: Runner = async (ctx) => {
       // Background work (subagents, shells) keeps the turn open after Claude's last reply; show
       // what's still running so a long wait doesn't look stuck.
       if (message.type === 'system') {
-        if (message.subtype === 'task_started') {
+        // Compacting: a status while it runs, then (in either order) the status saying how it
+        // went and a boundary with the token counts. One step, kept open until both arrive.
+        if (message.subtype === 'status') {
+          if (message.status === 'compacting' && (!compacting || compacting.ended)) {
+            compacting = { id: `compact:${crypto.randomUUID()}`, compact: {} }
+            ctx.activity({
+              id: compacting.id,
+              label: 'Compact',
+              compact: compacting.compact,
+              status: 'running',
+            })
+          } else if (message.status !== 'compacting' && compacting && message.compact_result) {
+            const failed = message.compact_result === 'failed'
+            if (failed) compacting.compact.error = message.compact_error || 'Compacting failed.'
+            ctx.activity({
+              id: compacting.id,
+              label: 'Compact',
+              compact: { ...compacting.compact },
+              status: failed ? 'failed' : 'completed',
+            })
+            compacting.ended = true
+            if (failed || compacting.counted) compacting = undefined
+          }
+        } else if (message.subtype === 'compact_boundary') {
+          const meta = message.compact_metadata
+          const compact = {
+            ...(compacting?.compact ?? {}),
+            trigger: meta.trigger,
+            before: meta.pre_tokens,
+            ...(meta.post_tokens !== undefined ? { after: meta.post_tokens } : {}),
+            ...(meta.duration_ms !== undefined ? { ms: meta.duration_ms } : {}),
+          }
+          // A manual /compact can come as the boundary alone: a step of its own.
+          if (!compacting || compacting.counted) {
+            ctx.activity({
+              id: `compact:${crypto.randomUUID()}`,
+              label: 'Compact',
+              compact,
+              status: 'completed',
+            })
+          } else {
+            compacting.compact = compact
+            compacting.counted = true
+            ctx.activity({ id: compacting.id, label: 'Compact', compact, status: 'completed' })
+            if (compacting.ended) compacting = undefined
+          }
+        } else if (message.subtype === 'task_started') {
           tasks.set(message.task_id, {
             description: message.description,
             background: Boolean(message.is_backgrounded),

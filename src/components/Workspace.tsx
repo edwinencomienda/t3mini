@@ -95,7 +95,15 @@ import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
 import { ScrollToBottom } from './ScrollToBottom'
-import { Celebration, LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
+import {
+  Celebration,
+  CompactMarker,
+  LiveLine,
+  StepGroup,
+  StepRow,
+  TodoCard,
+  stepTitle,
+} from './WorkSteps'
 import { buildTurns, finishLabel, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -431,8 +439,10 @@ function groupSteps(items: WorkItem[], group: boolean) {
   const out: (WorkItem | Activity[])[] = []
   for (const item of items) {
     const last = out.at(-1)
-    if (group && item.kind === 'step' && Array.isArray(last)) last.push(item.activity)
-    else out.push(group && item.kind === 'step' ? [item.activity] : item)
+    // A compaction stands on its own, as a divider, never folded into a run of steps.
+    const step = item.kind === 'step' && !item.activity.compact
+    if (group && step && Array.isArray(last)) last.push(item.activity)
+    else out.push(group && step ? [item.activity] : item)
   }
   return out
 }
@@ -2037,6 +2047,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
           thread?.todos?.length ? (
             <TodoCard key="todos" todos={thread.todos} />
           ) : null
+        ) : item.activity.compact ? (
+          <CompactMarker key={item.activity.id} step={item.activity} />
         ) : (
           <StepRow key={item.activity.id} step={item.activity} />
         ),
@@ -2762,7 +2774,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           text={stepTitle(liveStep)}
                           since={liveStep.startedAt}
                           provider={thread.provider}
-                          mood="working"
+                          mood={liveStep.compact ? 'thinking' : 'working'}
+                          compacting={Boolean(liveStep.compact)}
                           // A browser step names the site it's on (opening one already does).
                           {...(liveStep.browser
                             ? {

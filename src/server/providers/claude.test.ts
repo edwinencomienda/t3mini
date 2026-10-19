@@ -375,3 +375,109 @@ it('asks questions, labels subagent steps, and reports background tasks', async 
   expect(ctx.background).toHaveBeenNthCalledWith(1, [{ id: 'task-1', description: 'Update docs' }])
   expect(ctx.background).toHaveBeenLastCalledWith([])
 })
+it('reports compacting the conversation as a step, with how much it shrank', async () => {
+  vi.mocked(query).mockImplementation(({ prompt }) => {
+    async function* messages(): AsyncGenerator<SDKMessage> {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input')
+      await prompt[Symbol.asyncIterator]().next()
+      const system = (fields: Record<string, unknown>) =>
+        ({ type: 'system', session_id: 'native-session', ...fields }) as unknown as SDKMessage
+      // Automatic: a status while it runs, then the boundary with the numbers.
+      yield system({ subtype: 'status', status: 'compacting' })
+      yield system({ subtype: 'status', status: null, compact_result: 'success' })
+      yield system({
+        subtype: 'compact_boundary',
+        compact_metadata: {
+          trigger: 'auto',
+          pre_tokens: 182_000,
+          post_tokens: 31_000,
+          duration_ms: 14_200,
+        },
+      })
+      // A manual /compact can come as the boundary alone.
+      yield system({
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'manual', pre_tokens: 40_000 },
+      })
+      // A failed one says why.
+      yield system({ subtype: 'status', status: 'compacting' })
+      yield system({
+        subtype: 'status',
+        status: null,
+        compact_result: 'failed',
+        compact_error: 'Not enough context to compact.',
+      })
+      // The other order: the boundary first, then the status. Still one step.
+      yield system({ subtype: 'status', status: 'compacting' })
+      yield system({
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'auto', pre_tokens: 150_000, post_tokens: 20_000 },
+      })
+      yield system({ subtype: 'status', status: null, compact_result: 'success' })
+      yield {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        session_id: 'native-session',
+      } as SDKMessage
+    }
+    return Object.assign(messages(), {
+      applyFlagSettings: vi.fn(async () => {}),
+      close: vi.fn(),
+    }) as unknown as ReturnType<typeof query>
+  })
+  const activity = vi.fn()
+  await runClaude({
+    thread: {
+      id: 'thread',
+      title: 'Test',
+      provider: 'claude',
+      cwd: process.cwd(),
+      model: 'sonnet',
+      effort: '',
+      permissionMode: 'full-access',
+      status: 'starting',
+      createdAt: '',
+      updatedAt: '',
+      messages: [],
+      activities: [],
+      approvals: [],
+    },
+    prompt: 'Keep going',
+    images: [],
+    tools: {} as never,
+    signal: new AbortController().signal,
+    session: vi.fn(),
+    text: vi.fn(),
+    activity,
+    approve: vi.fn(async () => true),
+  })
+  const calls = activity.mock.calls.map(([step]) => step)
+  const first = calls[0].id
+  expect(calls[0]).toMatchObject({ label: 'Compact', compact: {}, status: 'running' })
+  // Done, then the same step gets the numbers.
+  expect(calls[1]).toMatchObject({ id: first, status: 'completed' })
+  expect(calls[2]).toEqual({
+    id: first,
+    label: 'Compact',
+    status: 'completed',
+    compact: { trigger: 'auto', before: 182_000, after: 31_000, ms: 14_200 },
+  })
+  expect(calls[3]).toMatchObject({
+    label: 'Compact',
+    status: 'completed',
+    compact: { trigger: 'manual', before: 40_000 },
+  })
+  expect(calls[3].id).not.toBe(first)
+  expect(calls[5]).toMatchObject({
+    status: 'failed',
+    compact: { error: 'Not enough context to compact.' },
+  })
+  expect(new Set(calls.slice(6).map((step) => step.id)).size).toBe(1)
+  expect(calls.at(-1)).toMatchObject({
+    status: 'completed',
+    compact: { trigger: 'auto', before: 150_000, after: 20_000 },
+  })
+  // Four compactions, four steps.
+  expect(new Set(calls.map((step) => step.id)).size).toBe(4)
+})

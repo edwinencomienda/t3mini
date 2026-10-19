@@ -17,7 +17,79 @@ import { mascotLift, mascotSrc, useMascots, type Mood } from '../mascots'
 // says what it's doing now and for how long.
 
 export const stepTitle = (step: Activity) =>
-  step.title || [step.label, step.summary].filter(Boolean).join(' ')
+  step.compact
+    ? step.status === 'running'
+      ? 'Compacting the conversation'
+      : step.status === 'failed'
+        ? 'Couldn’t compact the conversation'
+        : 'Conversation compacted'
+    : step.title || [step.label, step.summary].filter(Boolean).join(' ')
+
+// "182k" for token counts.
+const tokens = (count: number) =>
+  count >= 10_000
+    ? `${Math.round(count / 1000)}k`
+    : count >= 1000
+      ? `${(count / 1000).toFixed(1)}k`
+      : `${count}`
+
+// Four lines squeezing together and spreading apart, like an accordion: the conversation being
+// folded into a shorter summary. Still once it's done.
+export function CompactGlyph({ still = false }: { still?: boolean }) {
+  return (
+    <span className={`compact-glyph ${still ? 'still' : ''}`} aria-hidden>
+      <span />
+      <span />
+      <span />
+      <span />
+    </span>
+  )
+}
+
+// Where the agent compacted the conversation: a divider across the work, with how much it
+// shrank (a small before/after meter when the agent reports token counts), whether it was
+// automatic, and how long it took. Older details before it were summarized.
+export const CompactMarker = memo(function CompactMarker({ step }: { step: Activity }) {
+  const compact = step.compact ?? {}
+  const { before, after } = compact
+  const kept = before && after !== undefined ? Math.max(0.02, Math.min(1, after / before)) : null
+  const details = [
+    before && after !== undefined
+      ? `${tokens(before)} → ${tokens(after)} tokens`
+      : before
+        ? `from ${tokens(before)} tokens`
+        : '',
+    compact.trigger === 'auto' ? 'automatic' : compact.trigger === 'manual' ? 'asked for' : '',
+    compact.ms ? `${Math.max(1, Math.round(compact.ms / 1000))}s` : '',
+  ].filter(Boolean)
+  return (
+    <div
+      className={`compact-marker ${step.status}`}
+      role="note"
+      title="Older parts of the conversation were summarized to make room. The agent keeps the gist, not every detail."
+    >
+      <span className="compact-rule" aria-hidden />
+      <span className="compact-label">
+        <CompactGlyph still={step.status !== 'running'} />
+        <span>{stepTitle(step)}</span>
+        {kept !== null ? (
+          <span
+            className="compact-meter"
+            role="img"
+            aria-label={`${Math.round((1 - kept) * 100)}% smaller`}
+          >
+            <span style={{ width: `${kept * 100}%` }} />
+          </span>
+        ) : null}
+        {details.length ? <span className="compact-details">{details.join(' · ')}</span> : null}
+        {step.status === 'failed' && compact.error ? (
+          <span className="compact-error">{compact.error}</span>
+        ) : null}
+      </span>
+      <span className="compact-rule" aria-hidden />
+    </div>
+  )
+})
 
 export const StepRow = memo(function StepRow({ step }: { step: Activity }) {
   const hasDetail = Boolean(step.output || (step.detail && step.detail !== step.summary))
@@ -143,6 +215,7 @@ export function LiveLine({
   provider,
   mood = 'working',
   site,
+  compacting = false,
 }: {
   text: string
   since?: string
@@ -150,6 +223,8 @@ export function LiveLine({
   mood?: Mood
   // While a browser step runs: the page's site, shown with a globe ("localhost:5173").
   site?: string
+  // While the agent compacts the conversation: the squeezing lines before the text.
+  compacting?: boolean
 }) {
   const [now, setNow] = useState(() => Date.now())
   const mascots = useMascots()
@@ -177,6 +252,7 @@ export function LiveLine({
         </span>
       )}
       {site !== undefined ? <Globe size={13} className="live-globe" aria-label="Browser" /> : null}
+      {compacting ? <CompactGlyph /> : null}
       <span className="live-text">{text}</span>
       {site ? <span className="live-site">{site}</span> : null}
       {since ? <span className="live-time">{elapsed(since, now)}</span> : null}

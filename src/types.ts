@@ -51,6 +51,15 @@ export type Activity = {
   todo?: boolean
   // A browser tool step (browser_*): shown with a globe.
   browser?: boolean
+  // The agent compacting the conversation (its context got long): shown as a divider with how
+  // much it shrank. Token counts and timing when the agent reports them (Claude does).
+  compact?: {
+    trigger?: 'auto' | 'manual'
+    before?: number
+    after?: number
+    ms?: number
+    error?: string
+  }
   // Full input for the expanded view (whole command, edit preview, arguments).
   detail?: string
   // What the step returned, trimmed.

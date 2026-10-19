@@ -55,6 +55,17 @@ describe('buildTurns', () => {
     expect(
       foldLabel({ ...first!, work: [{ kind: 'note', message: reply('x', 1), at: at(1) }] }),
     ).toBe('Worked for 5s · 1 message')
+    // A turn that compacted the conversation says so (its divider is inside the fold).
+    const compacted = { ...step('c1', 20), label: 'Compact', compact: { before: 9, after: 2 } }
+    expect(
+      foldLabel(
+        {
+          ...second!,
+          work: [...second!.work, { kind: 'step', activity: compacted, at: at(20) }],
+        },
+        'completed',
+      ),
+    ).toBe('Worked for 35s · 3 steps · compacted')
   })
 
   it('shows a turn in progress live, with no answer picked yet', () => {

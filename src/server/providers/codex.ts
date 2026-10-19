@@ -93,6 +93,7 @@ export const runCodex: Runner = async (ctx) => {
             'imageGeneration',
             'webSearch',
             'reasoning',
+            'contextCompaction',
           ].includes(type)
         ) {
           ctx.activity({
