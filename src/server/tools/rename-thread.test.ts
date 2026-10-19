@@ -11,6 +11,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   processes: {} as never,
   browser: {} as never,
   saveHtml: async () => ({ id: 'x.html' }),
+  saveMedia: async () => ({ id: 'x.mp4' }),
   rename,
 })
 

@@ -4,6 +4,10 @@ import { getService, HttpError } from './service'
 import { pickProjectFolder } from './folder-picker'
 import { getModels } from './models'
 import { dirname, join } from 'node:path'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
+import { mediaType } from './uploads'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
 import { tailscaleStatus } from './tailscale'
@@ -66,6 +70,52 @@ export function changedParts(sent: Map<string, string>, snapshot: Record<string,
     parts.push(`${JSON.stringify(key)}:${json}`)
   }
   return parts.length ? `{${parts.join(',')}}` : undefined
+}
+// One saved video or sound, whole or the byte range asked for ("bytes=START-END", "bytes=START-",
+// or "bytes=-SUFFIX"). Served only with its own media type, no sniffing, and no scripts.
+export async function serveMedia(
+  uploads: { mediaPath: (id: string) => string },
+  id: string,
+  range: string | null,
+) {
+  let path: string
+  let size: number
+  try {
+    path = uploads.mediaPath(id)
+    size = (await stat(path)).size
+  } catch {
+    return Response.json({ error: 'Media not found.' }, { status: 404 })
+  }
+  const headers: Record<string, string> = {
+    'Content-Type': mediaType(id),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+  }
+  const stream = (start: number, end: number) =>
+    Readable.toWeb(createReadStream(path, { start, end })) as ReadableStream<Uint8Array>
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  if (!range || !match || (!match[1] && !match[2]) || !size)
+    return new Response(size ? stream(0, size - 1) : null, {
+      headers: { ...headers, 'Content-Length': String(size) },
+    })
+  const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]))
+  let end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1
+  if (!match[1]) end = size - 1
+  if (start > end || start >= size)
+    return new Response(null, {
+      status: 416,
+      headers: { ...headers, 'Content-Range': `bytes */${size}` },
+    })
+  return new Response(stream(start, end), {
+    status: 206,
+    headers: {
+      ...headers,
+      'Content-Length': String(end - start + 1),
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+    },
+  })
 }
 export async function handleApi(request: Request) {
   try {
@@ -264,6 +314,10 @@ export async function handleApi(request: Request) {
         }
       }
     }
+    // Videos and sounds the agent showed (show_video, play_audio), by generated id only. Streamed
+    // with byte ranges: players seek with them, and Safari won't play video without them.
+    if (parts[0] === 'media' && parts[1] && !parts[2] && request.method === 'GET')
+      return serveMedia(service.uploads, parts[1], request.headers.get('range'))
     // Open tabs report focus, heartbeats, and closing, so one tab in all browsers notifies.
     if (parts[0] === 'tabs' && !parts[1] && request.method === 'POST') {
       const { id, event, viewing, watching } = z

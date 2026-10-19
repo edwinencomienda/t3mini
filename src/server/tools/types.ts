@@ -48,6 +48,8 @@ export type ToolContext = {
   saveImage: (bytes: Buffer) => Promise<{ id: string }>
   // Stores an HTML page for show_html and returns the id to reference.
   saveHtml: (html: string) => Promise<{ id: string }>
+  // Copies a video or sound file (an allowed path) into the uploads, checking its format.
+  saveMedia: (file: string, kind: 'video' | 'audio') => Promise<{ id: string }>
   // Long-running processes (dev servers…) in this thread's project.
   processes: ProjectProcesses
   // Renames this thread (never another one) and returns the saved title.

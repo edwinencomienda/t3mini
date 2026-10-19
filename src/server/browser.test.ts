@@ -162,6 +162,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'shot' })),
     saveHtml: async () => ({ id: 'x.html' }),
+    saveMedia: async () => ({ id: 'x.mp4' }),
     processes: {} as never,
     rename: vi.fn(),
     browser: {

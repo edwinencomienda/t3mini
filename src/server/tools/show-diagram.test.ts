@@ -14,6 +14,7 @@ const context = () => {
     processes: {} as never,
     browser: {} as never,
     saveHtml: async () => ({ id: 'x.html' }),
+    saveMedia: async () => ({ id: 'x.mp4' }),
     rename: vi.fn(),
   }
   return { attach, value }

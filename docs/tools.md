@@ -1,6 +1,6 @@
 # Agent tools (developer guide)
 
-t3 mini can give agents its own tools. `show_image` lets an agent show an image in the chat (a screenshot, a generated chart, a design export), `show_diagram` lets it draw a Mermaid diagram, and `show_html` lets it show a small interactive HTML page in a sealed sandbox. The system is built so new tools (charts, tables, diagrams…) are one file each.
+t3 mini can give agents its own tools. `show_image` lets an agent show an image in the chat (a screenshot, a generated chart, a design export), `show_diagram` lets it draw a Mermaid diagram, and `show_html` lets it show a small interactive HTML page in a sealed sandbox, `show_video` shows a video, and `play_audio` plays a sound. The system is built so new tools (charts, tables, diagrams…) are one file each.
 
 Status: proof of concept, working with **Claude** and **Codex**.
 
@@ -13,6 +13,8 @@ src/server/tools/
   show-image.ts  the show_image tool
   show-diagram.ts  the show_diagram tool
   show-html.ts   the show_html tool
+  show-video.ts  the show_video tool
+  play-audio.ts  the play_audio tool
   rename-thread.ts  the rename_thread tool
   processes.ts   the process tools (start_process…)
   browser.ts     the browser tools (browser_open…, see docs/browser.md)
@@ -25,7 +27,7 @@ src/components/HtmlView.tsx the sandboxed HTML card (show_html)
 ````
 
 1. **A tool** is a definition: `name`, `label` (work log), `description` (what the agent reads), `input` (a zod raw shape: validation and the agent-facing schema in one), `safety`, optional `summarize()` (work log summary), and `run(context, input)`.
-2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `saveHtml(html)` (store an HTML page with the uploads), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
+2. **The context** gives a tool what it may do to the thread: `cwd` (the project folder), `attach(block)` (add content to the agent's current reply), `saveImage(bytes)` (store an image with the uploads, checked by its bytes), `saveHtml(html)` (store an HTML page with the uploads), `saveMedia(file, kind)` (copy a video or sound into the uploads, checked by its bytes), `processes` (this project's long-running processes), and `rename(title)` (retitle this thread, never another). It's built per turn in `service.ts` (`execute()` → `tools`).
 3. **The Claude adapter** (`providers/claude.ts`) turns the registry into an in-process MCP server with the SDK's `createSdkMcpServer()` + `tool()`, named `t3mini`. Claude sees `mcp__t3mini__<name>`. `safe` tools go in `allowedTools` and are allowed in `canUseTool`, so they never prompt. A thrown `ToolError` goes back to Claude as a readable error (`isError: true`); other errors become "<Label> failed."
 4. **Blocks**: `attach()` appends a `Block` to the latest assistant message of the turn, or creates an assistant message holding only the block if the agent hasn't written anything since the user's message. Blocks are saved with the thread (`Message.blocks`) and rendered by `components/blocks.tsx` under the message text.
 5. **The Codex adapter** (`providers/codex.ts`) declares every tool as a `dynamicTools` entry (`type: 'function'`, `inputSchema` from `toolJsonSchema()`) on `thread/start`, and answers the app-server's `item/tool/call` requests with `{ success, contentItems: [{ type: 'inputText', text }] }`. Codex saves dynamic tools with the thread (session `dynamic_tools`), so resumed turns keep them; `thread/resume` can't add them, so **Codex threads created before a tool existed don't have it**. `approval` tools go through Allow once / Decline before running. The feature is experimental in the app-server; t3 mini already initializes with `capabilities.experimentalApi: true`.
@@ -98,6 +100,15 @@ Codex has a built-in image generator. Its results arrive as `imageGeneration` it
   - **Our CSP comes first in `<head>`:** `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`, so no network at all (no fetch, WebSockets, external scripts, styles, fonts, or images). The agent's HTML goes in `<body>`, where a CSP `<meta>` is ignored, so it can't loosen this. `referrerpolicy="no-referrer"`.
   - **Known limit:** browsers can't stop a sandboxed page from navigating its own frame (`location = 'https://…'`), so one request can leave, carrying only what the page itself contains (nothing from t3 mini). The card notices the second `load`, removes the frame, and shows "The page tried to go to another address, so it was stopped" with **Run again**; it never restarts on its own, so a page can't loop.
 - Tested by hand with a hostile page: parent access, cookies, storage, fetch to t3 mini and outside, image beacons, popups, top navigation, form submit and `alert` were all blocked; self-navigation got out once and was stopped.
+
+## show_video and play_audio
+
+- Input: `{ path, caption? }` (and `autoplay?` for `play_audio`, default true). The path goes through the same check as `show_image` (`resolveAllowedFile`: inside the project or temp folders, symlinks resolved, size limit): videos up to 200 MB, sounds up to 50 MB. Safety: `safe`.
+- **Formats, from the file's first bytes** (`sniffMedia` in `uploads.ts`): video MP4 (`ftyp`), MOV (`ftyp` brand `qt`), WebM (EBML), Ogg; audio MP3 (ID3 or a layer III frame), M4A (`ftyp`), WAV (`RIFF…WAVE`), Ogg, FLAC, WebM. Anything else is refused with a readable error. The file is copied to `<attachments>/media/<uuid>.tmp`, the **copy** is checked (format and size), then renamed to `<uuid>.<ext>`; a refused copy is deleted.
+- Effect: attaches `{ type: 'video', id, caption }` or `{ type: 'audio', id, caption, autoplay, at }` (`at`: when it was sent).
+- **Serving:** `GET /api/media/:id` (generated ids only) streams the file with byte ranges (`Accept-Ranges`, `206` + `Content-Range`, `416` when out of range): players seek with them, and Safari won't play video without them. Always with the format's own type, `nosniff`, and `Content-Security-Policy: default-src 'none'`.
+- **Players** (`components/blocks.tsx`): the browser's own `<video>`/`<audio>` controls; a format the browser can't play says so with a link to the file. A sound with `autoplay` plays **once as it arrives**: only within a minute of `at`, only in the visible, focused tab (not every open window), not again after reopening the thread or reloading (played ids kept in `localStorage`), and only if the browser allows sound (after a click or key press in the page); otherwise you press play. When a turn finishes and its media moves into the final answer, a playing video or sound carries on in the new player from where it was.
+- Hints in the descriptions: `ffmpeg … -c:v libx264 -pix_fmt yuv420p out.mp4` for video that plays everywhere, and `say -o /tmp/x.m4a --file-format=m4af --data-format=aac "…"` on macOS (plain `say -o` writes AIFF, which browsers can't play).
 
 ## Planned
 

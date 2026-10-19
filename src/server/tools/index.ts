@@ -2,6 +2,8 @@ import { z } from 'zod'
 import { showImage } from './show-image'
 import { showDiagram } from './show-diagram'
 import { showHtml } from './show-html'
+import { showVideo } from './show-video'
+import { playAudio } from './play-audio'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
 import { browserTools } from './browser'
@@ -12,6 +14,8 @@ export const tools: ToolDefinition<any>[] = [
   showImage,
   showDiagram,
   showHtml,
+  showVideo,
+  playAudio,
   renameThread,
   ...processTools,
   ...browserTools,
@@ -29,8 +33,8 @@ export const toolInstructions = [
     'a flow. Use your judgment: small or non-visual changes may not need it.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
-  '- show_image, show_diagram, and show_html put an image, a Mermaid diagram, or a small ' +
-    'interactive page in the chat for the user.',
+  '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +
+    'small interactive page, or a video in the chat for the user; play_audio plays a sound.',
 ].join('\n')
 
 // Tools reach Claude through an in-process MCP server named "t3mini", so Claude sees them as
