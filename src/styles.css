@@ -42,6 +42,7 @@
     --muted: rgb(255 255 255 / 3%);
     --muted-foreground: #8e8e8e;
     --faint: #5c5c5c;
+    --thread-project: var(--muted-foreground);
     --accent: rgb(255 255 255 / 5%);
     --border: rgb(255 255 255 / 7%);
     --input: rgb(255 255 255 / 10%);
@@ -66,6 +67,7 @@
   --muted: rgb(255 255 255 / 3%);
   --muted-foreground: #8e8e8e;
   --faint: #5c5c5c;
+  --thread-project: var(--muted-foreground);
   --accent: rgb(255 255 255 / 5%);
   --border: rgb(255 255 255 / 7%);
   --input: rgb(255 255 255 / 10%);
@@ -2669,7 +2671,8 @@ body.resizing {
   min-width: 0;
   margin-top: 0.3rem;
   font-size: 11.5px;
-  color: var(--faint);
+  /* Faint in light mode; dark mode uses the muted gray, since the faint one is too dim there. */
+  color: var(--thread-project, var(--faint));
 }
 .thread-project > span:last-child {
   overflow: hidden;
