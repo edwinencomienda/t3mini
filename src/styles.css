@@ -1,9 +1,13 @@
-/* Palette follows t3code: neutral surfaces, hairline borders, one blue accent. */
+/* Palette follows t3code: neutral surfaces, hairline borders, one blue accent. Like Claude
+   Desktop, the side panels are the darker frame and the chat area is lighter, in both themes
+   (sidebar < background < card). */
 :root {
   --background: #fbfbfc;
   --foreground: #27272a;
   --card: #ffffff;
-  --sidebar: #f7f7f8;
+  --sidebar: #f3f3f4;
+  /* Hover on the sidebar's own shade (--accent is for the lighter chat area). */
+  --sidebar-accent: rgb(0 0 0 / 5%);
   --muted: #f4f4f5;
   --muted-foreground: #71717a;
   --faint: #a1a1aa;
@@ -23,18 +27,17 @@
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 0.5rem;
   --chat-width: 46rem;
-  --selected-row: #ffffff;
-  --selected-ring: 0 0 0 1px var(--border);
   color-scheme: light;
   --scrollbar: rgb(0 0 0 / 18%);
 }
 /* Dark tokens apply when the OS prefers dark (unless the user picked Light) or when the user picked Dark. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --background: #0a0a0a;
+    --background: #1a1a1a;
     --foreground: #f5f5f5;
-    --card: #111111;
-    --sidebar: #111111;
+    --card: #222222;
+    --sidebar: #121212;
+    --sidebar-accent: rgb(255 255 255 / 5%);
     --muted: rgb(255 255 255 / 3%);
     --muted-foreground: #8e8e8e;
     --faint: #5c5c5c;
@@ -49,17 +52,16 @@
     --warning-surface: rgb(251 191 36 / 7%);
     --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 45%);
     --code-surface: rgb(255 255 255 / 4%);
-    --selected-row: rgb(255 255 255 / 5%);
-    --selected-ring: none;
     color-scheme: dark;
     --scrollbar: rgb(255 255 255 / 16%);
   }
 }
 :root[data-theme='dark'] {
-  --background: #0a0a0a;
+  --background: #1a1a1a;
   --foreground: #f5f5f5;
-  --card: #111111;
-  --sidebar: #111111;
+  --card: #222222;
+  --sidebar: #121212;
+  --sidebar-accent: rgb(255 255 255 / 5%);
   --muted: rgb(255 255 255 / 3%);
   --muted-foreground: #8e8e8e;
   --faint: #5c5c5c;
@@ -74,8 +76,6 @@
   --warning-surface: rgb(251 191 36 / 7%);
   --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 45%);
   --code-surface: rgb(255 255 255 / 4%);
-  --selected-row: rgb(255 255 255 / 5%);
-  --selected-ring: none;
   color-scheme: dark;
   --scrollbar: rgb(255 255 255 / 16%);
 }
@@ -208,6 +208,8 @@ kbd {
   overflow: hidden;
 }
 .sidebar {
+  /* Hovers in the sidebar (threads, projects, buttons) tint its darker shade. */
+  --accent: var(--sidebar-accent);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -255,7 +257,9 @@ kbd {
   padding: 0 0.6rem;
   height: 2rem;
   border-radius: var(--radius);
-  background: var(--muted);
+  /* An input on the sidebar: the card surface, like the composer, so it stands out from the
+     sidebar's darker shade in both themes. */
+  background: var(--card);
   border: 1px solid var(--border);
   color: var(--muted-foreground);
 }
@@ -330,9 +334,9 @@ kbd {
   background: var(--accent);
   color: var(--foreground);
 }
+/* The open thread looks like a hovered one (the same tint), with a slightly bolder title. */
 .thread-row.selected {
-  background: var(--selected-row);
-  box-shadow: var(--selected-ring);
+  background: var(--accent);
   color: var(--foreground);
   font-weight: 500;
 }
@@ -1372,7 +1376,6 @@ kbd {
   border-radius: 0.9rem;
   border: 1px solid var(--border);
   background: var(--card);
-  box-shadow: var(--shadow);
   transition: border-color 0.15s;
 }
 /* Editing a recalled message (↑ after a stopped turn) */
@@ -2389,7 +2392,8 @@ a.git-branch:focus-visible .git-branch-external {
   width: var(--diff-width, min(40%, 36rem));
   min-width: 20rem;
   border-left: 1px solid var(--border);
-  background: var(--card);
+  /* A side panel, framing the chat like the sidebar. */
+  background: var(--sidebar);
 }
 /* A wide, invisible grab area on the panel's left edge with a thin highlight on hover. */
 .sidebar-resize {
