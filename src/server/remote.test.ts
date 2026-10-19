@@ -40,11 +40,21 @@ const freePort = () =>
     })
   })
 // Raw requests so the Host header can be set (fetch always derives it from the URL).
-function request(path: string, headers: http.OutgoingHttpHeaders = {}) {
+function request(
+  path: string,
+  headers: http.OutgoingHttpHeaders = {},
+  { method = 'GET', body }: { method?: string; body?: string } = {},
+) {
   return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>(
     (resolve, reject) => {
       const outgoing = http.request(
-        { host: '127.0.0.1', port, path, headers: { host: `127.0.0.1:${port}`, ...headers } },
+        {
+          host: '127.0.0.1',
+          port,
+          path,
+          method,
+          headers: { host: `127.0.0.1:${port}`, ...headers },
+        },
         (response) => {
           let body = ''
           response.on('data', (chunk) => (body += chunk))
@@ -54,17 +64,29 @@ function request(path: string, headers: http.OutgoingHttpHeaders = {}) {
         },
       )
       outgoing.on('error', reject)
-      outgoing.end()
+      outgoing.end(body)
     },
   )
 }
+// Pressing "Connect this device" on the pairing page: a form post from the gateway's own page.
+const connect = (code: string, headers: http.OutgoingHttpHeaders = {}) =>
+  request(
+    '/pair',
+    {
+      'content-type': 'application/x-www-form-urlencoded',
+      origin: `http://127.0.0.1:${port}`,
+      'user-agent': 'Mozilla/5.0 (iPhone) Safari/604.1',
+      ...headers,
+    },
+    { method: 'POST', body: `code=${encodeURIComponent(code)}` },
+  )
+// Opening the link, then pressing the button.
 async function pair() {
   const { code } = access.createPairing()
-  const response = await request(`/pair?code=${encodeURIComponent(code)}`, {
-    'user-agent': 'Mozilla/5.0 (iPhone) Safari/604.1',
-  })
+  const opened = await request(`/pair?code=${encodeURIComponent(code)}`)
+  const response = await connect(code)
   const cookie = String(response.headers['set-cookie']?.[0] ?? '').split(';')[0]!
-  return { code, response, cookie }
+  return { code, opened, response, cookie }
 }
 
 beforeEach(async () => {
@@ -110,12 +132,15 @@ it('rejects unpaired devices, other hostnames, and other sites', async () => {
 })
 it('pairs with a one-time code and forwards requests marked as remote', async () => {
   await access.enable(upstreamPort)
-  const { code, response, cookie } = await pair()
-  expect(response.status).toBe(302)
+  const { code, opened, response, cookie } = await pair()
+  expect(opened.status).toBe(200)
+  expect(response.status).toBe(303)
+  expect(response.headers.location).toBe('/')
   expect(String(response.headers['set-cookie'])).toMatch(
     /HttpOnly; SameSite=Lax; Path=\/; Max-Age=2592000/,
   )
   // The same code can't be used twice.
+  expect((await connect(code)).status).toBe(401)
   expect((await request(`/pair?code=${encodeURIComponent(code)}`)).status).toBe(401)
   const forwarded = await request('/api/bootstrap', {
     cookie: `${cookie}; theme=dark`,
@@ -137,6 +162,46 @@ it('expires pairing codes after five minutes', async () => {
   const { code } = access.createPairing()
   vi.setSystemTime(Date.now() + 5 * 60_000 + 1)
   expect((await request(`/pair?code=${encodeURIComponent(code)}`)).status).toBe(401)
+  expect((await connect(code)).status).toBe(401)
+})
+it('only pairs when you press Connect, so link previews and preloading can’t use up the code', async () => {
+  await access.enable(upstreamPort)
+  const { code } = access.createPairing()
+  // iMessage's preview, a browser preloading a pasted link, then you opening it: all just see
+  // the button, and nothing is paired yet.
+  for (let visit = 0; visit < 3; visit++) {
+    const opened = await request(`/pair?code=${encodeURIComponent(code)}`)
+    expect(opened.status).toBe(200)
+    expect(opened.body).toContain('<form method="post" action="/pair">')
+    expect(opened.body).toContain(`value="${code}"`)
+    expect(opened.headers['set-cookie']).toBeUndefined()
+    expect(opened.headers['content-security-policy']).toContain("default-src 'none'")
+    expect(opened.headers['cache-control']).toBe('no-store')
+    // Not 'no-referrer': browsers then send `Origin: null` on the form post, which is refused.
+    expect(opened.headers['referrer-policy']).toBe('same-origin')
+  }
+  expect(
+    (await request(`/pair?code=${encodeURIComponent(code)}`, {}, { method: 'HEAD' })).status,
+  ).toBe(200)
+  expect(access.status().devices).toEqual([])
+  // Pressing the button pairs.
+  expect((await connect(code)).status).toBe(303)
+  expect(access.status().devices).toHaveLength(1)
+})
+it('refuses pairing posts from other sites, other content types, and odd codes', async () => {
+  await access.enable(upstreamPort)
+  const { code } = access.createPairing()
+  expect((await connect(code, { origin: 'http://evil.example' })).status).toBe(403)
+  // A browser told not to send referrers posts with `Origin: null`: still refused.
+  expect((await connect(code, { origin: 'null' })).status).toBe(403)
+  expect((await connect(code, { 'content-type': 'text/plain' })).status).toBe(415)
+  expect((await request('/pair', {}, { method: 'PUT' })).status).toBe(405)
+  // A made-up or malformed code just gets the expired page, never echoed into the HTML.
+  const odd = await request(`/pair?code=${encodeURIComponent('"><script>x</script>')}`)
+  expect(odd.status).toBe(401)
+  expect(odd.body).not.toContain('<script>')
+  // The real code still works after all that.
+  expect((await connect(code)).status).toBe(303)
 })
 it('stores only token hashes, drops expired devices, and revokes access immediately', async () => {
   await access.enable(upstreamPort)
@@ -184,10 +249,10 @@ it('accepts only private network addresses', () => {
 describe('over Tailscale (HTTPS)', () => {
   const pairOverTailnet = async () => {
     const { code } = access.createPairing()
-    const response = await request(`/pair?code=${encodeURIComponent(code)}`, {
-      host: tailnetHost,
-      'user-agent': 'Mozilla/5.0 (iPhone) Safari/604.1',
-    })
+    expect(
+      (await request(`/pair?code=${encodeURIComponent(code)}`, { host: tailnetHost })).status,
+    ).toBe(200)
+    const response = await connect(code, { host: tailnetHost, origin: `https://${tailnetHost}` })
     return { response, cookie: String(response.headers['set-cookie']?.[0] ?? '').split(';')[0]! }
   }
 
@@ -204,7 +269,7 @@ describe('over Tailscale (HTTPS)', () => {
       expect.stringMatching(/^https:\/\/mac\.tail1234\.ts\.net:8443\/pair\?code=/),
     ])
     const { response, cookie } = await pairOverTailnet()
-    expect(response.status).toBe(302)
+    expect(response.status).toBe(303)
     // A Secure, host-only session cookie, separate from the plain-HTTP one.
     expect(String(response.headers['set-cookie'])).toMatch(
       /^__Host-t3m_session=[\w-]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=2592000$/,

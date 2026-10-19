@@ -19,8 +19,11 @@ import {
 // - Tailscale (HTTPS): the gateway listens on loopback only, and `tailscale serve` puts it
 //   behind HTTPS on this Mac's tailnet name. Nothing is exposed on the LAN in this mode.
 //
-// Pairing: the Mac shows a QR code with a one-time code (5 minutes). The phone trades it for a
-// session cookie that lasts 30 days. Only hashes of codes and session tokens are kept.
+// Pairing: the Mac shows a QR code (or a link to copy) with a one-time code (5 minutes). The
+// device trades it for a session cookie that lasts 30 days. Only hashes of codes and session
+// tokens are kept. Opening the link (GET) only shows a "Connect this device" button; pressing it
+// (POST) uses the code. Link previews (iMessage) and browsers preloading a pasted URL fetch the
+// link before you do, and must not use up the code.
 //
 // After a restart it's off, except that Tailscale access you left on comes back by itself
 // ("Reconnect after restart", on by default), so paired phones reconnect without you. Local
@@ -129,8 +132,49 @@ function cookies(header: string | undefined) {
   }
   return values
 }
-const page = (title: string, body: string) =>
-  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>t3 mini</title><body style="font:15px -apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.25rem;color:#27272a;text-align:center"><h1 style="font-size:20px">${title}</h1><p style="color:#71717a">${body}</p></body>`
+const page = (title: string, body: string, extra = '') =>
+  `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>t3 mini</title><body style="font:15px -apple-system,system-ui,sans-serif;max-width:28rem;margin:18vh auto;padding:0 1.25rem;color:#27272a;text-align:center"><h1 style="font-size:20px">${title}</h1><p style="color:#71717a">${body}</p>${extra}</body>`
+// The gateway's own pages: inert (no scripts, no loads), not framable, and forms only post back
+// here. Never cached, and the address (with its code) is never sent to another site as a
+// referrer. Not 'no-referrer': with that, browsers send `Origin: null` on the Connect form's
+// post, which allowed() rightly refuses as not this gateway (the "Forbidden" on phones).
+const pageHeaders = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Content-Security-Policy':
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  'Cache-Control': 'no-store',
+  'Referrer-Policy': 'same-origin',
+}
+// Pairing codes are token(18): 24 base64url characters.
+const pairingCodeFormat = /^[\w-]{16,64}$/
+const expiredPage = () =>
+  page(
+    'This code has expired',
+    'Pairing codes work once and expire after 5 minutes. On the computer running t3 mini, open Settings → Devices and get a new code.',
+  )
+// Opening a pairing link shows this; only pressing the button pairs (see the note at the top).
+// The code is checked against pairingCodeFormat before it gets here, so it's safe in the HTML.
+const connectPage = (code: string) =>
+  page(
+    'Connect this device?',
+    'This device will be able to use t3 mini, and run agents on the computer that runs it, for 30 days. Only continue on your own device.',
+    `<form method="post" action="/pair"><input type="hidden" name="code" value="${code}"><button type="submit" style="font:inherit;font-weight:600;padding:0.65rem 1.4rem;border:0;border-radius:0.6rem;background:#4f46e5;color:#fff;cursor:pointer">Connect this device</button></form>`,
+  )
+// A small form body (the pairing code), refused past a limit.
+function readForm(request: http.IncomingMessage, limit = 2048) {
+  return new Promise<URLSearchParams | null>((resolve) => {
+    let body = ''
+    let tooBig = false
+    request.setEncoding('utf8')
+    request.on('data', (chunk: string) => {
+      if (tooBig) return
+      body += chunk
+      if (body.length > limit) tooBig = true
+    })
+    request.on('end', () => resolve(tooBig ? null : new URLSearchParams(body)))
+    request.on('error', () => resolve(null))
+  })
+}
 
 export class RemoteAccess {
   devices = new Map<string, Device>()
@@ -279,7 +323,7 @@ export class RemoteAccess {
   }
   // A one-time code for the QR link; only the Mac (a local request) may create one.
   createPairing() {
-    if (!this.enabled) throw new Error('Turn on phone access first.')
+    if (!this.enabled) throw new Error('Turn on Allow other devices first.')
     const now = Date.now()
     for (const [hash, expires] of this.codes) if (expires < now) this.codes.delete(hash)
     const code = token(18)
@@ -295,6 +339,11 @@ export class RemoteAccess {
               (address) => `http://${address}:${this.port}/pair?code=${encodeURIComponent(code)}`,
             ),
     }
+  }
+  // Whether a pairing code is still good, without using it.
+  private pairable(code: string) {
+    const expires = this.codes.get(sha256(code))
+    return Boolean(expires && expires >= Date.now())
   }
   // Trades a pairing code for a session token. Codes work once and expire.
   async redeem(code: string, userAgent?: string) {
@@ -453,28 +502,42 @@ export class RemoteAccess {
 
   private async handle(request: http.IncomingMessage, response: http.ServerResponse) {
     if (!this.allowed(request)) {
-      response.writeHead(403, { 'Content-Type': 'text/plain' }).end('Forbidden')
+      response
+        .writeHead(403, pageHeaders)
+        .end(page('Forbidden', 'This address or page can’t be used to reach t3 mini.'))
       return
     }
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
     if (url.pathname === '/pair') {
-      const result = await this.redeem(
-        url.searchParams.get('code') ?? '',
-        request.headers['user-agent'],
-      )
+      // Opening the link: show the button. Checking the code doesn't use it, so a link preview
+      // or a browser preloading the address can't burn it.
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        const code = url.searchParams.get('code') ?? ''
+        const ok = pairingCodeFormat.test(code) && this.pairable(code)
+        response.writeHead(ok ? 200 : 401, pageHeaders).end(ok ? connectPage(code) : expiredPage())
+        return
+      }
+      if (request.method !== 'POST') {
+        response.writeHead(405, { Allow: 'GET, POST' }).end()
+        return
+      }
+      // Pressing the button. allowed() already refused any other site's origin.
+      if (!request.headers['content-type']?.startsWith('application/x-www-form-urlencoded')) {
+        response.writeHead(415).end()
+        return
+      }
+      const form = await readForm(request)
+      if (!form) {
+        response.writeHead(413).end()
+        return
+      }
+      const result = await this.redeem(form.get('code') ?? '', request.headers['user-agent'])
       if (!result) {
-        response
-          .writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
-          .end(
-            page(
-              'This code has expired',
-              'Pairing codes work once and expire after 5 minutes. On your Mac, open Settings → Phone access and show a new QR code.',
-            ),
-          )
+        response.writeHead(401, pageHeaders).end(expiredPage())
         return
       }
       response
-        .writeHead(302, {
+        .writeHead(303, {
           Location: '/',
           'Set-Cookie': `${this.cookieName}=${result.token}; HttpOnly;${this.mode === 'tailscale' ? ' Secure;' : ''} SameSite=Lax; Path=/; Max-Age=${sessionDays * 86_400}`,
           'Cache-Control': 'no-store',
@@ -485,11 +548,11 @@ export class RemoteAccess {
     const device = this.authenticate(request.headers.cookie)
     if (!device) {
       response
-        .writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' })
+        .writeHead(401, pageHeaders)
         .end(
           page(
             'Not connected',
-            'On your Mac, open t3 mini → Settings → Phone access and scan the QR code with this device.',
+            'On the computer running t3 mini, open Settings → Devices, then scan the QR code with this device or open the copied link here.',
           ),
         )
       return

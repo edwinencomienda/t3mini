@@ -37,7 +37,7 @@ import {
   Search,
   Settings,
   Settings2,
-  Smartphone,
+  MonitorSmartphone,
   Sparkles,
   SquareCheck,
   ShieldAlert,
@@ -2467,15 +2467,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
               <Monitor size={14} />
             )}
           </button>
-          {/* A reminder on the Mac while phones can connect. */}
+          {/* A reminder on the Mac while other devices can connect. */}
           {bootstrap?.phoneAccess && !bootstrap.remote ? (
             <button
               className="icon-button phone-on"
-              aria-label="Phone access is on. Open settings"
-              title="Phone access is on"
+              aria-label="Other devices can connect. Open settings"
+              title="Other devices can connect"
               onClick={() => setSettingsOpen(true)}
             >
-              <Smartphone size={14} />
+              <MonitorSmartphone size={14} />
             </button>
           ) : null}
           <button

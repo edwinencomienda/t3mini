@@ -2829,6 +2829,11 @@ body.resizing {
   font-size: 12px;
   color: var(--muted-foreground);
 }
+.phone-pairing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
 .phone-devices {
   border-top: 1px solid var(--border);
   padding-top: 0.5rem;

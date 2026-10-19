@@ -5,7 +5,7 @@ import {
   Mic,
   Music,
   Palette,
-  Smartphone,
+  MonitorSmartphone,
   CircleAlert,
   CircleCheck,
   CircleStop,
@@ -181,7 +181,7 @@ const settingsTabs: { id: SettingsTab; label: string; icon: ReactNode; macOnly?:
   { id: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
   { id: 'music', label: 'Music', icon: <Music size={14} /> },
   { id: 'dictation', label: 'Dictation', icon: <Mic size={14} />, macOnly: true },
-  { id: 'phone', label: 'Phone access', icon: <Smartphone size={14} />, macOnly: true },
+  { id: 'phone', label: 'Devices', icon: <MonitorSmartphone size={14} />, macOnly: true },
   { id: 'agents', label: 'Agents', icon: <Bot size={14} /> },
 ]
 let lastTab: SettingsTab = 'appearance'

@@ -1,6 +1,8 @@
-# Phone access (developer guide)
+# Devices / phone access (developer guide)
 
-How t3 mini lets a phone use the app, over the local network or over Tailscale, why it's built this way, and what to watch for when changing it. User-facing docs are in the README's **Phone access** section.
+In the UI this is **Settings → Devices**: any browser can pair (another computer, a tablet, a phone). The code still calls it phone access (`remote.ts`, `PhoneAccess.tsx`, `/api/remote`, `T3_MINI_PHONE_PORT`), and this guide says "phone" for any paired device.
+
+How t3 mini lets a phone use the app, over the local network or over Tailscale, why it's built this way, and what to watch for when changing it. User-facing docs are in the README's **Devices** section.
 
 ## Summary
 
@@ -21,7 +23,8 @@ http://10.10.16.103:4311/…  ──►  Gateway (remote.ts, 0.0.0.0:4311, only 
                                    1. Host must be <this Mac's LAN IPv4>:<port>
                                    2. Source address must be private (RFC 1918 / link-local)
                                    3. Origin, if present, must be the gateway's own origin
-                                   4. /pair?code=…  → trade code for cookie, 302 to /
+                                   4. GET /pair?code=…  → "Connect this device" page (code not used)
+                                      POST /pair (form)  → trade code for cookie, 303 to /
                                       anything else → valid session cookie required (else 401)
                                    5. Rewrite headers and forward to 127.0.0.1:<app port>
                                         Host/Origin → 127.0.0.1:<app port>
@@ -40,7 +43,7 @@ WebSocket upgrades (Vite's dev live reload) take the same checks, then are piped
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/server/remote.ts`                                | `RemoteAccess`: device store, pairing codes, session checks, the gateway server (HTTP + WebSocket upgrade), header rewriting, revocation. `getRemoteAccess()` keeps one instance per process on `globalThis`. |
 | `src/server/api.ts`                                   | `/api/remote*` routes (Mac-only), the `macOnly()` guard on Mac-only actions, and `remote` / `phoneAccess` in `/api/bootstrap`. QR images are generated here with `qrcode` (`toDataURL`).                      |
-| `src/components/PhoneAccess.tsx`                      | Settings → Phone access: the switch, warning, QR code with countdown, multiple-address picker, paired devices with revoke.                                                                                    |
+| `src/components/PhoneAccess.tsx`                      | Settings → Devices: the switch, warning, QR code with countdown, multiple-address picker, paired devices with revoke.                                                                                         |
 | `src/components/Notifications.tsx`                    | `SettingsDialog` renders `PhoneAccess` only when not remote.                                                                                                                                                  |
 | `src/components/Workspace.tsx`                        | Footer phone icon while on; hides **Open in VS Code** and **Browse** when `bootstrap.remote`; toast/unread logic that treats a visible page as watched on touch screens.                                      |
 | `src/attachments.ts`                                  | `randomId()` and `copyText()`, which work outside secure contexts (see pitfalls); `prepareImage()` converts/downsizes photos on the device.                                                                   |
@@ -66,19 +69,19 @@ Mac-only actions refused for remote requests: managing phone access, `POST /api/
 
 ## Settings and constants
 
-| What                     | Where                                                           | Value                                                                                     |
-| ------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Gateway port             | `T3_MINI_PHONE_PORT` env, `RemoteAccess.port`                   | `4311`                                                                                    |
-| Session length           | `sessionDays` in `remote.ts` (cookie `Max-Age` and `expiresAt`) | 30 days                                                                                   |
-| Pairing code lifetime    | `pairingMs` in `remote.ts`                                      | 5 minutes, single use                                                                     |
-| Cookie (local network)   | `lanCookie` in `remote.ts`                                      | `t3m_session`, `HttpOnly; SameSite=Lax; Path=/` (no `Secure`: the gateway is HTTP)        |
-| Cookie (Tailscale)       | `httpsCookie` in `remote.ts`                                    | `__Host-t3m_session`, `HttpOnly; Secure; SameSite=Lax; Path=/`                            |
-| Tailscale HTTPS port     | `T3_MINI_TAILSCALE_PORT` env, `tailscalePort()`                 | `8443`                                                                                    |
-| Tailscale CLI            | `TAILSCALE_BIN` env, then the app's, then `tailscale` on PATH   | `/Applications/Tailscale.app/Contents/MacOS/Tailscale` (the PATH one is a wrapper script) |
-| Trusted marker header    | `remoteHeader` in `remote.ts`                                   | `x-t3-remote`                                                                             |
-| Allowed source addresses | `isPrivateAddress()`                                            | `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `127/8` (IPv4, incl. `::ffff:` mapped)   |
-| Offered addresses        | `lanAddresses()`                                                | non-internal IPv4 interfaces in those ranges (e.g. Wi-Fi `en0`, Ethernet `en7`)           |
-| "Last seen" persistence  | `authenticate()`                                                | at most once a minute                                                                     |
+| What                     | Where                                                           | Value                                                                                                                                                     |
+| ------------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway port             | `T3_MINI_PHONE_PORT` env, `RemoteAccess.port`                   | `4311`                                                                                                                                                    |
+| Session length           | `sessionDays` in `remote.ts` (cookie `Max-Age` and `expiresAt`) | 30 days                                                                                                                                                   |
+| Pairing code lifetime    | `pairingMs` in `remote.ts`                                      | 5 minutes, single use; the QR code and **Copy link** carry the same link (the link is the secret: anyone who has it can pair until it expires or is used) |
+| Cookie (local network)   | `lanCookie` in `remote.ts`                                      | `t3m_session`, `HttpOnly; SameSite=Lax; Path=/` (no `Secure`: the gateway is HTTP)                                                                        |
+| Cookie (Tailscale)       | `httpsCookie` in `remote.ts`                                    | `__Host-t3m_session`, `HttpOnly; Secure; SameSite=Lax; Path=/`                                                                                            |
+| Tailscale HTTPS port     | `T3_MINI_TAILSCALE_PORT` env, `tailscalePort()`                 | `8443`                                                                                                                                                    |
+| Tailscale CLI            | `TAILSCALE_BIN` env, then the app's, then `tailscale` on PATH   | `/Applications/Tailscale.app/Contents/MacOS/Tailscale` (the PATH one is a wrapper script)                                                                 |
+| Trusted marker header    | `remoteHeader` in `remote.ts`                                   | `x-t3-remote`                                                                                                                                             |
+| Allowed source addresses | `isPrivateAddress()`                                            | `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `127/8` (IPv4, incl. `::ffff:` mapped)                                                                   |
+| Offered addresses        | `lanAddresses()`                                                | non-internal IPv4 interfaces in those ranges (e.g. Wi-Fi `en0`, Ethernet `en7`)                                                                           |
+| "Last seen" persistence  | `authenticate()`                                                | at most once a minute                                                                                                                                     |
 
 ## Security model (keep these invariants)
 
@@ -93,7 +96,8 @@ Anyone who reaches the app can make agents run commands on the Mac (threads defa
 7. **Revocation is immediate.** `revoke()` destroys tracked sockets (SSE, WebSockets) for that device.
 8. **Plain HTTP is a known risk** in local-network mode. Anyone who can watch traffic on the network can steal the cookie. The UI and README say "trusted network only" and point to Tailscale (HTTPS), which removes this.
 9. **Tailscale mode is tailnet-only and loopback-only.** Only `tailscale serve`, **never Funnel** (public internet). The gateway binds `127.0.0.1` in that mode, accepts only `Host` = the tailnet name with an `https://` origin from loopback (where `serve` connects from), and uses a separate `Secure` cookie. Being on the tailnet is not authentication: pairing still applies, and Tailscale's identity headers (`tailscale-*`) are stripped, never trusted.
-10. **The serve entry never outlives phone access.** It's removed on disable, on process exit (synchronously), and at startup if a stale one points at our gateway port. Only an entry that proxies to our gateway is ever removed; anything else the user serves is left alone.
+10. **Opening a pairing link never pairs.** `GET /pair` only checks the code (without using it) and shows a **Connect this device** button; the form `POST /pair` uses it. Link previews (iMessage fetches a sent link from the sender's device, which can be on the tailnet) and browsers preloading a pasted URL would otherwise burn the one-time code before the person opens it, the "This code has expired" bug from **Copy link**. Keep pairing behind a POST, and keep that POST same-origin (`allowed()`), form-encoded, and small. The gateway's pages are inert: a CSP with `default-src 'none'`, `form-action 'self'`, `frame-ancestors 'none'`, `no-store`, and `Referrer-Policy: same-origin` (not `no-referrer`: with it, browsers post the form with `Origin: null`, which `allowed()` refuses, so Connect showed "Forbidden"); the code is checked against its base64url format before it's put in the page.
+11. **The serve entry never outlives phone access.** It's removed on disable, on process exit (synchronously), and at startup if a stale one points at our gateway port. Only an entry that proxies to our gateway is ever removed; anything else the user serves is left alone.
 
 ## Pitfalls we hit (read before changing client code)
 
@@ -126,7 +130,10 @@ curl -s -X POST -H "$H" -d '{"enabled":true}' $L/api/remote
 URL=$(curl -s -X POST -H "$H" -d '{}' $L/api/remote/pair | node -pe 'JSON.parse(require("fs").readFileSync(0)).links[0].url')
 HOST=$(echo "$URL" | sed -E 's#http://([^/]+)/.*#\1#')
 curl -s -o /dev/null -w 'unpaired: %{http_code}\n' http://$HOST/                  # 401
-curl -s -o /dev/null -c /tmp/jar -w 'pair: %{http_code}\n' "$URL"                 # 302
+CODE=${URL##*code=}
+curl -s -o /dev/null -w 'open link: %{http_code}\n' "$URL"                         # 200 (code not used)
+curl -s -o /dev/null -c /tmp/jar -w 'pair: %{http_code}\n' -H "Origin: http://$HOST" \
+  --data-urlencode "code=$CODE" http://$HOST/pair                                  # 303
 curl -s -o /dev/null -w 'reuse code: %{http_code}\n' "$URL"                        # 401
 curl -s -b /tmp/jar http://$HOST/api/bootstrap | head -c 200; echo                 # "remote":true
 curl -s -N --max-time 2 -b /tmp/jar http://$HOST/api/events | head -c 80; echo    # data: {...}
@@ -134,7 +141,7 @@ curl -s -X DELETE -H "$H" -d '{}' $L/api/remote/devices >/dev/null              
 curl -s -X POST -H "$H" -d '{"enabled":false}' $L/api/remote; rm -f /tmp/jar      # switch off
 ```
 
-On a real phone: Settings → Phone access → on → Connect a phone → scan. Check sending, steering, an image upload, the Changes panel, and that Browse and Open in VS Code are hidden.
+On a real phone: Settings → Devices → on → Connect a device → scan. For a computer, use **Copy link** and open it in that computer's browser. Check sending, steering, an image upload, the Changes panel, and that Browse and Open in VS Code are hidden.
 
 ## Troubleshooting
 
@@ -168,10 +175,10 @@ https://mac.tail1234.ts.net:8443/…  ──WireGuard──►  tailscaled (`tai
 
 - **`src/server/tailscale.ts`**: `tailscaleStatus()` (`tailscale status --json`: `BackendState === 'Running'` and `Self.DNSName`, trailing dot stripped; `status` exits non-zero when stopped but still prints JSON), `serveGateway()` (`tailscale serve --bg --https=<port> http://127.0.0.1:<gateway>`; when the tailnet hasn't enabled HTTPS/Serve, the CLI prints a `login.tailscale.com` link, which is shown to the user), `stopServingGateway()` (reads `serve status --json` and runs `serve --https=<port> off` only if that port proxies to our gateway), and `stopServingGatewayNow()` for process exit. All through `execFile` with timeouts, no shell.
 - **`remote.ts`**: `enable(upstreamPort, mode)`. Tailscale mode checks status first, binds the gateway to `127.0.0.1`, then starts `serve`; if `serve` fails the gateway is closed again. Switching modes restarts the gateway (old QR codes and open connections end). `allowed()`, the cookie name and `Secure`, and pairing URLs (`https://<host>/pair?code=…`) depend on the mode. `forwardHeaders()` strips both session cookies and every `tailscale-*` header.
-- **UI**: Settings → Phone access → **Connection** (Local network | Tailscale (HTTPS)). Tailscale is preselected when it's connected; when it isn't, the reason is shown with **Check again**, and Allow phones stays off. The plain-HTTP warning only shows for the local network.
+- **UI**: Settings → Devices → **Connection** (Local network | Tailscale (HTTPS)). Tailscale is preselected when it's connected; when it isn't, the reason is shown with **Check again**, and Allow phones stays off. The plain-HTTP warning only shows for the local network.
 - **Dictation**: the live-dictation WebSocket accepts paired phones (the gateway already authenticated them), so dictation works on a phone over Tailscale. Over plain HTTP the browser doesn't offer the microphone at all.
 - **Existing devices**: a phone paired over the local network has a plain-HTTP cookie, so it scans a new code once for Tailscale (a second device entry).
 
 Setup for users: Tailscale on the Mac and the phone, same tailnet, MagicDNS and HTTPS certificates enabled in the admin console. If the user restricts the tailnet with ACLs, the phone needs access to the Mac on the HTTPS port (8443).
 
-Manual test: phone on cellular with Tailscale on, choose Tailscale (HTTPS), turn on Allow phones, scan the QR code, confirm the lock icon, then try sending, steering, an upload, dictation, and revocation. Turn phone access off and check that `tailscale serve status` no longer lists the entry.
+Manual test: phone on cellular with Tailscale on, choose Tailscale (HTTPS), turn on Allow other devices, scan the QR code (or open the copied link), confirm the lock icon, then try sending, steering, an upload, dictation, and revocation. Turn phone access off and check that `tailscale serve status` no longer lists the entry.

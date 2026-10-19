@@ -1,5 +1,17 @@
 import { useEffect, useState } from 'react'
-import { Lock, RefreshCw, ShieldAlert, Smartphone, Trash2 } from 'lucide-react'
+import {
+  Check,
+  Copy,
+  Laptop,
+  Lock,
+  MonitorSmartphone,
+  RefreshCw,
+  ShieldAlert,
+  Smartphone,
+  Tablet,
+  Trash2,
+} from 'lucide-react'
+import { copyText } from '../attachments'
 import { Segmented, Toggle } from './ui'
 
 type Device = { id: string; name: string; createdAt: string; lastSeenAt: string; expiresAt: string }
@@ -36,6 +48,14 @@ const ago = (iso: string) => {
   return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`
 }
 
+// The paired device's icon, from the name the server gave it (e.g. "iPhone · Safari").
+function DeviceIcon({ name }: { name: string }) {
+  if (/^(iPhone|Android)/.test(name)) return <Smartphone size={14} />
+  if (/^iPad/.test(name)) return <Tablet size={14} />
+  if (/^(Mac|Windows|Linux)/.test(name)) return <Laptop size={14} />
+  return <MonitorSmartphone size={14} />
+}
+
 // Tailscale's "approve Serve/HTTPS" link in an error becomes clickable (only that site).
 function withTailscaleLink(message: string) {
   const link = message.match(/https:\/\/login\.tailscale\.com\/\S+/)?.[0]
@@ -47,13 +67,14 @@ function withTailscaleLink(message: string) {
       <a href={link} target="_blank" rel="noopener noreferrer">
         Open the Tailscale admin page
       </a>
-      {after} (then turn Allow phones on again)
+      {after} (then turn Allow other devices on again)
     </>
   )
 }
 
-// Settings section for opening t3 mini to your phone: over the local network (plain HTTP), or
-// over Tailscale (HTTPS, from anywhere on your tailnet).
+// Settings section for using t3 mini from your other devices (another computer, a tablet, a
+// phone: any browser): over the local network (plain HTTP), or over Tailscale (HTTPS, from
+// anywhere on your tailnet). A device pairs by scanning the QR code or opening the copied link.
 export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void }) {
   const [status, setStatus] = useState<Status | null>(null)
   // The connection to use: what's running, else Tailscale when it's ready, else the network.
@@ -65,6 +86,12 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
   useEffect(() => {
     call<Status>('remote').then(setStatus, (error: Error) => setError(error.message))
   }, [])
@@ -73,7 +100,7 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [pairing])
-  // Refresh the device list while a QR code is up, so a new phone appears once it pairs.
+  // Refresh the device list while a code is up, so a new device appears once it pairs.
   useEffect(() => {
     if (!pairing) return
     const timer = setInterval(() => call<Status>('remote').then(setStatus, () => {}), 3000)
@@ -110,6 +137,7 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
     run(async () => {
       setPairing(await call<Pairing>('remote/pair', 'POST', {}))
       setSelected(0)
+      setCopied(false)
     })
   const revoke = (id?: string) =>
     run(async () => setStatus(await call<Status>('remote/devices', 'DELETE', id ? { id } : {})))
@@ -119,14 +147,14 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
   const link = pairing?.links[selected]
   return (
     <section className="settings-section">
-      <h3>Phone access</h3>
+      <h3>Use t3 mini on your other devices</h3>
       <div className="setting-row">
         <div>
           <strong>Connection</strong>
           <small>
             {shownMode === 'tailscale'
-              ? 'Encrypted (HTTPS) and works from anywhere: the phone needs the Tailscale app, signed in to the same tailnet.'
-              : 'Plain HTTP on your local Wi-Fi: the phone must be on the same network.'}
+              ? 'Encrypted (HTTPS) and works from anywhere: the device needs Tailscale, signed in to the same tailnet.'
+              : 'Plain HTTP on your local Wi-Fi: the device must be on the same network.'}
           </small>
         </div>
         <Segmented
@@ -155,16 +183,16 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
       ) : null}
       <div className="setting-row">
         <div>
-          <strong>Allow phones</strong>
+          <strong>Allow other devices</strong>
           <small>
-            Use t3 mini from your phone's browser.{' '}
+            Use t3 mini from the browser on another computer, a tablet, or your phone.{' '}
             {shownMode === 'tailscale' && status?.autoResume
               ? 'Comes back on by itself after the server restarts.'
               : 'Turns off whenever the server restarts.'}
           </small>
         </div>
         <Toggle
-          label="Allow phones"
+          label="Allow other devices"
           checked={Boolean(status?.enabled)}
           disabled={!status || busy || (!status.enabled && tailscaleBlocked)}
           onChange={(enabled) => void apply(enabled)}
@@ -175,8 +203,8 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
           <div>
             <strong>Reconnect after restart</strong>
             <small>
-              If phone access was on, turn it back on when t3 mini restarts, so paired phones
-              reconnect by themselves. Local network access always stays off after a restart.
+              If access was on, turn it back on when t3 mini restarts, so paired devices reconnect
+              by themselves. Local network access always stays off after a restart.
             </small>
           </div>
           <Toggle
@@ -190,8 +218,8 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
       {status && !status.enabled && (status.resuming || status.resumeProblem) ? (
         <p className="phone-note">
           {status.resuming
-            ? `Reconnecting phones over Tailscale…${status.resumeProblem ? ` (${status.resumeProblem})` : ''}`
-            : `Couldn’t reconnect phones after the restart: ${status.resumeProblem}`}
+            ? `Reconnecting devices over Tailscale…${status.resumeProblem ? ` (${status.resumeProblem})` : ''}`
+            : `Couldn’t reconnect devices after the restart: ${status.resumeProblem}`}
         </p>
       ) : null}
       {status?.enabled ? (
@@ -201,7 +229,7 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
               <Lock size={14} />
               <span>
                 Encrypted, and only devices on your tailnet can reach it: <code>{status.url}</code>.
-                Phones still pair with a code below.
+                Each device still pairs with a code below.
               </span>
             </p>
           ) : (
@@ -209,8 +237,8 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
               <ShieldAlert size={14} />
               <span>
                 Only on a network you trust, like home Wi-Fi. Traffic isn't encrypted, so anyone on
-                the same network who can see it could take over a paired phone and control agents on
-                this Mac. Tailscale (HTTPS) avoids this.
+                the same network who can see it could take over a paired device and control agents
+                on this Mac. Tailscale (HTTPS) avoids this.
               </span>
             </p>
           )}
@@ -219,15 +247,15 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
           ) : pairing && link ? (
             <div className="phone-pairing">
               {secondsLeft > 0 ? (
-                <img src={link.qr} alt="QR code to connect your phone" width={180} height={180} />
+                <img src={link.qr} alt="QR code to connect a device" width={180} height={180} />
               ) : (
                 <div className="phone-expired">Code expired</div>
               )}
               <div className="phone-pairing-text">
-                <strong>Scan with your phone's camera</strong>
+                <strong>Scan it, or open the link on the other device</strong>
                 <small>
                   {secondsLeft > 0
-                    ? `Works once · expires in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`
+                    ? `Works once · expires in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}. Anyone with the link can pair until then, so only open it on your own device.`
                     : 'This code expired.'}
                 </small>
                 {pairing.links.length > 1 ? (
@@ -242,15 +270,32 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
                   />
                 ) : null}
                 <code className="phone-url">{new URL(link.url).host}</code>
-                <button
-                  className="secondary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void newCode()}
-                >
-                  <RefreshCw size={13} />
-                  New code
-                </button>
+                <div className="phone-pairing-actions">
+                  {/* For a computer (no camera): paste the link into its browser. */}
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy || secondsLeft === 0}
+                    onClick={() =>
+                      void copyText(link.url).then(
+                        () => setCopied(true),
+                        () => setError('Couldn’t copy the link.'),
+                      )
+                    }
+                  >
+                    {copied ? <Check size={13} /> : <Copy size={13} />}
+                    {copied ? 'Copied' : 'Copy link'}
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void newCode()}
+                  >
+                    <RefreshCw size={13} />
+                    New code
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -260,8 +305,8 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
               disabled={busy}
               onClick={() => void newCode()}
             >
-              <Smartphone size={14} />
-              Connect a phone
+              <MonitorSmartphone size={14} />
+              Connect a device
             </button>
           )}
         </>
@@ -281,7 +326,7 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
           </div>
           {status.devices.map((device) => (
             <div className="phone-device" key={device.id}>
-              <Smartphone size={14} />
+              <DeviceIcon name={device.name} />
               <div>
                 <span>{device.name}</span>
                 <small>
