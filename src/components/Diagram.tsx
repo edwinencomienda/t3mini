@@ -43,15 +43,17 @@ const palettes = {
     note: '#fffbeb',
     noteBorder: '#fcd34d',
   },
+  // The diagram sits on a card (--card, #222222 in dark): boxes a step lighter, labels on the
+  // card's own color.
   dark: {
-    background: '#111111',
-    node: '#1c1c1f',
-    nodeBorder: '#3f3f46',
+    background: '#222222',
+    node: '#2a2a2d',
+    nodeBorder: '#45454c',
     text: '#f4f4f5',
     muted: '#a1a1aa',
-    line: '#71717a',
-    cluster: '#161618',
-    clusterBorder: '#2e2e33',
+    line: '#7a7a82',
+    cluster: '#262628',
+    clusterBorder: '#38383d',
     accent: '#1e1b4b',
     accentBorder: '#4338ca',
     note: '#292211',
@@ -233,6 +235,9 @@ function useDark() {
       attributes: true,
       attributeFilter: ['data-theme'],
     })
+    // The theme may have changed between the first render and now (e.g. the saved theme
+    // applied as the page loads): read it again so that change isn't missed.
+    read()
     return () => {
       media.removeEventListener('change', read)
       observer.disconnect()
