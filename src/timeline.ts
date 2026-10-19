@@ -120,26 +120,51 @@ export function buildTurns(thread: ThreadState): Turn[] {
   return turns
 }
 
+// How long a turn took: "24s", "2m 10s", "1h 5m".
+export function turnDuration(turn: Pick<Turn, 'startedAt' | 'endedAt'>) {
+  if (!turn.startedAt || !turn.endedAt) return undefined
+  const seconds = Math.max(
+    1,
+    Math.round((Date.parse(turn.endedAt) - Date.parse(turn.startedAt)) / 1000),
+  )
+  if (!Number.isFinite(seconds)) return undefined
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+const verbs = (status?: Status) =>
+  status === 'interrupted'
+    ? ['Stopped', 'after']
+    : status === 'failed'
+      ? ['Failed', 'after']
+      : ['Worked', 'for']
+
 // "Worked for 2m 10s · 12 steps" ("Stopped after…" / "Failed after…" for a run that ended
 // early), or "· 3 messages" for older turns without saved steps.
 export function foldLabel(turn: Turn, status?: Status) {
-  const [verb, joiner] =
-    status === 'interrupted'
-      ? ['Stopped', 'after']
-      : status === 'failed'
-        ? ['Failed', 'after']
-        : ['Worked', 'for']
-  const parts = [verb]
-  if (turn.startedAt && turn.endedAt) {
-    const seconds = Math.max(
-      1,
-      Math.round((Date.parse(turn.endedAt) - Date.parse(turn.startedAt)) / 1000),
-    )
-    const time = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-    parts[0] = `${verb} ${joiner} ${time}`
-  }
+  const [verb, joiner] = verbs(status)
+  const parts = [verb!]
+  const time = turnDuration(turn)
+  if (time) parts[0] = `${verb} ${joiner} ${time}`
   const notes = turn.work.length - turn.steps
   if (turn.steps) parts.push(`${turn.steps} ${turn.steps === 1 ? 'step' : 'steps'}`)
   else if (notes) parts.push(`${notes} ${notes === 1 ? 'message' : 'messages'}`)
   return parts.join(' · ')
+}
+
+// The line at the very bottom of a thread once its latest turn ends, like Claude Code:
+// "Worked for 24s · done 2:00 PM" ("Stopped after…" / "Failed after…" when it ended early).
+// The date is added when it didn't end today. Undefined without both times.
+export function finishLabel(turn: Turn, status?: Status, now = new Date()) {
+  const time = turnDuration(turn)
+  if (!time || !turn.endedAt) return undefined
+  const [verb, joiner] = verbs(status)
+  const ended = new Date(turn.endedAt)
+  const clock = ended.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const day =
+    ended.toDateString() === now.toDateString()
+      ? ''
+      : `${ended.toLocaleDateString([], { month: 'short', day: 'numeric' })}, `
+  const done = status === 'interrupted' || status === 'failed' ? '' : 'done '
+  return `${verb} ${joiner} ${time} · ${done}${day}${clock}`
 }

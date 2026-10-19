@@ -67,15 +67,15 @@ it('shows a video and plays a sound, keeping a checked copy', async () => {
     id: expect.stringMatching(/\.mp4$/),
     caption: 'Sign-up flow',
   })
-  expect((await runTool(playAudio, context, { path: 'hello.mp3' })).text).toMatch(/^Playing/)
-  expect(attach.mock.calls[1]![0]).toMatchObject({
-    type: 'audio',
-    id: expect.stringMatching(/\.mp3$/),
-    autoplay: true,
-    at: expect.any(String),
+  expect((await runTool(playAudio, context, { path: 'hello.mp3' })).text).toMatch(
+    /^Shown to the user: hello\.mp3\. It doesn't play on its own/,
+  )
+  expect(attach.mock.calls[1]![0]).toEqual({ type: 'audio', id: expect.stringMatching(/\.mp3$/) })
+  // Older Codex threads still declare `autoplay`: it's accepted and ignored, nothing plays.
+  expect(await runTool(playAudio, context, { path: 'hello.mp3', autoplay: true })).toMatchObject({
+    ok: true,
   })
-  await runTool(playAudio, context, { path: 'hello.mp3', autoplay: false })
-  expect(attach.mock.calls[2]![0]).not.toHaveProperty('autoplay')
+  expect(attach.mock.calls[2]![0]).toEqual({ type: 'audio', id: expect.stringMatching(/\.mp3$/) })
   // The copy is what gets served, under its generated name.
   expect(await readdir(join(uploads.directory, 'media'))).toHaveLength(3)
 })

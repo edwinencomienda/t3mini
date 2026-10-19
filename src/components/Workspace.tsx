@@ -96,7 +96,7 @@ import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
 import { ScrollToBottom } from './ScrollToBottom'
 import { Celebration, LiveLine, StepGroup, StepRow, TodoCard, stepTitle } from './WorkSteps'
-import { buildTurns, foldLabel, type WorkItem } from '../timeline'
+import { buildTurns, finishLabel, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -1915,6 +1915,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
       ? `${names[thread.provider]} is working… send a message to steer it`
       : `Chat with ${names[thread.provider]}`
   const folder = thread ? projectName(thread.cwd) : undefined
+  // The browser tab shows the open thread: "● Title · project — t3 mini" (● while the agent
+  // works, ? while it waits for you), or just "t3 mini" with no thread open. It follows renames
+  // and the AI title as they arrive.
+  const tabTitle = thread
+    ? `${thread.status === 'waiting' ? '? ' : isActive(thread.status) ? '● ' : ''}${thread.title} · ${folder} — t3 mini`
+    : 't3 mini'
+  useEffect(() => {
+    document.title = tabTitle
+  }, [tabTitle])
   const runningCount = threads.filter((item) => isActive(item.status)).length
   const missingClis = bootstrap
     ? (['claude', 'codex'] as const)
@@ -1948,6 +1957,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // The conversation one turn at a time (see timeline.ts). While the agent works, the step
   // it's on shows in the live line at the bottom instead of in the list.
   const turns = thread ? buildTurns(thread) : []
+  // "Worked for 24s · done 2:00 PM" under the thread once its latest turn has ended.
+  const lastTurn = turns.at(-1)
+  const finished =
+    thread && !isActive(thread.status) && lastTurn?.done && lastTurn.user
+      ? finishLabel(lastTurn, lastTurn.endedAt === thread.completedAt ? thread.status : undefined)
+      : undefined
   // The preview steps through this thread's images (← / →).
   useEffect(() => setPreviewGallery(thread ? threadImages(thread.messages) : []), [thread])
   shownThread.current = thread?.id
@@ -2722,6 +2737,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         </section>
                       ),
                     )}
+                    {finished ? (
+                      <div className="thread-end" role="status">
+                        <span>{finished}</span>
+                      </div>
+                    ) : null}
                     {/* Work Claude left running in the background (e.g. a subagent) keeps the turn
                         open after its last reply; say so, so it doesn't look stuck. */}
                     {active && thread.background?.length ? (

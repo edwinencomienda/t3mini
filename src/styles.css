@@ -4600,3 +4600,30 @@ body.resizing {
     opacity: 0.15;
   }
 }
+
+/* The end of a thread once its latest turn is done: a soft wavy line with "Worked for 24s · done
+   2:00 PM" in the middle, like Claude Code. The wave is an SVG mask filled with the border color,
+   so it follows the theme. */
+.thread-end {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.5rem;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.thread-end::before,
+.thread-end::after {
+  content: '';
+  flex: 1;
+  height: 6px;
+  background: var(--input);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q3.5 0.5 7 3 T14 3' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E")
+    repeat-x left center / 14px 6px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='6' viewBox='0 0 14 6'%3E%3Cpath d='M0 3 Q3.5 0.5 7 3 T14 3' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E")
+    repeat-x left center / 14px 6px;
+}
+.thread-end span {
+  flex-shrink: 0;
+}

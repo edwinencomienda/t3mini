@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTurns, foldLabel } from './timeline'
+import { buildTurns, finishLabel, foldLabel } from './timeline'
 import type { Activity, Message } from './types'
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16, 9, 0, seconds)).toISOString()
@@ -142,5 +142,35 @@ describe('buildTurns', () => {
     })
     expect(foldLabel(turn!, 'interrupted')).toBe('Stopped after 1m 15s · 1 step')
     expect(foldLabel(turn!, 'failed')).toBe('Failed after 1m 15s · 1 step')
+  })
+})
+
+describe('finishLabel', () => {
+  const turn = (seconds: number, endedAt = '2026-10-19T06:00:00.000Z') =>
+    ({
+      startedAt: new Date(Date.parse(endedAt) - seconds * 1000).toISOString(),
+      endedAt,
+    }) as Parameters<typeof finishLabel>[0]
+  const sameDay = new Date('2026-10-19T06:30:00.000Z')
+  const clock = new Date('2026-10-19T06:00:00.000Z').toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+
+  it('says how long the turn took and when it finished', () => {
+    expect(finishLabel(turn(24), 'completed', sameDay)).toBe(`Worked for 24s · done ${clock}`)
+    expect(finishLabel(turn(130), 'completed', sameDay)).toBe(`Worked for 2m 10s · done ${clock}`)
+    expect(finishLabel(turn(3900), 'completed', sameDay)).toBe(`Worked for 1h 5m · done ${clock}`)
+  })
+  it('says when it was stopped or failed', () => {
+    expect(finishLabel(turn(12), 'interrupted', sameDay)).toBe(`Stopped after 12s · ${clock}`)
+    expect(finishLabel(turn(12), 'failed', sameDay)).toBe(`Failed after 12s · ${clock}`)
+  })
+  it('adds the date when it ended on another day', () => {
+    const later = new Date('2026-10-22T06:00:00.000Z')
+    expect(finishLabel(turn(24), 'completed', later)).toMatch(/^Worked for 24s · done .+, .+$/)
+  })
+  it('needs both times', () => {
+    expect(finishLabel({ endedAt: undefined } as never, 'completed')).toBeUndefined()
   })
 })
