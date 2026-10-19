@@ -179,6 +179,8 @@ export class AgentService {
   private runs = new Map<string, Run>()
   private settingsUpdates = new Set<string>()
   private listeners = new Set<() => void>()
+  // Stopped runs still exiting, by thread (see stop and windDown).
+  private winding = new Map<string, Promise<void>>()
   private timer?: NodeJS.Timeout
   private persistenceError?: string
   readonly icons: ProjectIcons
@@ -418,6 +420,8 @@ export class AgentService {
     const owned = [...this.store.threads.values()].filter((thread) => thread.cwd === path)
     if (owned.length && !withThreads)
       throw new HttpError(409, 'Delete this project’s threads before removing it.')
+    // Threads that were just stopped finish exiting first.
+    await Promise.all(owned.map((thread) => this.windDown(thread.id)))
     if (
       owned.some(
         (thread) =>
@@ -593,7 +597,7 @@ export class AgentService {
   }
   async updateSettings(id: string, input: unknown) {
     const thread = this.get(id)
-    if (this.runs.has(id) || this.settingsUpdates.has(id))
+    if ((await this.windDown(id)) || this.settingsUpdates.has(id))
       throw new HttpError(
         409,
         'Wait until the current operation finishes before changing agent settings.',
@@ -656,7 +660,7 @@ export class AgentService {
       createdAt: new Date().toISOString(),
       ...(attachments.length ? { attachments } : {}),
     }
-    const running = this.runs.get(id)
+    const running = await this.windDown(id)
     // The agent is waiting on its question: a message you send instead of picking an option is
     // your answer ("Something else"), for each question in it.
     const question = running && thread.approvals.find((item) => item.questions?.length)
@@ -699,7 +703,8 @@ export class AgentService {
     const { messageId } = z.object({ messageId: z.string().min(1).max(200) }).parse(input)
     const { text, attachments: requested } = promptSchema.parse(input)
     const thread = this.get(id)
-    if (this.runs.has(id)) throw new HttpError(409, 'Stop the agent before editing a message.')
+    if (await this.windDown(id))
+      throw new HttpError(409, 'Stop the agent before editing a message.')
     const target = editableMessage(thread)
     if (!target || target.id !== messageId)
       throw new HttpError(409, 'Only your last message of a stopped or failed turn can be edited.')
@@ -814,7 +819,8 @@ export class AgentService {
       this.changed()
     }
     const working = () => {
-      if (!thread.approvals.length) thread.status = 'working'
+      // Never back to working once stopped (the agent may still send a little while it exits).
+      if (!thread.approvals.length && !run.controller.signal.aborted) thread.status = 'working'
     }
     // Claude Code writes its session title a moment after the prompt, before its first reply, so
     // look for it as soon as the agent starts answering instead of only when the turn ends.
@@ -1001,7 +1007,9 @@ export class AgentService {
           ? { ...activity, status: thread.status === 'completed' ? 'completed' : 'failed' }
           : activity,
       )
-      thread.completedAt = new Date().toISOString()
+      // A stopped turn keeps the time you stopped it (it was shown as stopped then).
+      if (!(run.controller.signal.aborted && thread.completedAt))
+        thread.completedAt = new Date().toISOString()
       // Unread unless you're looking at it somewhere (any browser, profile, or phone).
       if (
         (thread.status === 'completed' || thread.status === 'failed') &&
@@ -1030,13 +1038,15 @@ export class AgentService {
           thread.error = error instanceof Error ? error.message : 'Could not send queued messages.'
           this.notify()
         })
+      // Tell every tab first, then save: the save doesn't change what they show.
+      this.notify()
       try {
         await this.store.save()
       } catch {
         this.persistenceError =
           'Could not save conversations. Check disk space and permissions, then restart the server.'
+        this.notify()
       }
-      this.notify()
       // A last look in case the title wasn't written yet during the turn (if not, the next turn
       // tries again).
       if (thread.provider === 'claude' && thread.titleSource === 'message' && thread.sessionId)
@@ -1115,19 +1125,62 @@ export class AgentService {
     this.changed()
     return { ok: true }
   }
+  // Stop shows right away, like Claude Desktop: the thread is marked stopped and every tab is
+  // told at once, while the agent finishes exiting in the background (Claude ends the turn
+  // cleanly, see providers/claude.ts). Anything that needs the run gone waits for that first
+  // (windDown).
   async stop(id: string) {
-    this.get(id)
+    const thread = this.get(id)
     const run = this.runs.get(id)
-    if (run) {
+    if (run && !run.controller.signal.aborted) {
       run.controller.abort()
+      // The run's end, saving included (it leaves `runs` before it saves).
+      const ending: Promise<void> = run.done
+        .catch(() => {})
+        .then(() => {
+          if (this.winding.get(id) === ending) this.winding.delete(id)
+        })
+      this.winding.set(id, ending)
       for (const resolve of run.approvals.values()) resolve(false)
       run.approvals.clear()
-      await run.done
+      thread.status = 'interrupted'
+      thread.approvals = []
+      thread.background = undefined
+      thread.activities = thread.activities.map((activity) =>
+        activity.status === 'running' ? { ...activity, status: 'failed' } : activity,
+      )
+      thread.completedAt = new Date().toISOString()
+      thread.updatedAt = thread.completedAt
+      // Messages queued during the turn stay, but never go out: stop means stop.
+      for (const item of run.queued) {
+        const message = thread.messages.find((entry) => entry.id === item.messageId)
+        if (!message) continue
+        delete message.queued
+        message.unsent = true
+      }
+      run.queued = []
+      this.notify()
     }
     return { ok: true }
   }
+  // A stopped run that's still exiting: wait for it to finish, so what comes next (a new turn,
+  // an edit, a delete) never overlaps it. Returns the run still going, if any.
+  async windDown(id: string) {
+    for (let ending = this.winding.get(id); ending; ending = this.winding.get(id)) await ending
+    let run = this.runs.get(id)
+    while (run?.controller.signal.aborted) {
+      await run.done.catch(() => {})
+      run = this.runs.get(id)
+    }
+    return run
+  }
   async close() {
-    await Promise.all([...this.runs.keys()].map((id) => this.stop(id)))
+    await Promise.all(
+      [...this.runs.entries()].map(async ([id, run]) => {
+        await this.stop(id)
+        await run.done.catch(() => {})
+      }),
+    )
     await this.processes.stopAll()
     await this.browsers.closeAll()
     if (this.timer) {
@@ -1405,7 +1458,7 @@ export class AgentService {
   }
   async remove(id: string) {
     const thread = this.get(id)
-    if (isActive(thread.status) || this.runs.has(id) || this.settingsUpdates.has(id))
+    if (isActive(thread.status) || (await this.windDown(id)) || this.settingsUpdates.has(id))
       throw new HttpError(409, 'Stop the agent before deleting this thread.')
     this.store.threads.delete(id)
     try {

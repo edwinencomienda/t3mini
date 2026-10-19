@@ -1584,13 +1584,44 @@ export function Workspace({ threadId }: { threadId?: string }) {
       composer.current?.focus()
     }
   }
+  // Turns you pressed Stop on (thread id → that turn's start), shown as stopped right away (like
+  // Claude Desktop) until the server's update says so too, a moment later. Keyed by the turn,
+  // so a message you send right after starts a turn that shows as working.
+  const [stopping, setStopping] = useState<Map<string, string | undefined>>(() => new Map())
+  const isStopping = (item: { id: string; startedAt?: string }) =>
+    stopping.has(item.id) && stopping.get(item.id) === item.startedAt
+  useEffect(() => {
+    setStopping((current) => {
+      const still = [...current].filter(([id]) => {
+        const status = threads.find((entry) => entry.id === id)?.status
+        return status !== undefined && isActive(status)
+      })
+      return still.length === current.size ? current : new Map(still)
+    })
+  }, [threads])
+  async function stop() {
+    if (!thread) return
+    const { id, startedAt } = thread
+    setStopping((current) => new Map(current).set(id, startedAt))
+    // Once it has stopped, the live update clears it (above). A failed request (shown as an
+    // error) leaves it running: back to the normal Stop button.
+    if (await action('stop')) return
+    setStopping((current) => {
+      const next = new Map(current)
+      next.delete(id)
+      return next
+    })
+  }
+  // True when the request went through.
   async function action(path: string, body: unknown = {}) {
     setBusy(true)
     setError('')
     try {
       await api(`threads/${activeId}/${path}`, 'POST', body)
+      return true
     } catch (error) {
       setError((error as Error).message)
+      return false
     } finally {
       setBusy(false)
     }
@@ -1855,7 +1886,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const range = visibleOrder.slice(Math.min(from, to), Math.max(from, to) + 1)
     setPicked((current) => new Set([...current, ...range]))
   }
-  const active = thread ? isActive(thread.status) : false
+  const active = thread ? isActive(thread.status) && !isStopping(thread) : false
   // Live dictation shows in the empty composer's placeholder. A placeholder doesn't count toward
   // the textarea's height, so the box is sized to the words as if they were typed; past the
   // maximum height it keeps the latest words (what you're saying now). Set on the element
@@ -2926,7 +2957,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             type="button"
                             aria-label="Stop"
                             title="Stop"
-                            onClick={() => action('stop')}
+                            onClick={() => void stop()}
                             disabled={!connected}
                           >
                             <Square size={10} fill="currentColor" />

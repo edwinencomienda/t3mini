@@ -999,6 +999,8 @@ describe('editing the last message after a stop', () => {
     await editService.send(created.id, { text: 'Oops' })
     await nextTurn()
     await editService.stop(created.id)
+    // Stop shows at once; the stopped turn is saved once the agent has exited.
+    await editService.windDown(created.id)
     const target = editService.get(created.id).messages.at(-1)!
     expect(target.turn?.fresh).toBe(true)
     let sessionAtStart: string | undefined = 'unset'
@@ -1222,4 +1224,39 @@ describe('AI thread titles', () => {
     await expect(titled.regenerateTitle(codex.id)).rejects.toThrow('Couldn’t write a title')
     expect(titled.get(codex.id).title).toBe('Ship it')
   })
+})
+it('shows a stop at once, and a message sent while the agent exits waits for it', async () => {
+  const prompts: string[] = []
+  let first: ProviderContext | undefined
+  let exit!: () => void
+  // The first turn takes its time to exit after being stopped, like Claude Code does.
+  const runner: Runner = (ctx) =>
+    new Promise<void>((resolve) => {
+      prompts.push(ctx.prompt)
+      if (prompts.length > 1) return resolve()
+      first = ctx
+      ctx.session('session-1')
+      ctx.signal.addEventListener('abort', () => (exit = resolve), { once: true })
+    })
+  const stopping = new AgentService(new ThreadStore(join(directory, 'stop-threads.json')), {
+    claude: runner,
+    codex: runner,
+  })
+  const created = await stopping.create({ provider: 'claude', cwd: directory })
+  await stopping.send(created.id, { text: 'Long job' })
+  while (!first) await new Promise((resolve) => setTimeout(resolve, 1))
+  await stopping.stop(created.id)
+  expect(stopping.get(created.id).status).toBe('interrupted')
+  // Output that arrives while it exits doesn't bring it back to working.
+  first.text('late', 'Still going')
+  expect(stopping.get(created.id).status).toBe('interrupted')
+  // A new message waits for the old run to exit, then starts a turn of its own.
+  const sending = stopping.send(created.id, { text: 'Next' })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(prompts).toEqual(['Long job'])
+  exit()
+  expect(await sending).toEqual({ accepted: true })
+  expect(prompts).toEqual(['Long job', 'Next'])
+  await stopping.windDown(created.id)
+  await stopping.close()
 })

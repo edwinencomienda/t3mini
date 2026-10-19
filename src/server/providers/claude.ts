@@ -59,10 +59,20 @@ export const runClaude: Runner = async (ctx) => {
     inputClosed = true
     wake?.()
   }
+  // Stop: ask Claude Code to end the turn (interrupt), the way Claude Desktop does. It ends it
+  // cleanly, so the session's transcript stays whole for the next turn. If it hasn't finished
+  // in a few seconds (or can't be asked yet), the process is killed instead. The thread already
+  // shows as stopped either way (see AgentService.stop).
+  let interrupt: (() => Promise<unknown>) | undefined
+  let killTimer: ReturnType<typeof setTimeout> | undefined
   const abort = () => {
-    abortController.abort()
     releasePrompt()
     closeInput()
+    if (!interrupt) return abortController.abort()
+    killTimer = setTimeout(() => abortController.abort(), 3_000)
+    Promise.resolve()
+      .then(interrupt)
+      .catch(() => abortController.abort())
   }
   // Images go first as base64 image blocks, followed by the text.
   async function content(text: string, attached: PromptImage[]) {
@@ -237,6 +247,7 @@ export const runClaude: Runner = async (ctx) => {
       },
     },
   })
+  interrupt = () => stream.interrupt()
   try {
     const settings = claudeSettings(threadSettings(ctx.thread))
     // Apply resets before sending the prompt, so resume cannot retain an earlier effort override.
@@ -246,7 +257,14 @@ export const runClaude: Runner = async (ctx) => {
     })
     releasePrompt()
     for await (const message of stream) {
-      ctx.signal.throwIfAborted()
+      if (ctx.signal.aborted) {
+        // Stopped: Claude is wrapping up the interrupted turn. Keep its place in the
+        // conversation for the next turn, but show nothing more.
+        if ((message.type === 'assistant' || message.type === 'user') && message.uuid)
+          if (!('isReplay' in message && message.isReplay)) ctx.entry?.(message.uuid)
+        if (message.type === 'result') break
+        continue
+      }
       if (message.session_id) ctx.session(message.session_id)
       // The session resumed past the rewind check once it produces anything but an error.
       if (rewinding && !reportedRewind && message.type !== 'result' && message.type !== 'system') {
@@ -370,8 +388,10 @@ export const runClaude: Runner = async (ctx) => {
           )
       }
     }
+    ctx.signal.throwIfAborted()
     if (!gotResult) throw new Error('Claude disconnected before reporting completion.')
   } finally {
+    clearTimeout(killTimer)
     ctx.signal.removeEventListener('abort', abort)
     releasePrompt()
     closeInput()
