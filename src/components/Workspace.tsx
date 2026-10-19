@@ -2951,7 +2951,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             onError={setError}
                           />
                         ) : null}
-                        {active ? (
+                        {/* One button at a time: while the agent works, Stop until there's
+                            something to send (text or an image), then Send, which steers it. */}
+                        {active && !hasDraft && !pending[thread.id]?.length ? (
                           <button
                             className="stop-button"
                             type="button"
@@ -2963,7 +2965,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             <Square size={10} fill="currentColor" />
                           </button>
                         ) : null}
-                        {/* While the agent works, Send steers it (shown once there's something to send). */}
                         {!active || hasDraft || pending[thread.id]?.length ? (
                           <button
                             className="send-button"
