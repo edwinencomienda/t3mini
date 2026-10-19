@@ -82,7 +82,7 @@ import { BackgroundMusic } from './BackgroundMusic'
 import { ProjectAvatar, useProjectIcons } from './ProjectAvatar'
 import { applyShared, registerShared, shareSetting } from '../shared-settings'
 import type { ProcessInfo } from '../server/processes'
-import { ImagePreview, previewOnClick } from './ImagePreview'
+import { ImagePreview, previewOnClick, setPreviewGallery, threadImages } from './ImagePreview'
 import { DictationButton, dictationSupported } from './Dictation'
 import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
@@ -1921,6 +1921,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // The conversation one turn at a time (see timeline.ts). While the agent works, the step
   // it's on shows in the live line at the bottom instead of in the list.
   const turns = thread ? buildTurns(thread) : []
+  // The preview steps through this thread's images (← / →).
+  useEffect(() => setPreviewGallery(thread ? threadImages(thread.messages) : []), [thread])
   shownThread.current = thread?.id
   // The drawn part: from the turn you'd scrolled back to, but at least the latest few.
   const place = thread ? places.current.get(thread.id) : undefined
