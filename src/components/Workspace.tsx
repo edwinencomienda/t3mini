@@ -456,17 +456,6 @@ function StatusDot({ status, unread = false }: { status: Status; unread?: boolea
     )
   return <span className={`status-dot ${status}`} title={labels[status]} />
 }
-// Shown in the header only while the agent is running (including waiting on an approval).
-// Finished, stopped, failed, and idle threads keep the header clean; the chat shows the outcome.
-function StatusBadge({ status }: { status: Status }) {
-  if (!isActive(status)) return null
-  return (
-    <span className={`status-badge ${status}`}>
-      <StatusDot status={status} />
-      {labels[status]}
-    </span>
-  )
-}
 
 // A project name short enough for a menu item.
 const shortName = (name: string) => (name.length > 28 ? `${name.slice(0, 27)}…` : name)
@@ -2543,7 +2532,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
             <div className="topbar-actions">
               {thread ? (
                 <>
-                  <StatusBadge status={thread.status} />
                   {bootstrap?.editors?.vscode && !bootstrap.remote ? (
                     <button
                       className="icon-button"

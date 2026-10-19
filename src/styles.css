@@ -568,24 +568,6 @@ kbd {
     transform: rotate(360deg);
   }
 }
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  height: 1.5rem;
-  padding: 0 0.4rem;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.status-badge .status-dot {
-  margin: 0;
-}
-.status-badge.waiting {
-  color: var(--warning);
-}
-.status-badge.failed {
-  color: var(--danger);
-}
 
 /* Main column */
 .main {
@@ -1816,8 +1798,7 @@ kbd {
   .topbar {
     padding: 0 0.75rem;
   }
-  .topbar .chip,
-  .status-badge {
+  .topbar .chip {
     display: none;
   }
   .chat-scroll {
