@@ -22,6 +22,7 @@ export const maxImageBytes = 10 * 1024 * 1024
 export const maxFileBytes = 25 * 1024 * 1024
 // Image ids are a UUID plus an image extension; nothing else is ever served back.
 const imageId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/
+export const isImageId = (id: unknown): id is string => typeof id === 'string' && imageId.test(id)
 
 export class UploadError extends Error {}
 

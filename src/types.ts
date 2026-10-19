@@ -158,7 +158,17 @@ export type MessageMatch = {
 // name: shown instead of the folder name; renaming never touches the folder on disk.
 // lastActiveAt: your latest message in a thread you've since deleted, so deleting threads
 // doesn't move the project down the sidebar.
-export type Project = { path: string; addedAt: string; name?: string; lastActiveAt?: string }
+// avatar: how its sidebar avatar is picked (absent: its own icon if it has one, else its
+// letter); image: an uploaded image's id, for avatar 'image'.
+export type ProjectAvatarKind = 'letter' | 'image'
+export type Project = {
+  path: string
+  addedAt: string
+  name?: string
+  lastActiveAt?: string
+  avatar?: ProjectAvatarKind
+  image?: string
+}
 export type ProjectSummary = {
   path: string
   name?: string
@@ -169,6 +179,9 @@ export type ProjectSummary = {
   threadCount: number
   // It has its own icon (a favicon or app icon), served at /api/projects/icon?path=…
   icon?: boolean
+  // Chosen in Project settings (see Project).
+  avatar?: ProjectAvatarKind
+  image?: string
 }
 export type ProviderHealth = { installed: boolean; version?: string }
 // View settings shared by every browser and window (kept on the server, sent with live

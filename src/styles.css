@@ -4164,6 +4164,18 @@ body.resizing {
   height: 100%;
   object-fit: contain;
 }
+/* A chosen image fills its square (an icon is shown whole). */
+.project-avatar.custom .project-avatar-image {
+  object-fit: cover;
+}
+.project-avatar.large {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+}
+.project-avatar.large .project-avatar-letter {
+  font-size: 19px;
+}
 .project-avatar-letter {
   display: inline-flex;
   align-items: center;
@@ -4451,4 +4463,53 @@ body.resizing {
 .older-turns:hover {
   background: var(--accent);
   color: var(--foreground);
+}
+
+/* Project settings: the avatar and path at the top, then name and avatar fields. */
+.project-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.project-settings-head > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.project-settings-head strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-settings-head code {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A boxed text field, like the Add project folder field (inputs are unstyled by default). */
+.project-settings .field input {
+  height: 2.1rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  font-size: 13.5px;
+  outline: 0;
+}
+.project-settings .field input:hover {
+  border-color: color-mix(in oklab, var(--border), var(--foreground) 15%);
+}
+.project-settings .field input:focus {
+  border-color: var(--primary);
+}
+.project-settings-avatar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }

@@ -14,6 +14,7 @@ import {
   type ThreadGlance,
   type PullRequest,
   type Message,
+  type Project,
   type ProjectSummary,
   type Provider,
   type Thread,
@@ -27,7 +28,7 @@ import {
   UiStore,
   uiStorePath,
 } from './store'
-import { UploadError, Uploads, attachmentSchema } from './uploads'
+import { UploadError, Uploads, attachmentSchema, isImageId } from './uploads'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
@@ -80,6 +81,10 @@ const createSchema = z.object({
 })
 const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
 const projectNameSchema = projectSchema.extend({ name: z.string().trim().max(80) })
+const projectAvatarSchema = projectSchema.extend({
+  avatar: z.enum(['auto', 'letter', 'image']),
+  image: z.string().max(100).optional(),
+})
 const promptSchema = z
   .object({
     text: z.string().trim().max(100_000),
@@ -227,6 +232,8 @@ export class AgentService {
             : project.addedAt,
         addedAt: project.addedAt,
         threadCount: 0,
+        ...(project.avatar ? { avatar: project.avatar } : {}),
+        ...(project.image ? { image: project.image } : {}),
       })
     for (const thread of this.store.threads.values()) {
       const sentAt = lastMessageAt(thread)
@@ -358,21 +365,46 @@ export class AgentService {
   // label changes: the folder, its path, and its threads stay as they are.
   async renameProject(input: unknown) {
     const { path, name } = projectNameSchema.parse(input)
+    return this.updateProject(path, 'Could not rename the project.', (project) => {
+      if (name) project.name = name
+      else delete project.name
+    })
+  }
+  // Project settings → Avatar: automatic (its own icon, else its letter), its letter, or an
+  // image you uploaded (an existing upload, checked by its id; uploads are PNG, JPEG, GIF, or
+  // WebP checked from their bytes, never SVG).
+  async setProjectAvatar(input: unknown) {
+    const { path, avatar, image } = projectAvatarSchema.parse(input)
+    if (avatar === 'image') {
+      if (!isImageId(image)) throw new HttpError(400, 'Choose an image first.')
+      try {
+        if (!(await stat(this.uploads.imagePath(image))).isFile()) throw new Error()
+      } catch {
+        throw new HttpError(400, 'That image is missing. Choose it again.')
+      }
+    }
+    return this.updateProject(path, 'Could not save the avatar.', (project) => {
+      delete project.avatar
+      delete project.image
+      if (avatar === 'letter') project.avatar = 'letter'
+      if (avatar === 'image') Object.assign(project, { avatar: 'image', image })
+    })
+  }
+  private async updateProject(path: string, failure: string, change: (project: Project) => void) {
     const saved = this.projectStore.projects.get(path)
     if (!saved && ![...this.store.threads.values()].some((thread) => thread.cwd === path))
       throw new HttpError(404, 'Project not found.')
-    // A folder known only through its threads gets saved as a project to hold the name.
+    // A folder known only through its threads gets saved as a project to hold the change.
     const project = saved ?? { path, addedAt: new Date().toISOString() }
     const previous = { ...project }
-    if (name) project.name = name
-    else delete project.name
+    change(project)
     this.projectStore.projects.set(path, project)
     try {
       await this.projectStore.save()
     } catch {
       if (saved) this.projectStore.projects.set(path, previous)
       else this.projectStore.projects.delete(path)
-      throw new HttpError(500, 'Could not rename the project.')
+      throw new HttpError(500, failure)
     }
     this.notify()
     return this.projects().find((item) => item.path === path)!

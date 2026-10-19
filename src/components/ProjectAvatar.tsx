@@ -1,5 +1,6 @@
 import { Avatar } from '@base-ui/react/avatar'
 import { switchSetting } from '../switch-setting'
+import type { ProjectSummary } from '../types'
 
 // Settings → Appearance → Project icons: avatars (on) or the plain folder icons (off).
 const setting = switchSetting('t3-mini:project-icons', 'projectIcons')
@@ -7,10 +8,10 @@ export const saveProjectIcons = setting.save
 // Starts on so the sidebar doesn't flash folders before the saved choice is read.
 export const useProjectIcons = () => setting.useSetting(true)
 
-// A project's avatar in the sidebar (Base UI Avatar): its own icon (favicon or app icon, served
-// by the server from a few well-known files) when it has one, otherwise — and while the icon
-// loads, or if it fails — its first letter on a color picked from its name, so each project
-// keeps the same look.
+// A project's avatar in the sidebar (Base UI Avatar): the image chosen in Project settings, or
+// automatically its own icon (favicon or app icon, served by the server from a few well-known
+// files) when it has one. Otherwise — and while the image loads, or if it fails — its first
+// letter on a color picked from its name, so each project keeps the same look.
 
 const hue = (name: string) => {
   let hash = 0
@@ -19,24 +20,40 @@ const hue = (name: string) => {
 }
 const initial = (name: string) => (/[\p{L}\p{N}]/u.exec(name)?.[0] ?? '?').toUpperCase()
 
+export function avatarSrc(
+  path: string,
+  project?: Pick<ProjectSummary, 'avatar' | 'image' | 'icon'>,
+) {
+  if (project?.avatar === 'image' && project.image)
+    return `/api/uploads/${encodeURIComponent(project.image)}`
+  if (project?.avatar !== 'letter' && project?.icon)
+    return `/api/projects/icon?path=${encodeURIComponent(path)}`
+  return undefined
+}
+
 export function ProjectAvatar({
   path,
   name,
-  icon,
+  project,
+  size,
 }: {
   path: string
   name: string
-  icon?: boolean
+  project?: Pick<ProjectSummary, 'avatar' | 'image' | 'icon'>
+  // Larger, for Project settings.
+  size?: 'large'
 }) {
+  const src = avatarSrc(path, project)
   return (
     <Avatar.Root
-      className="project-avatar"
+      className={`project-avatar ${size ?? ''} ${project?.avatar === 'image' ? 'custom' : ''}`}
       style={{ '--avatar-hue': hue(name) } as React.CSSProperties}
     >
-      {icon ? (
+      {src ? (
         <Avatar.Image
+          key={src}
           className="project-avatar-image"
-          src={`/api/projects/icon?path=${encodeURIComponent(path)}`}
+          src={src}
           alt=""
           width={16}
           height={16}

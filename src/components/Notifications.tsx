@@ -3,6 +3,7 @@ import {
   Bell,
   Bot,
   Mic,
+  Music,
   Palette,
   Smartphone,
   CircleAlert,
@@ -173,10 +174,11 @@ function accountLine(
 
 // Settings is split into tabs so each page stays short. The last tab is remembered while the
 // page is open; Mac-only tabs are hidden on a paired phone.
-type SettingsTab = 'appearance' | 'notifications' | 'dictation' | 'phone' | 'agents'
+type SettingsTab = 'appearance' | 'notifications' | 'music' | 'dictation' | 'phone' | 'agents'
 const settingsTabs: { id: SettingsTab; label: string; icon: ReactNode; macOnly?: boolean }[] = [
   { id: 'appearance', label: 'Appearance', icon: <Palette size={14} /> },
   { id: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
+  { id: 'music', label: 'Music', icon: <Music size={14} /> },
   { id: 'dictation', label: 'Dictation', icon: <Mic size={14} />, macOnly: true },
   { id: 'phone', label: 'Phone access', icon: <Smartphone size={14} />, macOnly: true },
   { id: 'agents', label: 'Agents', icon: <Bot size={14} /> },
@@ -320,6 +322,11 @@ export function SettingsDialog({
                     onChange={(enabled) => saveProjectIcons(enabled)}
                   />
                 </div>
+              </section>
+            ) : null}
+            {tab === 'music' ? (
+              <section className="settings-section">
+                <h3>Music</h3>
                 <div className="setting-row">
                   <div>
                     <strong>Working background music</strong>

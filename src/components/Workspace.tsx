@@ -88,6 +88,7 @@ import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
 import { CommandPalette } from './CommandPalette'
+import { ProjectSettings } from './ProjectSettings'
 import { Autocomplete } from '@base-ui/react/autocomplete'
 import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
@@ -466,6 +467,9 @@ function StatusBadge({ status }: { status: Status }) {
   )
 }
 
+// A project name short enough for a menu item.
+const shortName = (name: string) => (name.length > 28 ? `${name.slice(0, 27)}…` : name)
+
 // Long threads draw only their latest turns at first (a thread opens at the bottom, so that's
 // all you'd see anyway); older turns are added as you scroll up. Like t3code's virtual list,
 // but simpler: everything drawn stays real page content, so scroll pinning and find keep
@@ -747,6 +751,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   const [addProject, setAddProject] = useState(false)
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null)
+  // The project whose settings are open (right-click a project or a thread), or null.
+  const [projectSettings, setProjectSettings] = useState<string | null>(null)
   const [renamingProject, setRenamingProject] = useState<{ path: string; name: string } | null>(
     null,
   )
@@ -2102,7 +2108,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <ProjectAvatar
                     path={item.cwd}
                     name={projectName(item.cwd)}
-                    icon={projects.find((project) => project.path === item.cwd)?.icon}
+                    project={projects.find((project) => project.path === item.cwd)}
                   />
                 ) : (
                   <Folder size={14} />
@@ -2274,7 +2280,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <ProjectAvatar
                         path={cwd}
                         name={projectName(cwd)}
-                        icon={projects.find((project) => project.path === cwd)?.icon}
+                        project={projects.find((project) => project.path === cwd)}
                       />
                     ) : collapsed[cwd] ? (
                       <Folder size={14} />
@@ -2324,7 +2330,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <ProjectAvatar
                         path={cwd}
                         name={projectName(cwd)}
-                        icon={projects.find((project) => project.path === cwd)?.icon}
+                        project={projects.find((project) => project.path === cwd)}
                       />
                     ) : collapsed[cwd] ? (
                       <Folder size={14} />
@@ -2493,7 +2499,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     <ProjectAvatar
                       path={thread.cwd}
                       name={folder ?? ''}
-                      icon={projects.find((project) => project.path === thread.cwd)?.icon}
+                      project={projects.find((project) => project.path === thread.cwd)}
                     />
                   ) : (
                     <FolderOpen size={12} />
@@ -3078,6 +3084,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   disabled: retitling.has(target.id),
                   onSelect: () => void regenerateTitle(target.id),
                 },
+                'separator',
+                {
+                  label: `New thread in ${shortName(projectName(target.cwd))}`,
+                  icon: <SquarePen size={14} />,
+                  onSelect: () => void quickCreate(target.cwd),
+                },
+                {
+                  label: 'Project settings…',
+                  icon: <Settings2 size={14} />,
+                  onSelect: () => setProjectSettings(target.cwd),
+                },
                 {
                   label: 'Copy project path',
                   icon: <Copy size={14} />,
@@ -3107,12 +3124,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 {
                   label: 'New thread here',
                   icon: <SquarePen size={14} />,
-                  onSelect: () => openNewThread(path),
+                  onSelect: () => void quickCreate(path),
                 },
                 {
                   label: 'Rename',
                   icon: <Pencil size={14} />,
                   onSelect: () => setRenamingProject({ path, name: projectName(path) }),
+                },
+                {
+                  label: 'Project settings…',
+                  icon: <Settings2 size={14} />,
+                  onSelect: () => setProjectSettings(path),
                 },
                 { label: 'Copy path', icon: <Copy size={14} />, onSelect: () => copyPath(path) },
                 'separator',
@@ -3138,6 +3160,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
             )
           })()
         : null}
+      {projectSettings ? (
+        <ProjectSettings
+          key={projectSettings}
+          path={projectSettings}
+          project={projects.find((project) => project.path === projectSettings)}
+          projectIcons={projectIcons}
+          onClose={() => setProjectSettings(null)}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsDialog
           preferences={notify}
@@ -3347,7 +3378,7 @@ function NewThread({
                   <ProjectAvatar
                     path={project.path}
                     name={projectName(project.path)}
-                    icon={project.icon}
+                    project={project}
                   />
                 ) : (
                   <Folder size={15} />

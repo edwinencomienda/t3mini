@@ -438,6 +438,55 @@ it('renames a project label without touching its folder, and resets it with an e
   ).rejects.toThrow('Project not found')
   await expect(service.renameProject({ path: created.cwd, name: 'x'.repeat(81) })).rejects.toThrow()
 })
+it('sets a project avatar: letter, an uploaded image, or back to automatic', async () => {
+  const created = await thread()
+  const path = created.cwd
+  expect(await service.setProjectAvatar({ path, avatar: 'letter' })).toMatchObject({
+    avatar: 'letter',
+  })
+  // An image must be an existing upload, named by its id (never a path).
+  await expect(service.setProjectAvatar({ path, avatar: 'image' })).rejects.toThrow(
+    'Choose an image first',
+  )
+  await expect(
+    service.setProjectAvatar({ path, avatar: 'image', image: '../projects.json' }),
+  ).rejects.toThrow('Choose an image first')
+  await expect(
+    service.setProjectAvatar({
+      path,
+      avatar: 'image',
+      image: '00000000-0000-0000-0000-000000000000.png',
+    }),
+  ).rejects.toThrow('missing')
+  const png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+  const upload = await service.upload({
+    kind: 'image',
+    name: 'logo.png',
+    mimeType: 'image/png',
+    data: png,
+  })
+  const id = (upload as { id: string }).id
+  expect(await service.setProjectAvatar({ path, avatar: 'image', image: id })).toMatchObject({
+    avatar: 'image',
+    image: id,
+  })
+  // It survives a restart, and a renamed project keeps it.
+  await service.renameProject({ path, name: 'Client site' })
+  const store = new ProjectStore(join(directory, 'projects.json'))
+  await store.load()
+  expect(store.projects.get(path)).toMatchObject({
+    name: 'Client site',
+    avatar: 'image',
+    image: id,
+  })
+  const automatic = await service.setProjectAvatar({ path, avatar: 'auto' })
+  expect(automatic.avatar).toBeUndefined()
+  expect(automatic.image).toBeUndefined()
+  await expect(
+    service.setProjectAvatar({ path: join(directory, 'unknown'), avatar: 'letter' }),
+  ).rejects.toThrow('Project not found')
+})
 it('removes a project together with its threads, unless one is running', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'busy-project'))

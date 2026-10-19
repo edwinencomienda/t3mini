@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { isImageId } from './uploads'
 import { dirname, join } from 'node:path'
 import type { Project, Thread, UiSettings } from '../types'
 import { readUiSettings } from './ui-settings'
@@ -68,6 +69,10 @@ export class ProjectStore {
             ...(typeof project.name === 'string' && project.name ? { name: project.name } : {}),
             ...(typeof project.lastActiveAt === 'string'
               ? { lastActiveAt: project.lastActiveAt }
+              : {}),
+            ...(project.avatar === 'letter' ? { avatar: 'letter' as const } : {}),
+            ...(project.avatar === 'image' && isImageId(project.image)
+              ? { avatar: 'image' as const, image: project.image }
               : {}),
           })
     } catch (error) {
