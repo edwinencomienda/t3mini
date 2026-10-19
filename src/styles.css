@@ -598,6 +598,7 @@ kbd {
   min-height: 0;
 }
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -4563,4 +4564,50 @@ body.resizing {
 }
 .block-media-note a {
   color: var(--primary);
+}
+
+/* The thread is working: a short segment swings left and right along the header's bottom edge
+   (over its border), like a pendulum, easing at each end. */
+.working-bar {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  /* A faint track the brighter segment slides along. */
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  pointer-events: none;
+}
+.working-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 999px;
+  background: var(--primary);
+  animation: working-bar 2s ease-in-out infinite alternate;
+}
+/* From the left edge to the right edge: the segment is 35% wide, so it travels 65% of the bar,
+   which is 65 / 35 of its own width. */
+@keyframes working-bar {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(185.71%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-bar::before {
+    width: 100%;
+    opacity: 0.5;
+    animation: working-bar-pulse 2s ease-in-out infinite !important;
+    animation-duration: 2s !important;
+  }
+}
+@keyframes working-bar-pulse {
+  50% {
+    opacity: 0.15;
+  }
 }

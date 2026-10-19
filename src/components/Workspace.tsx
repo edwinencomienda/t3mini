@@ -2580,6 +2580,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 </>
               ) : null}
             </div>
+            {/* While the agent works: a thin sliding bar along the header's bottom edge, like a
+                terminal's progress bar. Not while it waits on you (an approval or a question). */}
+            {active && thread?.status !== 'waiting' ? (
+              <div className="working-bar" role="progressbar" aria-label="Agent is working" />
+            ) : null}
           </header>
           <div className="chat-column">
             <div
