@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import { networkInterfaces } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   serveGateway,
   stopServingGateway,
@@ -13,8 +13,7 @@ import {
   type TailscaleStatus,
 } from './tailscale'
 
-// Phone access. A gateway runs only while switched on (never across restarts), lets in only
-// paired devices, and forwards their requests to the loopback-only app, marked so the app knows
+// Phone access. A gateway runs only while switched on, lets in only paired devices, and forwards their requests to the loopback-only app, marked so the app knows
 // they're remote. Two ways in:
 // - Local network (plain HTTP): the gateway listens on the LAN.
 // - Tailscale (HTTPS): the gateway listens on loopback only, and `tailscale serve` puts it
@@ -22,6 +21,11 @@ import {
 //
 // Pairing: the Mac shows a QR code with a one-time code (5 minutes). The phone trades it for a
 // session cookie that lasts 30 days. Only hashes of codes and session tokens are kept.
+//
+// After a restart it's off, except that Tailscale access you left on comes back by itself
+// ("Reconnect after restart", on by default), so paired phones reconnect without you. Local
+// network access never comes back on its own: it's plain HTTP on whatever network the Mac is
+// on by then.
 
 export const sessionDays = 30
 const pairingMs = 5 * 60_000
@@ -50,7 +54,16 @@ export type RemoteStatus = {
   // Tailscale mode: the HTTPS address, e.g. https://macbook.tail1234.ts.net:8443.
   url?: string
   devices: DeviceInfo[]
+  // Turn Tailscale access back on after a restart if it was on.
+  autoResume: boolean
+  // Trying to turn it back on after a restart (Tailscale may still be starting).
+  resuming: boolean
+  resumeProblem?: string
 }
+// Saved next to the devices: the reconnect setting, and whether Tailscale access was on.
+type Saved = { autoResume: boolean; wasOn: boolean }
+// Waits between tries to turn Tailscale access back on after a restart (about 9 minutes).
+const resumeDelays = [0, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000]
 // What the gateway needs from Tailscale; tests pass a stand-in.
 export type TailscaleControl = {
   status: () => Promise<TailscaleStatus>
@@ -130,6 +143,13 @@ export class RemoteAccess {
   // Tailscale mode: the Host phones use, e.g. "macbook.tail1234.ts.net:8443".
   private tailscaleHost?: string
   private exitHooked = false
+  private saved: Saved = { autoResume: true, wasOn: false }
+  private resuming?: { cancelled: boolean }
+  private resumeProblem?: string
+  // Removing a serve entry a crash left behind, which must finish before serving again.
+  private staleServe: Promise<void> = Promise.resolve()
+  // Turning on and off happens one at a time, so a reconnect can't race your own switch.
+  private queue: Promise<unknown> = Promise.resolve()
   constructor(
     readonly path: string,
     private options: {
@@ -164,8 +184,75 @@ export class RemoteAccess {
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
     }
+    try {
+      const saved = JSON.parse(await readFile(this.settingsPath, 'utf8')) as Partial<Saved>
+      if (typeof saved.autoResume === 'boolean') this.saved.autoResume = saved.autoResume
+      if (typeof saved.wasOn === 'boolean') this.saved.wasOn = saved.wasOn
+    } catch {
+      // Missing or unreadable: the defaults.
+    }
     // Off on restart: a serve entry left behind by a crash is removed (only if it's ours).
-    void this.tailscale.stopServe(this.port).catch(() => {})
+    this.staleServe = this.tailscale.stopServe(this.port).catch(() => {})
+  }
+  private get settingsPath() {
+    return join(dirname(this.path), 'phone-access.json')
+  }
+  private async saveSettings(change: Partial<Saved>) {
+    this.saved = { ...this.saved, ...change }
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
+    await writeFile(this.settingsPath + '.tmp', JSON.stringify(this.saved), { mode: 0o600 })
+    await rename(this.settingsPath + '.tmp', this.settingsPath)
+  }
+  private serial<T>(task: () => Promise<T>) {
+    const next = this.queue.then(task, task)
+    this.queue = next.catch(() => {})
+    return next
+  }
+  private stopResuming() {
+    if (this.resuming) this.resuming.cancelled = true
+    this.resuming = undefined
+    this.resumeProblem = undefined
+  }
+  // The Allow phones switch: turns phone access on or off and remembers it for restarts.
+  async set(enabled: boolean, upstreamPort: number, mode: PhoneMode = 'lan') {
+    this.stopResuming()
+    await this.serial(async () => {
+      if (enabled) await this.enable(upstreamPort, mode)
+      else await this.disable()
+      await this.saveSettings({ wasOn: enabled && mode === 'tailscale' })
+    })
+  }
+  async setAutoResume(autoResume: boolean) {
+    if (!autoResume) this.stopResuming()
+    await this.saveSettings({ autoResume })
+  }
+  // At startup: turns Tailscale access back on if it was on, so paired phones reconnect.
+  // Tailscale may still be starting (the Mac just booted or woke), so it tries for a while.
+  resume(upstreamPort: number, delays = resumeDelays) {
+    if (this.enabled || this.resuming || !this.saved.autoResume || !this.saved.wasOn) return
+    const attempt = { cancelled: false }
+    this.resuming = attempt
+    void (async () => {
+      await this.staleServe
+      for (const wait of delays) {
+        if (wait) await new Promise((resolve) => setTimeout(resolve, wait))
+        try {
+          const done = await this.serial(async () => {
+            if (attempt.cancelled || this.enabled) return true
+            await this.enable(upstreamPort, 'tailscale')
+            return true
+          })
+          if (done) break
+        } catch (error) {
+          if (!attempt.cancelled)
+            this.resumeProblem = error instanceof Error ? error.message : 'Could not reconnect.'
+        }
+      }
+      if (this.resuming === attempt) {
+        this.resuming = undefined
+        if (this.enabled) this.resumeProblem = undefined
+      }
+    })()
   }
   private async save() {
     this.lastSaved = Date.now()
@@ -185,6 +272,9 @@ export class RemoteAccess {
       devices: [...this.devices.values()]
         .map(({ tokenHash: _hash, ...device }) => device)
         .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)),
+      autoResume: this.saved.autoResume,
+      resuming: Boolean(this.resuming),
+      ...(this.resumeProblem && !this.enabled ? { resumeProblem: this.resumeProblem } : {}),
     }
   }
   // A one-time code for the QR link; only the Mac (a local request) may create one.
@@ -283,7 +373,8 @@ export class RemoteAccess {
         await new Promise<void>((resolve) => server.close(() => resolve()))
         throw error
       }
-      // Never let the tailnet address outlive t3 mini (off on restart).
+      // Never let the tailnet address outlive t3 mini (it's served again on restart, if
+      // reconnecting is on).
       if (!this.exitHooked) {
         this.exitHooked = true
         process.once('exit', () => {
@@ -447,8 +538,8 @@ export class RemoteAccess {
   }
 }
 
-// One instance per server process (kept across dev reloads). It starts switched off, so phone
-// access is always off after a restart.
+// One instance per server process (kept across dev reloads). It starts switched off; resume()
+// turns Tailscale access back on at startup if it was on.
 const globals = globalThis as typeof globalThis & { t3MiniRemote?: Promise<RemoteAccess> }
 export function getRemoteAccess(path: string) {
   return (globals.t3MiniRemote ??= (async () => {

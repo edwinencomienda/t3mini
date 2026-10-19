@@ -251,6 +251,91 @@ describe('over Tailscale (HTTPS)', () => {
     expect(access.enabled).toBe(false)
   })
 
+  describe('after a restart', () => {
+    // A new process: same saved files, a fresh (off) gateway.
+    const restart = async () => {
+      await access.disable()
+      access = new RemoteAccess(join(directory, 'devices.json'), {
+        port,
+        addresses: () => ['127.0.0.1'],
+        tailscale: fakeTailscale,
+      })
+      await access.load()
+    }
+    const until = async (check: () => boolean) => {
+      for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 10))
+    }
+
+    it('turns Tailscale access back on, so paired phones reconnect', async () => {
+      await access.load()
+      await access.set(true, upstreamPort, 'tailscale')
+      const { cookie } = await pairOverTailnet()
+      await restart()
+      expect(access.enabled).toBe(false)
+      access.resume(upstreamPort, [0])
+      await until(() => access.enabled)
+      expect(access.status()).toMatchObject({ enabled: true, mode: 'tailscale', autoResume: true })
+      // The stale serve entry is removed before serving again.
+      expect(served.slice(-2)).toEqual([`stop ${port}`, `serve ${port}`])
+      const forwarded = await request('/api/bootstrap', { host: tailnetHost, cookie })
+      expect(forwarded).toMatchObject({ status: 200, body: 'ok from app' })
+    })
+
+    it('keeps trying while Tailscale starts up, and says why', async () => {
+      await access.load()
+      await access.set(true, upstreamPort, 'tailscale')
+      await restart()
+      tailnet = { available: true, running: false, problem: 'Tailscale is not connected.' }
+      access.resume(upstreamPort, [0, 60])
+      await until(() => Boolean(access.status().resumeProblem))
+      expect(access.status()).toMatchObject({
+        resuming: true,
+        resumeProblem: 'Tailscale is not connected.',
+      })
+      tailnet = { available: true, running: true, dnsName: 'mac.tail1234.ts.net' }
+      await until(() => access.enabled)
+      expect(access.status()).toMatchObject({ enabled: true, resuming: false })
+      expect(access.status().resumeProblem).toBeUndefined()
+    })
+
+    it('stays off for local network access, when you switched it off, or with the setting off', async () => {
+      await access.load()
+      await access.set(true, upstreamPort, 'lan')
+      await restart()
+      access.resume(upstreamPort, [0])
+      await new Promise((r) => setTimeout(r, 30))
+      expect(access.status()).toMatchObject({ enabled: false, resuming: false })
+
+      await access.set(true, upstreamPort, 'tailscale')
+      await access.set(false, upstreamPort, 'tailscale')
+      await restart()
+      access.resume(upstreamPort, [0])
+      await new Promise((r) => setTimeout(r, 30))
+      expect(access.enabled).toBe(false)
+
+      await access.set(true, upstreamPort, 'tailscale')
+      await access.setAutoResume(false)
+      await restart()
+      expect(access.status().autoResume).toBe(false)
+      access.resume(upstreamPort, [0])
+      await new Promise((r) => setTimeout(r, 30))
+      expect(access.enabled).toBe(false)
+    })
+
+    it('gives way when you switch phone access off while it is still trying', async () => {
+      await access.load()
+      await access.set(true, upstreamPort, 'tailscale')
+      await restart()
+      tailnet = { available: true, running: false, problem: 'Tailscale is not connected.' }
+      access.resume(upstreamPort, [0, 40])
+      await until(() => Boolean(access.status().resumeProblem))
+      await access.set(false, upstreamPort, 'tailscale')
+      tailnet = { available: true, running: true, dnsName: 'mac.tail1234.ts.net' }
+      await new Promise((r) => setTimeout(r, 80))
+      expect(access.status()).toMatchObject({ enabled: false, resuming: false })
+    })
+  })
+
   it('switches back to the local network on request', async () => {
     await access.enable(upstreamPort, 'tailscale')
     await access.enable(upstreamPort, 'lan')

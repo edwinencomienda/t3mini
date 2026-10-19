@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { checkRequest } from './api'
+import { changedParts, checkRequest } from './api'
 it('accepts same-origin loopback requests', () => {
   expect(() =>
     checkRequest(
@@ -97,4 +97,39 @@ it('serves agent HTML pages as sandboxed plain text, never as a page', async () 
   expect(await response.text()).toBe('<script>alert(1)</script>')
   const missing = await handleApi(new Request('http://127.0.0.1:4310/api/html/..%2Fui.json'))
   expect(missing.status).toBe(404)
+})
+it('sends each tab only the live-update parts that changed', () => {
+  const sent = new Map<string, string>()
+  const thread = { id: 'a', messages: [{ text: 'long history' }] }
+  const snapshot = (threads: unknown[], extra = {}) => ({
+    threads,
+    thread,
+    persistenceError: undefined,
+    ...extra,
+  })
+  // Connecting: everything, with undefined sent as null.
+  expect(JSON.parse(changedParts(sent, snapshot([{ id: 'a' }]))!)).toEqual({
+    threads: [{ id: 'a' }],
+    thread,
+    persistenceError: null,
+  })
+  // Another thread streams: the list changes, the open thread isn't sent again.
+  expect(
+    JSON.parse(changedParts(sent, snapshot([{ id: 'a' }, { id: 'b', status: 'working' }]))!),
+  ).toEqual({ threads: [{ id: 'a' }, { id: 'b', status: 'working' }] })
+  // Nothing changed for this tab: nothing to send.
+  expect(
+    changedParts(sent, snapshot([{ id: 'a' }, { id: 'b', status: 'working' }])),
+  ).toBeUndefined()
+  // An error appearing is sent.
+  expect(
+    JSON.parse(
+      changedParts(
+        sent,
+        snapshot([{ id: 'a' }, { id: 'b', status: 'working' }], {
+          persistenceError: 'disk full',
+        }),
+      )!,
+    ),
+  ).toEqual({ persistenceError: 'disk full' })
 })

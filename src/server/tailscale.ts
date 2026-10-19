@@ -14,10 +14,13 @@ const appCli = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
 // The HTTPS port on the tailnet name (8443, like t3code; override with T3_MINI_TAILSCALE_PORT).
 export const tailscalePort = () => Number(process.env.T3_MINI_TAILSCALE_PORT) || 8443
 
-// TAILSCALE_BIN, else `tailscale` on PATH, else the CLI inside the macOS app.
+// TAILSCALE_BIN, else the CLI inside the macOS app, else `tailscale` on PATH. The app's own
+// binary comes first: the `tailscale` it installs on PATH is a shell script that runs it as a
+// child, so a timeout would stop only the script and leave a hung CLI behind (it hangs while the
+// app's network extension is off).
 function commands() {
   if (process.env.TAILSCALE_BIN) return [process.env.TAILSCALE_BIN]
-  return existsSync(appCli) ? ['tailscale', appCli] : ['tailscale']
+  return existsSync(appCli) ? [appCli, 'tailscale'] : ['tailscale']
 }
 async function run(args: string[], timeout: number) {
   let missing: unknown

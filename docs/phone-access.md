@@ -10,7 +10,7 @@ How t3 mini lets a phone use the app, over the local network or over Tailscale, 
   - **Tailscale** (`tailscale`, HTTPS): the gateway listens on **loopback only**, and `tailscale serve` (`src/server/tailscale.ts`) publishes it at `https://<MagicDNS name>:8443` to the tailnet. See [Tailscale (HTTPS)](#tailscale-https).
 - Phones pair by scanning a **QR code** with a **one-time code** (5 minutes), which the gateway trades for a **30-day session cookie**.
 - The gateway marks forwarded requests with `x-t3-remote: 1`. The API uses that to refuse **Mac-only** actions and tells the page it's remote so the UI hides them.
-- Phone access is **in memory only**: it is off after every server restart, by design. Paired devices persist (hashed) so they reconnect without re-scanning once it's switched back on.
+- Phone access starts **off** after every server restart. The one exception: **Tailscale** access the user left on comes back by itself (**Reconnect after restart**, on by default), so paired phones reconnect without re-scanning. Local-network access never comes back on its own. Paired devices persist (hashed).
 
 ## Request flow
 
@@ -46,13 +46,17 @@ WebSocket upgrades (Vite's dev live reload) take the same checks, then are piped
 | `src/attachments.ts`                                  | `randomId()` and `copyText()`, which work outside secure contexts (see pitfalls); `prepareImage()` converts/downsizes photos on the device.                                                                   |
 | `src/server/remote.test.ts`, `src/server/api.test.ts` | Gateway and remote-gating tests.                                                                                                                                                                              |
 | `.data/devices.json`                                  | Paired devices (hashed tokens), mode `0600`. Gitignored with the rest of `.data`.                                                                                                                             |
+| `.data/phone-access.json`                             | `{ autoResume, wasOn }`: the Reconnect after restart setting, and whether Tailscale access was on when last switched. Mode `0600`.                                                                            |
+| `vite.config.ts`, `server.mjs`                        | Once listening, the server calls its own `POST /api/remote/resume` (server code only loads on the first request).                                                                                             |
 
 ## API (Mac only; refused with 403 when `x-t3-remote: 1`)
 
 | Method & path                | Body                                                | Returns                                                                                                                                                                                      |
 | ---------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/remote`            |                                                     | `{ enabled, mode, port, addresses, url?, devices, tailscale: { available, running, dnsName?, problem? } }`                                                                                   |
+| `GET /api/remote`            |                                                     | `{ enabled, mode, port, addresses, url?, devices, autoResume, resuming, resumeProblem?, tailscale: { available, running, dnsName?, problem? } }`                                             |
 | `POST /api/remote`           | `{ enabled: boolean, mode?: 'lan' \| 'tailscale' }` | status; starts/stops the gateway (or switches mode). Uses the app's own port (from the request URL) as the forwarding target. Tailscale problems come back as a 500 with a readable message. |
+| `POST /api/remote/settings`  | `{ autoResume: boolean }`                           | status; saves Reconnect after restart. Turning it off stops a reconnect in progress.                                                                                                         |
+| `POST /api/remote/resume`    | `{}`                                                | `{ ok }`; sent by the server itself at startup. Turns Tailscale access back on if it was on and the setting is on, retrying in the background.                                               |
 | `POST /api/remote/pair`      | `{}`                                                | `{ expiresAt, links: [{ url, qr }] }`, one link per LAN address; `qr` is a PNG data URL. 409 if phone access is off.                                                                         |
 | `DELETE /api/remote/devices` | `{ id? }`                                           | status; revokes one device, or all without `id`, and closes their open connections.                                                                                                          |
 
@@ -62,26 +66,26 @@ Mac-only actions refused for remote requests: managing phone access, `POST /api/
 
 ## Settings and constants
 
-| What                     | Where                                                           | Value                                                                                   |
-| ------------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Gateway port             | `T3_MINI_PHONE_PORT` env, `RemoteAccess.port`                   | `4311`                                                                                  |
-| Session length           | `sessionDays` in `remote.ts` (cookie `Max-Age` and `expiresAt`) | 30 days                                                                                 |
-| Pairing code lifetime    | `pairingMs` in `remote.ts`                                      | 5 minutes, single use                                                                   |
-| Cookie (local network)   | `lanCookie` in `remote.ts`                                      | `t3m_session`, `HttpOnly; SameSite=Lax; Path=/` (no `Secure`: the gateway is HTTP)      |
-| Cookie (Tailscale)       | `httpsCookie` in `remote.ts`                                    | `__Host-t3m_session`, `HttpOnly; Secure; SameSite=Lax; Path=/`                          |
-| Tailscale HTTPS port     | `T3_MINI_TAILSCALE_PORT` env, `tailscalePort()`                 | `8443`                                                                                  |
-| Tailscale CLI            | `TAILSCALE_BIN` env, then `tailscale` on PATH, then the app's   | `/Applications/Tailscale.app/Contents/MacOS/Tailscale`                                  |
-| Trusted marker header    | `remoteHeader` in `remote.ts`                                   | `x-t3-remote`                                                                           |
-| Allowed source addresses | `isPrivateAddress()`                                            | `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `127/8` (IPv4, incl. `::ffff:` mapped) |
-| Offered addresses        | `lanAddresses()`                                                | non-internal IPv4 interfaces in those ranges (e.g. Wi-Fi `en0`, Ethernet `en7`)         |
-| "Last seen" persistence  | `authenticate()`                                                | at most once a minute                                                                   |
+| What                     | Where                                                           | Value                                                                                     |
+| ------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Gateway port             | `T3_MINI_PHONE_PORT` env, `RemoteAccess.port`                   | `4311`                                                                                    |
+| Session length           | `sessionDays` in `remote.ts` (cookie `Max-Age` and `expiresAt`) | 30 days                                                                                   |
+| Pairing code lifetime    | `pairingMs` in `remote.ts`                                      | 5 minutes, single use                                                                     |
+| Cookie (local network)   | `lanCookie` in `remote.ts`                                      | `t3m_session`, `HttpOnly; SameSite=Lax; Path=/` (no `Secure`: the gateway is HTTP)        |
+| Cookie (Tailscale)       | `httpsCookie` in `remote.ts`                                    | `__Host-t3m_session`, `HttpOnly; Secure; SameSite=Lax; Path=/`                            |
+| Tailscale HTTPS port     | `T3_MINI_TAILSCALE_PORT` env, `tailscalePort()`                 | `8443`                                                                                    |
+| Tailscale CLI            | `TAILSCALE_BIN` env, then the app's, then `tailscale` on PATH   | `/Applications/Tailscale.app/Contents/MacOS/Tailscale` (the PATH one is a wrapper script) |
+| Trusted marker header    | `remoteHeader` in `remote.ts`                                   | `x-t3-remote`                                                                             |
+| Allowed source addresses | `isPrivateAddress()`                                            | `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `127/8` (IPv4, incl. `::ffff:` mapped)   |
+| Offered addresses        | `lanAddresses()`                                                | non-internal IPv4 interfaces in those ranges (e.g. Wi-Fi `en0`, Ethernet `en7`)           |
+| "Last seen" persistence  | `authenticate()`                                                | at most once a minute                                                                     |
 
 ## Security model (keep these invariants)
 
 Anyone who reaches the app can make agents run commands on the Mac (threads default to Full access). So:
 
 1. **The app never listens beyond loopback.** Only the gateway does, and only while switched on. Don't bind Vite or `server.mjs` to `0.0.0.0`; Vite dev also serves source and has its own attack surface.
-2. **Off on restart.** `RemoteAccess` starts disabled and the switch isn't persisted. Keep it that way unless the user asks otherwise.
+2. **Off on restart, except Tailscale by choice.** `RemoteAccess` starts disabled. Only Tailscale mode is remembered (`wasOn`, saved by `set()` when the user flips the switch) and resumed by `resume()` when `autoResume` is on (the default, as the user asked). Local-network mode is never resumed: it's plain HTTP on all interfaces, and after a restart the Mac may be on another network. A crash or restart doesn't clear `wasOn`; only switching off does. Resuming goes through the same `enable()`, so every Tailscale check still applies, and pairing is still required. On and off (`set()`, resume attempts) run one at a time, and a manual switch cancels a pending resume.
 3. **Only the Mac mints pairing codes.** `/api/remote*` is refused for remote requests.
 4. **`x-t3-remote` is only trustworthy because the gateway strips every client `x-t3-*` header** before adding its own. If you add more trusted headers, use the `x-t3-` prefix so they're stripped too.
 5. **Host, source address, and Origin checks** in `allowed()` block DNS rebinding and other sites driving the gateway. `checkRequest()` in `api.ts` still enforces loopback + same-origin for the app itself.
@@ -134,15 +138,15 @@ On a real phone: Settings → Phone access → on → Connect a phone → scan. 
 
 ## Troubleshooting
 
-| Symptom                                                  | Likely cause                                                                                                                                                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phone can't load the page at all                         | macOS firewall blocked `node` (allow it), phone on a different network or a guest Wi-Fi with client isolation, or phone access is off (it turns off on restart).                      |
-| "Not connected" page                                     | No or expired session, or the device was revoked. Scan a new QR code.                                                                                                                 |
-| "This code has expired"                                  | Codes last 5 minutes and work once. Show a new one.                                                                                                                                   |
-| Forbidden (403)                                          | The URL uses an address that isn't one of this Mac's current LAN addresses (e.g. the Mac changed networks), or a non-private source address. Use the address shown under the QR code. |
-| Something works on the Mac but silently not on the phone | A secure-context-only API (see Pitfalls).                                                                                                                                             |
-| "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                              |
-| Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `bun run dev` (this also turns phone access off).                                 |
+| Symptom                                                  | Likely cause                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone can't load the page at all                         | macOS firewall blocked `node` (allow it), phone on a different network or a guest Wi-Fi with client isolation, or phone access is off (local-network access turns off on restart; Tailscale access reconnects unless Reconnect after restart is off). |
+| "Not connected" page                                     | No or expired session, or the device was revoked. Scan a new QR code.                                                                                                                                                                                 |
+| "This code has expired"                                  | Codes last 5 minutes and work once. Show a new one.                                                                                                                                                                                                   |
+| Forbidden (403)                                          | The URL uses an address that isn't one of this Mac's current LAN addresses (e.g. the Mac changed networks), or a non-private source address. Use the address shown under the QR code.                                                                 |
+| Something works on the Mac but silently not on the phone | A secure-context-only API (see Pitfalls).                                                                                                                                                                                                             |
+| "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                                                                                              |
+| Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `bun run dev` (local-network phone access turns off; Tailscale access reconnects by itself).                                                      |
 
 ## Tailscale (HTTPS)
 

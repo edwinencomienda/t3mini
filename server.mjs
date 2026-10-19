@@ -69,4 +69,16 @@ server.on('upgrade', (request, socket, head) => {
   if (request.url?.startsWith('/api/dictation/stream') && handle) handle(request, socket, head)
   else socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
 })
-server.listen(port, '127.0.0.1', () => console.log(`t3 mini → http://localhost:${port}`))
+server.listen(port, '127.0.0.1', () => {
+  console.log(`t3 mini → http://localhost:${port}`)
+  // Tailscale phone access that was on before a restart comes back by itself.
+  void app
+    .fetch(
+      new Request(`http://127.0.0.1:${port}/api/remote/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+    )
+    .catch(() => {})
+})

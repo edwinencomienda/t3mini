@@ -53,6 +53,20 @@ export function isHttpError(error: unknown): error is HttpError {
     typeof (error as { status?: unknown }).status === 'number'
   )
 }
+// Live updates send each tab only the parts of the snapshot that changed since its last update
+// (the whole snapshot on connect). While another thread streams, a tab gets its thread list but
+// not its own open thread again, and nothing at all when none of its parts changed. Missing keys
+// mean "unchanged". `sent` is the connection's memory: each part as last sent.
+export function changedParts(sent: Map<string, string>, snapshot: Record<string, unknown>) {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(snapshot)) {
+    const json = JSON.stringify(value ?? null)
+    if (sent.get(key) === json) continue
+    sent.set(key, json)
+    parts.push(`${JSON.stringify(key)}:${json}`)
+  }
+  return parts.length ? `{${parts.join(',')}}` : undefined
+}
 export async function handleApi(request: Request) {
   try {
     checkRequest(request)
@@ -117,8 +131,7 @@ export async function handleApi(request: Request) {
           .object({ enabled: z.boolean(), mode: z.enum(['lan', 'tailscale']).default('lan') })
           .parse(await request.json())
         try {
-          if (enabled) await access.enable(Number(url.port) || 80, mode)
-          else await access.disable()
+          await access.set(enabled, Number(url.port) || 80, mode)
         } catch (error) {
           throw new HttpError(
             500,
@@ -128,6 +141,16 @@ export async function handleApi(request: Request) {
           )
         }
         return Response.json(await status())
+      }
+      if (parts[1] === 'settings' && request.method === 'POST') {
+        const { autoResume } = z.object({ autoResume: z.boolean() }).parse(await request.json())
+        await access.setAutoResume(autoResume)
+        return Response.json(await status())
+      }
+      // Sent by the server itself once it's listening (vite.config.ts, server.mjs).
+      if (parts[1] === 'resume' && request.method === 'POST') {
+        access.resume(Number(url.port) || 80)
+        return Response.json({ ok: true })
       }
       if (parts[1] === 'pair' && request.method === 'POST') {
         let pairing
@@ -304,9 +327,11 @@ export async function handleApi(request: Request) {
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           const encode = new TextEncoder()
+          const sent = new Map<string, string>()
           const push = () => {
             try {
-              controller.enqueue(encode.encode(`data: ${JSON.stringify(service.snapshot(id))}\n\n`))
+              const changes = changedParts(sent, service.snapshot(id))
+              if (changes) controller.enqueue(encode.encode(`data: ${changes}\n\n`))
             } catch {
               cleanup()
             }

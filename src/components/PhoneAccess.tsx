@@ -11,6 +11,9 @@ type Status = {
   addresses: string[]
   url?: string
   devices: Device[]
+  autoResume: boolean
+  resuming: boolean
+  resumeProblem?: string
   tailscale: { available: boolean; running: boolean; dnsName?: string; problem?: string }
 }
 type Pairing = { expiresAt: string; links: { url: string; qr: string }[] }
@@ -99,6 +102,8 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
     // Already on: switch the running gateway over (old QR codes stop working).
     if (status?.enabled && status.mode !== next) void apply(true, next)
   }
+  const setAutoResume = (autoResume: boolean) =>
+    run(async () => setStatus(await call<Status>('remote/settings', 'POST', { autoResume })))
   const recheck = () => run(async () => setStatus(await call<Status>('remote')))
   const tailscaleBlocked = shownMode === 'tailscale' && !status?.tailscale.running
   const newCode = () =>
@@ -152,7 +157,10 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
         <div>
           <strong>Allow phones</strong>
           <small>
-            Use t3 mini from your phone's browser. Turns off whenever the server restarts.
+            Use t3 mini from your phone's browser.{' '}
+            {shownMode === 'tailscale' && status?.autoResume
+              ? 'Comes back on by itself after the server restarts.'
+              : 'Turns off whenever the server restarts.'}
           </small>
         </div>
         <Toggle
@@ -162,6 +170,30 @@ export function PhoneAccess({ onChange }: { onChange: (enabled: boolean) => void
           onChange={(enabled) => void apply(enabled)}
         />
       </div>
+      {shownMode === 'tailscale' && status ? (
+        <div className="setting-row">
+          <div>
+            <strong>Reconnect after restart</strong>
+            <small>
+              If phone access was on, turn it back on when t3 mini restarts, so paired phones
+              reconnect by themselves. Local network access always stays off after a restart.
+            </small>
+          </div>
+          <Toggle
+            label="Reconnect after restart"
+            checked={status.autoResume}
+            disabled={busy}
+            onChange={(value) => void setAutoResume(value)}
+          />
+        </div>
+      ) : null}
+      {status && !status.enabled && (status.resuming || status.resumeProblem) ? (
+        <p className="phone-note">
+          {status.resuming
+            ? `Reconnecting phones over Tailscale…${status.resumeProblem ? ` (${status.resumeProblem})` : ''}`
+            : `Couldn’t reconnect phones after the restart: ${status.resumeProblem}`}
+        </p>
+      ) : null}
       {status?.enabled ? (
         <>
           {status.mode === 'tailscale' ? (

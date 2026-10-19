@@ -4403,3 +4403,17 @@ body.resizing {
     transform: translate(-50%, 0.25rem);
   }
 }
+
+/* The top of a long thread whose older turns aren't drawn yet (they draw as you scroll up). */
+.older-turns {
+  align-self: center;
+  margin-bottom: 1rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+}
+.older-turns:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}

@@ -16,4 +16,23 @@ const dictationStream: Plugin = {
     })
   },
 }
-export default defineConfig({ plugins: [tanstackStart(), react(), dictationStream] })
+// Tailscale phone access that was on before a restart comes back by itself (see
+// src/server/remote.ts). Server code loads on the first request, so ask once it's listening.
+// server.mjs does the same in production.
+const resumePhoneAccess: Plugin = {
+  name: 't3-mini-resume-phone-access',
+  configureServer(server) {
+    server.httpServer?.once('listening', () => {
+      const address = server.httpServer?.address()
+      if (!address || typeof address === 'string') return
+      void fetch(`http://127.0.0.1:${address.port}/api/remote/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      }).catch(() => {})
+    })
+  },
+}
+export default defineConfig({
+  plugins: [tanstackStart(), react(), dictationStream, resumePhoneAccess],
+})

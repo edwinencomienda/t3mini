@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from 'react'
 import {
   ArrowUp,
@@ -220,12 +221,37 @@ const markdownComponents: Components = {
 // Markdown is the costliest part of a render. Each message re-parses only when its own text
 // changes, so typing in the composer (which re-renders the page) stays instant in long threads.
 const markdownPlugins = [remarkGfm]
+// Parsed replies are also kept across thread switches (memo alone forgets them when a thread
+// closes), so reopening a long thread doesn't parse hundreds of replies again. Markdown is a
+// plain function of the text (no hooks; our components render later as usual), so its output
+// can be reused. Least recently used first out, capped by count and total text.
+const parsedMarkdown = new Map<string, ReactNode>()
+let parsedChars = 0
+const maxParsed = 3000
+const maxParsedChars = 4_000_000
+function parseMarkdown(text: string) {
+  const cached = parsedMarkdown.get(text)
+  if (cached !== undefined) {
+    parsedMarkdown.delete(text)
+    parsedMarkdown.set(text, cached)
+    return cached
+  }
+  const parsed = Markdown({
+    children: text,
+    remarkPlugins: markdownPlugins,
+    components: markdownComponents,
+  })
+  parsedMarkdown.set(text, parsed)
+  parsedChars += text.length
+  for (const [oldest] of parsedMarkdown) {
+    if (parsedMarkdown.size <= maxParsed && parsedChars <= maxParsedChars) break
+    parsedMarkdown.delete(oldest)
+    parsedChars -= oldest.length
+  }
+  return parsed
+}
 const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
-  return (
-    <Markdown remarkPlugins={markdownPlugins} components={markdownComponents}>
-      {text}
-    </Markdown>
-  )
+  return parseMarkdown(text)
 })
 // One message. Live updates parse a fresh copy of the thread every time, so rows compare by
 // content rather than identity; unchanged messages skip rendering entirely.
@@ -440,6 +466,48 @@ function StatusBadge({ status }: { status: Status }) {
   )
 }
 
+// Long threads draw only their latest turns at first (a thread opens at the bottom, so that's
+// all you'd see anyway); older turns are added as you scroll up. Like t3code's virtual list,
+// but simpler: everything drawn stays real page content, so scroll pinning and find keep
+// working on it.
+const firstTurns = 12
+const moreTurns = 20
+// Where you were in a thread (this tab only): the oldest drawn turn, and how far from the bottom.
+type Place = { from?: string; atBottom: boolean; fromBottom: number }
+
+// The top of a partly drawn thread: draws older turns once you scroll near it (well before
+// you reach it), or when clicked.
+function OlderTurns({
+  count,
+  root,
+  onShow,
+}: {
+  count: number
+  root: React.RefObject<HTMLDivElement | null>
+  onShow: () => void
+}) {
+  const marker = useRef<HTMLButtonElement>(null)
+  const show = useRef(onShow)
+  show.current = onShow
+  useEffect(() => {
+    const element = marker.current
+    if (!element) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) show.current()
+      },
+      { root: root.current, rootMargin: '1500px 0px 0px 0px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [root])
+  return (
+    <button ref={marker} type="button" className="older-turns" onClick={() => show.current()}>
+      Show {count} earlier {count === 1 ? 'turn' : 'turns'}
+    </button>
+  )
+}
+
 export function Workspace({ threadId }: { threadId?: string }) {
   const navigate = useNavigate()
   const activeId = threadId ?? null
@@ -610,6 +678,34 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const scrollArea = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const settleUntil = useRef(0)
+  // Per thread: how much is drawn and where you were (see Place). Changing it re-renders.
+  const places = useRef(new Map<string, Place>())
+  const [, setPlacesVersion] = useState(0)
+  // Set just before older turns are drawn: the distance from the bottom to keep.
+  const keepFromBottom = useRef<number | null>(null)
+  // The thread on screen (clicking a thread shows its cached copy before the URL changes).
+  const shownThread = useRef<string | undefined>(undefined)
+  // Where a thread that's settling is held: the bottom (null), or a distance from it.
+  const holdFromBottom = useRef<number | null>(null)
+  // Keeps the chat at the bottom while it's stuck there, and wherever it's held while it
+  // settles (diagrams and images size themselves a moment after they're drawn).
+  const pin = () => {
+    const element = scrollArea.current
+    if (!element) return
+    const settling = Date.now() < settleUntil.current
+    if (settling && holdFromBottom.current !== null)
+      element.scrollTop = element.scrollHeight - holdFromBottom.current
+    else if (stickToBottom.current || settling) element.scrollTop = element.scrollHeight
+  }
+  // Back in a thread you'd scrolled up in: the same spot, measured from the bottom (new
+  // messages since then are below you), held while the thread settles.
+  const restorePlace = (id: string) => {
+    const place = places.current.get(id)
+    if (!place || place.atBottom) return
+    stickToBottom.current = false
+    settleUntil.current = Date.now() + 900
+    holdFromBottom.current = place.fromBottom
+  }
   const composer = useRef<HTMLTextAreaElement>(null)
   const drafts = useRef(new Map<string, string>())
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -738,7 +834,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     let events: EventSource | undefined
     let retry: ReturnType<typeof setTimeout> | undefined
     let attempts = 0
+    // The latest of each part, for checks that need parts that didn't change this time.
+    let latest: { threads?: ThreadSummary[]; thread?: Thread | null; projects: ProjectSummary[] }
     const connect = () => {
+      latest = { projects: [] }
       events = new EventSource(
         `/api/events${activeId ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
       )
@@ -753,35 +852,50 @@ export function Workspace({ threadId }: { threadId?: string }) {
         retry = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10_000))
       }
       events.onmessage = (event) => {
+        // Only the parts that changed since the last update (everything on connect); a missing
+        // key means unchanged, so its state isn't replaced and doesn't re-render anything.
         const data = JSON.parse(event.data) as {
-          threads: ThreadSummary[]
-          // Optional: a server started before projects existed omits it until restarted.
+          threads?: ThreadSummary[]
           projects?: ProjectSummary[]
-          thread: Thread | null
+          thread?: Thread | null
           processes?: ProcessInfo[]
           browsers?: BrowserInfo[]
           ui?: UiSettings
           activeTab?: string | null
-          persistenceError?: string
+          persistenceError?: string | null
         }
-        setProjects(data.projects ?? [])
-        setProcesses(data.processes ?? [])
-        setBrowsers(data.browsers ?? [])
+        if (data.projects) {
+          latest.projects = data.projects
+          setProjects(data.projects)
+        }
+        if (data.processes) setProcesses(data.processes)
+        if (data.browsers) setBrowsers(data.browsers)
         // Which tab, in any browser or profile, notifies and plays music.
         if (data.activeTab !== undefined) setServerTab(data.activeTab)
         if (data.ui) {
           setGroupBy(data.ui.groupBy)
           applyShared(data.ui)
         }
-        announce(threadEvents(statuses.current, data.threads), data.projects ?? [])
-        statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
-        setThreads(data.threads)
-        if (activeId && !data.thread && !data.threads.some((item) => item.id === activeId)) {
+        if (data.threads) {
+          latest.threads = data.threads
+          announce(threadEvents(statuses.current, data.threads), latest.projects)
+          statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
+          setThreads(data.threads)
+        }
+        if (data.thread !== undefined) latest.thread = data.thread
+        if (
+          activeId &&
+          !latest.thread &&
+          latest.threads &&
+          !latest.threads.some((item) => item.id === activeId)
+        ) {
           leave()
           return
         }
-        if (data.thread) threadCache.current.set(data.thread.id, data.thread)
-        setThread(data.thread)
+        if (data.thread !== undefined) {
+          if (data.thread) threadCache.current.set(data.thread.id, data.thread)
+          setThread(data.thread)
+        }
         if (data.persistenceError) setError(data.persistenceError)
       }
     }
@@ -849,14 +963,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // Only the chat container scrolls; scrollIntoView would also shift the outer layout.
     const element = scrollArea.current
     if (!element) return
-    // Opening a thread lands at the bottom: for a moment it stays pinned no matter what, while
-    // messages load, images size themselves, and phone scroll momentum settles.
+    // Back at the bottom of a thread, only its latest turns are drawn again.
+    const place = activeId ? places.current.get(activeId) : undefined
+    if (place?.atBottom) delete place.from
+    // Opening a thread lands at the bottom (or where you left it, see below): for a moment it
+    // stays pinned no matter what, while messages load, images size themselves, and phone
+    // scroll momentum settles.
     stickToBottom.current = true
     settleUntil.current = Date.now() + 900
-    const pin = () => {
-      if (stickToBottom.current || Date.now() < settleUntil.current)
-        element.scrollTop = element.scrollHeight
-    }
+    holdFromBottom.current = null
+    if (activeId && shownThread.current === activeId) restorePlace(activeId)
     pin()
     let frames = 0
     let frame = requestAnimationFrame(function repin() {
@@ -877,8 +993,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
   useLayoutEffect(() => {
     const element = scrollArea.current
     if (!element || !loadedThread) return
-    if (stickToBottom.current || Date.now() < settleUntil.current)
-      element.scrollTop = element.scrollHeight
+    // Only once it's the open thread (a click shows it before the URL changes; the effect
+    // above restores it then).
+    if (loadedThread === activeId) restorePlace(loadedThread)
+    pin()
   }, [loadedThread])
   useEffect(() => {
     const saved = loadNotificationPreferences()
@@ -1274,11 +1392,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
       return
     }
     if (activeId) drafts.current.set(activeId, draftText.current)
+    savePlace()
     setThread(threadCache.current.get(id) ?? null)
     setDraft(drafts.current.get(id) || '')
     setSidebarOpen(false)
     setError('')
     stickToBottom.current = true
+    // Scrolling while the view switches isn't you moving around in either thread.
+    settleUntil.current = Date.now() + 900
+    holdFromBottom.current = null
   }
   function select(id: string) {
     prepareSelection(id)
@@ -1799,6 +1921,45 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // The conversation one turn at a time (see timeline.ts). While the agent works, the step
   // it's on shows in the live line at the bottom instead of in the list.
   const turns = thread ? buildTurns(thread) : []
+  shownThread.current = thread?.id
+  // The drawn part: from the turn you'd scrolled back to, but at least the latest few.
+  const place = thread ? places.current.get(thread.id) : undefined
+  let firstDrawn = Math.max(0, turns.length - firstTurns)
+  if (place?.from) {
+    const index = turns.findIndex((turn) => turn.key === place.from)
+    if (index >= 0) firstDrawn = Math.min(firstDrawn, index)
+  }
+  const drawnTurns = firstDrawn ? turns.slice(firstDrawn) : turns
+  const showOlder = () => {
+    const element = scrollArea.current
+    if (!element || !thread || !firstDrawn) return
+    keepFromBottom.current = element.scrollHeight - element.scrollTop
+    places.current.set(thread.id, {
+      atBottom: false,
+      fromBottom: keepFromBottom.current,
+      ...place,
+      from: turns[Math.max(0, firstDrawn - moreTurns)]!.key,
+    })
+    setPlacesVersion((version) => version + 1)
+  }
+  // Remembers where you are in this thread (on scroll, and again as you leave it, since
+  // content may have finished sizing since you last scrolled).
+  const savePlace = () => {
+    const element = scrollArea.current
+    if (!element || !thread || Date.now() < settleUntil.current) return
+    places.current.set(thread.id, {
+      ...(firstDrawn ? { from: turns[firstDrawn]!.key } : {}),
+      atBottom: stickToBottom.current,
+      fromBottom: element.scrollHeight - element.scrollTop,
+    })
+  }
+  // Older turns drawn above: stay on the same spot (the chat has no scroll anchoring).
+  useLayoutEffect(() => {
+    const element = scrollArea.current
+    if (!element || keepFromBottom.current === null) return
+    element.scrollTop = element.scrollHeight - keepFromBottom.current
+    keepFromBottom.current = null
+  }, [firstDrawn])
   const liveStep = active
     ? [...(thread?.activities ?? [])]
         .reverse()
@@ -2388,9 +2549,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
               onScroll={() => {
                 const element = scrollArea.current
                 // Scroll positions while a thread is still settling aren't the user's choice.
-                if (element && Date.now() >= settleUntil.current)
-                  stickToBottom.current =
-                    element.scrollHeight - element.scrollTop - element.clientHeight < 120
+                if (!element || Date.now() < settleUntil.current) return
+                stickToBottom.current =
+                  element.scrollHeight - element.scrollTop - element.clientHeight < 120
+                savePlace()
               }}
             >
               <div className="chat-content" ref={content}>
@@ -2447,7 +2609,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   </section>
                 ) : (
                   <div className="conversation">
-                    {turns.map((turn) => (
+                    {firstDrawn ? (
+                      <OlderTurns
+                        key={firstDrawn}
+                        count={firstDrawn}
+                        root={scrollArea}
+                        onShow={showOlder}
+                      />
+                    ) : null}
+                    {drawnTurns.map((turn) => (
                       <div className="turn" key={turn.key}>
                         {turn.user ? <MessageView message={turn.user} /> : null}
                         {turn.done && turn.work.length ? (
