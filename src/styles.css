@@ -1,11 +1,12 @@
 /* Palette follows t3code: neutral surfaces, hairline borders, one blue accent. Like Claude
    Desktop, the side panels are the darker frame and the chat area is lighter, in both themes
-   (sidebar < background < card; dark: #0e0e0e / #131313 / #1c1c1c). */
+   (sidebar < background < card; light: #f9f9f9 / #fbfbfc / #ffffff, a subtle frame;
+   dark: #0e0e0e / #131313 / #1c1c1c). */
 :root {
   --background: #fbfbfc;
   --foreground: #27272a;
   --card: #ffffff;
-  --sidebar: #f3f3f4;
+  --sidebar: #f9f9f9;
   /* Hover on the sidebar's own shade (--accent is for the lighter chat area). */
   --sidebar-accent: rgb(0 0 0 / 5%);
   --muted: #f4f4f5;
