@@ -25,6 +25,7 @@ import {
   GitBranch,
   GitPullRequest,
   FolderOpen,
+  Link2,
   LoaderCircle,
   Menu,
   PanelLeftClose,
@@ -3131,6 +3132,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   label: 'Project settings…',
                   icon: <Settings2 size={14} />,
                   onSelect: () => setProjectSettings(target.cwd),
+                },
+                {
+                  // Paste it into another thread so its agent can read this one (read_thread).
+                  label: 'Copy link',
+                  icon: <Link2 size={14} />,
+                  onSelect: () => copyPath(`${window.location.origin}/threads/${target.id}`),
                 },
                 {
                   label: 'Copy project path',

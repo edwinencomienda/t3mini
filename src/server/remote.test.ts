@@ -168,7 +168,11 @@ it('closes the port when switched off', async () => {
   await access.enable(upstreamPort)
   const { cookie } = await pair()
   await access.disable()
-  await expect(request('/', { cookie })).rejects.toThrow()
+  expect(access.enabled).toBe(false)
+  // Nothing answers for the gateway any more. (Checked by what answers, not by the connection
+  // failing: in the parallel suite another test may start its own server on the freed port.)
+  const after = await request('/', { cookie }).catch(() => null)
+  expect(after?.body).not.toBe('ok from app')
 })
 it('accepts only private network addresses', () => {
   for (const ip of ['192.168.1.5', '10.0.0.2', '172.20.1.1', '::ffff:192.168.0.9', '127.0.0.1'])

@@ -6,6 +6,7 @@ import { showVideo } from './show-video'
 import { playAudio } from './play-audio'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
+import { readThread } from './read-thread'
 import { browserTools } from './browser'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
 
@@ -17,6 +18,7 @@ export const tools: ToolDefinition<any>[] = [
   showVideo,
   playAudio,
   renameThread,
+  readThread,
   ...processTools,
   ...browserTools,
 ]
@@ -31,6 +33,8 @@ export const toolInstructions = [
     'before you finish. browser_check opens the page, takes a screenshot you can see, and lists ' +
     'console errors and failed requests in one step; browser_click and browser_type let you try ' +
     'a flow. Use your judgment: small or non-visual changes may not need it.',
+  '- read_thread reads another t3 mini conversation when the user shares its link or id, so ' +
+    'you can pick up from that work.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +

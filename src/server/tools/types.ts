@@ -52,6 +52,9 @@ export type ToolContext = {
   saveMedia: (file: string, kind: 'video' | 'audio') => Promise<{ id: string }>
   // Long-running processes (dev servers…) in this thread's project.
   processes: ProjectProcesses
+  // Another thread as text, by its link or id, only if the user shared it in this thread
+  // (read_thread). before: show turns before this turn number.
+  readThread: (reference: string, before?: number) => Promise<string>
   // Renames this thread (never another one) and returns the saved title.
   rename: (title: string) => Promise<string>
   // This thread's browser (browser_* tools).

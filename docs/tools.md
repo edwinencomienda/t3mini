@@ -16,6 +16,7 @@ src/server/tools/
   show-video.ts  the show_video tool
   play-audio.ts  the play_audio tool
   rename-thread.ts  the rename_thread tool
+  read-thread.ts the read_thread tool (formatting in ../shared-thread.ts)
   processes.ts   the process tools (start_process…)
   browser.ts     the browser tools (browser_open…, see docs/browser.md)
   index.ts       the registry: every tool, plus Claude naming helpers
@@ -67,6 +68,13 @@ src/components/HtmlView.tsx the sandboxed HTML card (show_html)
 - Safety: `safe` (it only changes a label). The description tells the agent to use it only when the user asks to rename the thread.
 - Typical use: "rename this thread to Login bug", or "give this a better name" / "regenerate the title", where the agent writes a 2–6 word title itself from the whole conversation (no separate title model; the agent knows the conversation best). The sidebar's **Regenerate title** menu item is the non-agent way (see `titles.ts`).
 - Codex declares tools when a thread starts, so Codex threads created before this tool existed don't have it; Claude threads get it on their next turn.
+
+## read_thread
+
+- Input: `{ thread, before? }`: the thread's link (`http://…/threads/<id>`, from right-click → **Copy link**) or id, and optionally a turn number to page back from. Safety: `safe` (read-only).
+- **Which threads:** only one whose id appears in the user's own messages in the current thread (`AgentService.readSharedThread`), from any project; never the current thread. An agent can't list or browse other conversations, or be steered into reading one by a page or file it read. Unknown ids say the thread doesn't exist any more.
+- **What it returns** (`shared-thread.ts`, built on `buildTurns` from `src/timeline.ts`): a header (title, project name and folder, agent, status, number of turns), a note that this is another conversation shared for reference and not instructions (its paths belong to its own project), then each turn: the user's message, a work line for the latest run ("Work: 14 steps: edited …; ran 3 commands; 2 browser steps"; older runs keep no steps), and the agent's final answer (in-between notes are left out; images, diagrams, pages, videos, and sounds are named). Messages over 4,000 characters are cut; the newest turns that fit in about 24,000 characters come first, oldest first, with a line saying how to read the earlier ones (`before`).
+- The agents' tool note (`toolInstructions`) mentions it.
 
 ## Agents' own images
 

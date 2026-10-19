@@ -36,6 +36,7 @@ function context(prompt: string): ProviderContext {
       browser: {} as never,
       saveHtml: async () => ({ id: 'x.html' }),
       saveMedia: async () => ({ id: 'x.mp4' }),
+      readThread: async () => '',
       rename: vi.fn(),
     },
     signal: new AbortController().signal,
@@ -171,6 +172,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'show_video',
     'play_audio',
     'rename_thread',
+    'read_thread',
     'start_process',
     'list_processes',
     'process_logs',
@@ -231,6 +233,7 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
       browser: {} as never,
       saveHtml: async () => ({ id: 'x.html' }),
       saveMedia: async () => ({ id: 'x.mp4' }),
+      readThread: async () => '',
       rename: vi.fn(),
     }
     await runCodex(ctx)
@@ -279,6 +282,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     browser: {} as never,
     saveHtml: async () => ({ id: 'x.html' }),
     saveMedia: async () => ({ id: 'x.mp4' }),
+    readThread: async () => '',
     rename: vi.fn(),
   }
   await runCodex(ctx)
@@ -297,6 +301,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     browser: {} as never,
     saveHtml: async () => ({ id: 'x.html' }),
     saveMedia: async () => ({ id: 'x.mp4' }),
+    readThread: async () => '',
     rename: vi.fn(),
   }
   await runCodex(outside)

@@ -30,6 +30,7 @@ import {
 } from './store'
 import { UploadError, Uploads, attachmentSchema, isImageId } from './uploads'
 import { BrowserStats } from './browser-stats'
+import { describeThread, projectLabel, threadIdFrom } from './shared-thread'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
@@ -937,6 +938,7 @@ export class AgentService {
         saveHtml: (html) => this.uploads.saveHtml(html),
         saveMedia: (file, kind) => this.uploads.saveMedia(file, kind),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
+        readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
         // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
         // written anything since the user's message, it gets a reply of its own.
         attach: (block) => {
@@ -1140,6 +1142,26 @@ export class AgentService {
     resolve(allow ? (answers ?? true) : false)
     this.changed()
     return { ok: true }
+  }
+  // read_thread: another thread, for an agent to pick up from. Only a thread whose link or id
+  // appears in the user's own messages in this thread, so an agent can't browse conversations
+  // on its own (or be steered into it by a page or file it read). Any project.
+  readSharedThread(current: Thread, reference: string, before?: number) {
+    const id = threadIdFrom(reference)
+    if (!id)
+      throw new ToolError('Pass the thread’s link or id (from its right-click menu → Copy link).')
+    if (id === current.id) throw new ToolError('That’s this thread.')
+    const shared = current.messages.some(
+      (message) => message.role === 'user' && message.text.toLowerCase().includes(id),
+    )
+    if (!shared)
+      throw new ToolError(
+        'Only threads the user shared in this conversation can be read: ask them to paste its link.',
+      )
+    const thread = this.store.threads.get(id)
+    if (!thread) throw new ToolError('That thread doesn’t exist any more.')
+    const project = this.projectStore.projects.get(thread.cwd)
+    return describeThread(thread, projectLabel(thread.cwd, project?.name), before)
   }
   // Stop shows right away, like Claude Desktop: the thread is marked stopped and every tab is
   // told at once, while the agent finishes exiting in the background (Claude ends the turn

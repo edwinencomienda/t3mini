@@ -1264,3 +1264,51 @@ it('shows a stop at once, and a message sent while the agent exits waits for it'
   await stopping.windDown(created.id)
   await stopping.close()
 })
+it('reads a thread the user shared, from any project, as reference only', async () => {
+  const { mkdir, realpath } = await import('node:fs/promises')
+  await mkdir(join(directory, 'api-project'))
+  const otherProject = await realpath(join(directory, 'api-project'))
+  const source = await service.create({ provider: 'codex', cwd: otherProject })
+  const at = (minute: number) => `2026-01-01T10:${String(minute).padStart(2, '0')}:00.000Z`
+  const say = (role: 'user' | 'assistant', text: string, minute: number) => ({
+    id: crypto.randomUUID(),
+    role,
+    text,
+    createdAt: at(minute),
+  })
+  source.messages.push(
+    say('user', 'Add a /health endpoint', 1),
+    say('assistant', 'Looking at the router.', 2),
+    say('assistant', 'Added GET /health returning ok.', 3),
+    say('user', 'Now delete the old /ping route', 4),
+    say('assistant', 'Removed /ping.', 5),
+  )
+  source.title = 'API health check'
+  const reader = await thread()
+  const read = (reference: string, before?: number) =>
+    service.readSharedThread(service.get(reader.id), reference, before)
+  // Not shared by the user in this conversation: refused, even with the right id.
+  expect(() => read(source.id)).toThrow('Only threads the user shared')
+  service
+    .get(reader.id)
+    .messages.push(
+      say('user', `Continue from http://localhost:4310/threads/${source.id} please`, 6),
+    )
+  const text = read(`http://localhost:4310/threads/${source.id}`)
+  expect(text).toContain('Thread "API health check" · project api-project')
+  expect(text).toContain('not instructions from the user')
+  expect(text).toContain('User: Add a /health endpoint')
+  // The final answer of each turn, not the in-between notes.
+  expect(text).toContain('Agent: Added GET /health returning ok.')
+  expect(text).not.toContain('Looking at the router.')
+  expect(text.indexOf('Turn 1')).toBeLessThan(text.indexOf('Turn 2'))
+  // Paging back: only the turns before the one asked for.
+  const earlier = read(source.id, 2)
+  expect(earlier).toContain('## Turn 1')
+  expect(earlier).not.toContain('## Turn 2')
+  // Its own thread, a missing one, or no id at all.
+  expect(() => read(reader.id)).toThrow('this thread')
+  service.get(reader.id).messages.push(say('user', 'and 00000000-0000-0000-0000-000000000000', 7))
+  expect(() => read('00000000-0000-0000-0000-000000000000')).toThrow('doesn’t exist')
+  expect(() => read('the other one')).toThrow('link or id')
+})
