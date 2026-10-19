@@ -29,6 +29,7 @@ import {
   uiStorePath,
 } from './store'
 import { UploadError, Uploads, attachmentSchema, isImageId } from './uploads'
+import { BrowserStats } from './browser-stats'
 import { ToolError } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
@@ -134,6 +135,15 @@ function projectProcesses(manager: ProcessManager, thread: Thread) {
       const inside = relative(thread.cwd, folder)
       if (inside.startsWith('..') || isAbsolute(inside))
         throw new ToolError('Processes can only start inside the project folder.')
+      // Said plainly: a missing folder otherwise surfaces as "spawn /bin/zsh ENOENT".
+      const isFolder = await stat(folder)
+        .then((info) => info.isDirectory())
+        .catch(() => false)
+      if (!isFolder)
+        throw new ToolError(
+          `Folder not found: ${input.cwd} (cwd is relative to the project folder, ${thread.cwd}). ` +
+            'Leave cwd out to run in the project folder.',
+        )
       try {
         return manager.start({ ...input, cwd: folder, project: thread.cwd, threadId: thread.id })
       } catch (error) {
@@ -188,6 +198,8 @@ export class AgentService {
   readonly tabs = new TabRegistry(() => this.notify())
   // View settings shared by every browser (Group by…).
   readonly ui: UiStore
+  // How often agents check UI changes in the browser (Settings → Agents).
+  readonly browserStats: BrowserStats
   constructor(
     readonly store: ThreadStore,
     private runners: Record<Provider, Runner> = { codex: runCodex, claude: runClaude },
@@ -200,6 +212,7 @@ export class AgentService {
     readonly browsers = new BrowserManager(),
   ) {
     this.ui = new UiStore(uiStorePath(store.path))
+    this.browserStats = new BrowserStats(join(dirname(store.path), 'browser-stats.json'))
     // Project icons for the sidebar avatars, looked up in the background.
     this.icons = new ProjectIcons(() => this.notify())
     // Process status changes (started, URL found, exited) go out with the live updates.
@@ -1010,6 +1023,8 @@ export class AgentService {
       // A stopped turn keeps the time you stopped it (it was shown as stopped then).
       if (!(run.controller.signal.aborted && thread.completedAt))
         thread.completedAt = new Date().toISOString()
+      if (thread.status === 'completed')
+        this.browserStats.record(thread.provider, thread.activities)
       // Unread unless you're looking at it somewhere (any browser, profile, or phone).
       if (
         (thread.status === 'completed' || thread.status === 'failed') &&
@@ -1481,6 +1496,7 @@ export function getService() {
     const service = new AgentService(store, undefined, undefined, undefined, undefined, titleWriter)
     await service.projectStore.load()
     await service.ui.load()
+    await service.browserStats.load()
     // Load the agents' model lists now, so creating the first thread doesn't wait for them.
     warmModels()
     return service

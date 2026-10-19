@@ -139,7 +139,10 @@ export async function checkPageUrl(
     return 'That isn’t a valid URL. Use a full address like http://localhost:5173.'
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:')
-    return 'Only http:// and https:// pages can be opened.'
+    return (
+      'Only http:// and https:// pages can be opened (not files). Serve the app with its dev ' +
+      'server (start_process), then open the local address it prints.'
+    )
   const hostname = url.hostname.toLowerCase()
   if (!isLocalHost(hostname)) {
     if (!isDevHost(hostname))

@@ -174,6 +174,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'stop_process',
     'restart_process',
     'browser_open',
+    'browser_check',
     'browser_snapshot',
     'browser_click',
     'browser_type',

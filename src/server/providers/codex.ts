@@ -7,7 +7,7 @@ import { codexPolicy, threadSettings } from '../provider-settings'
 import { readCodexModels } from '../models'
 import { describeCodexItem } from './activity'
 import { codexPlan } from './todos'
-import { findTool, maskInput, runTool, toolJsonSchema, tools } from '../tools'
+import { findTool, maskInput, runTool, toolInstructions, toolJsonSchema, tools } from '../tools'
 
 const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -230,6 +230,8 @@ export const runCodex: Runner = async (ctx) => {
                 inputSchema: toolJsonSchema(definition),
               })),
             }),
+        // What t3 mini's tools are for; sent on resume too, so older threads get it.
+        developerInstructions: toolInstructions,
         cwd: ctx.thread.cwd,
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: policy.approvalsReviewer,

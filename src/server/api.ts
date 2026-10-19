@@ -283,6 +283,16 @@ export async function handleApi(request: Request) {
     // View settings shared by every browser (Group by…).
     if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'POST')
       return Response.json(await service.updateUi(await request.json()))
+    // How often agents check UI changes in the browser (counts only; Settings → Agents).
+    if (parts[0] === 'browser-stats' && !parts[1] && request.method === 'GET')
+      return Response.json(service.browserStats.data)
+    if (
+      parts[0] === 'browser-stats' &&
+      parts[1] === 'reset' &&
+      !parts[2] &&
+      request.method === 'POST'
+    )
+      return Response.json(service.browserStats.reset())
     if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'GET')
       return Response.json(service.ui.settings)
     // A project's own icon for its sidebar avatar (only for projects listed in the sidebar).

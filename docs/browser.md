@@ -19,21 +19,33 @@ src/server/tools/types.ts    ToolContext.browser (the thread's session) and Tool
 
 ## Tools
 
-| Tool                                             | Does                                                                                                                                                          | Safety   |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `browser_open`                                   | Open a local URL (in the active tab, or `newTab: true`); returns an accessibility snapshot                                                                    | approval |
-| `browser_tabs`                                   | List tabs, switch the active one, or close one                                                                                                                | safe     |
-| `browser_snapshot`                               | Read the page (`page.ariaSnapshot({ mode: 'ai' })`, refs like `e12`)                                                                                          | safe     |
-| `browser_click`, `browser_type`, `browser_press` | Use the page, by ref (`e12`) or Playwright selector                                                                                                           | approval |
-| `browser_scroll`                                 | Scroll, or bring an element into view                                                                                                                         | safe     |
-| `browser_screenshot`                             | PNG for the agent, of the page or one element (`target`); `show: true` also puts it in the chat                                                               | safe     |
-| `browser_wait_for`                               | Wait for text or an element to appear (or `gone`), or the address to contain something; up to 30 s                                                            | safe     |
-| `browser_set_cookie`                             | Set a cookie on a local site (e.g. a test user's session to test signed in); the value is a `secretInputs` field, hidden in the work log and approval prompts | approval |
-| `browser_console`                                | Console errors/warnings, page errors, failed and 4xx/5xx requests, dialogs, blocked addresses (since the last look)                                           | safe     |
-| `browser_resize`, `browser_theme`                | Phone/tablet/desktop size; light/dark                                                                                                                         | safe     |
-| `browser_close`                                  | Close the session                                                                                                                                             | safe     |
+| Tool                                             | Does                                                                                                                                                           | Safety   |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `browser_open`                                   | Open a local URL (in the active tab, or `newTab: true`); without `url`, the project's running dev server (`start_process`); returns a snapshot and page health | safe     |
+| `browser_check`                                  | One-step look: open the URL (or the page already open, or the dev server), optionally at a `size`, settle, return a screenshot, the snapshot, and page health  | safe     |
+| `browser_tabs`                                   | List tabs, switch the active one, or close one                                                                                                                 | safe     |
+| `browser_snapshot`                               | Read the page (`page.ariaSnapshot({ mode: 'ai' })`, refs like `e12`)                                                                                           | safe     |
+| `browser_click`, `browser_type`, `browser_press` | Use the page, by ref (`e12`) or Playwright selector; returns the page afterwards and page health                                                               | approval |
+| `browser_scroll`                                 | Scroll, or bring an element into view                                                                                                                          | safe     |
+| `browser_screenshot`                             | PNG for the agent, of the page or one element (`target`); `show: true` also puts it in the chat                                                                | safe     |
+| `browser_wait_for`                               | Wait for text or an element to appear (or `gone`), or the address to contain something; up to 30 s                                                             | safe     |
+| `browser_set_cookie`                             | Set a cookie on a local site (e.g. a test user's session to test signed in); the value is a `secretInputs` field, hidden in the work log and approval prompts  | approval |
+| `browser_console`                                | Console errors/warnings, page errors, failed and 4xx/5xx requests, dialogs, blocked addresses (since the last look)                                            | safe     |
+| `browser_resize`, `browser_theme`                | Phone/tablet/desktop size; light/dark                                                                                                                          | safe     |
+| `browser_close`                                  | Close the session                                                                                                                                              | safe     |
 
-`approval` tools go through Allow once / Decline unless the thread runs with full access, like the process tools.
+`approval` tools go through Allow once / Decline unless the thread runs with full access, like the process tools. Opening and checking a local page are `safe`: they only load a page (like reading a file), while clicking, typing, keys, and cookies can submit forms or change data in the local app.
+
+## Helping agents use it
+
+Agents tend to finish and say "check it in your browser" unless the tool is top of mind and cheap. What t3 mini does about that:
+
+- **Always loaded:** every t3 mini tool is created with `alwaysLoad: true` (Claude sees them up front instead of behind tool search).
+- **A gentle note:** `toolInstructions` (`tools/index.ts`) tells the agent it has a real browser and that checking visible changes can be worth it, using its judgment. Claude gets it as the MCP server's `instructions`, Codex as `developerInstructions` on `thread/start` and `thread/resume` (so older threads get it too).
+- **Fewer steps:** `browser_check` does open, settle, screenshot, snapshot, and problems in one call; `browser_open` and `browser_check` default to the dev server the project is running (the newest running process with a local URL); `start_process` points at `browser_check` when it finds a URL.
+- **Page health:** `browser_open`, `browser_check`, click, type, and press end with "Page health: …": console errors, page errors, failed requests, dialogs, and blocked addresses since the last look (up to 8 lines, marked as coming from the website), or "no console errors or failed requests". It reads the same log as `browser_console`, so each problem is reported once.
+- **Clear refusals:** a `file://` address is refused with a pointer to `start_process`; `start_process` names a missing `cwd` folder plainly.
+- **Measured:** `browser-stats.ts` counts, per agent, finished turns whose steps edited or wrote UI files (`.tsx`, `.vue`, `.css`, `.blade.php`…), and how many of those also used a browser tool. Settings → Agents → Browser checks shows it, with Reset (`GET /api/browser-stats`, `POST /api/browser-stats/reset`; counts only, no paths).
 
 ## What you see
 

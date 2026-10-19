@@ -4513,3 +4513,11 @@ body.resizing {
   align-items: center;
   gap: 0.5rem;
 }
+
+/* Settings → Agents → Browser checks: one line per agent. */
+.browser-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-variant-numeric: tabular-nums;
+}

@@ -23,6 +23,7 @@ import { saveMascots, useMascotSetting } from '../mascots'
 import { saveProjectIcons, useProjectIcons } from './ProjectAvatar'
 import { Input } from '@base-ui/react/input'
 import { Slider } from '@base-ui/react/slider'
+import type { BrowserStatsData } from '../server/browser-stats'
 import { parseYouTube, saveMusic, useMusicSettings } from '../background-music'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
@@ -218,6 +219,8 @@ export function SettingsDialog({
   const [showEmails, setShowEmails] = useState(false)
   // Who each agent is signed in as; loaded when the Agents tab opens.
   const [accounts, setAccounts] = useState<Record<'claude' | 'codex', ProviderAccount> | null>(null)
+  // How often each agent checked UI changes in the browser; loaded with the Agents tab.
+  const [browserStats, setBrowserStats] = useState<BrowserStatsData | null>(null)
   async function setDesktop(enabled: boolean) {
     if (!enabled) return onChange({ ...preferences, desktop: false, prompted: true })
     const result = permission === 'granted' ? 'granted' : await requestDesktopPermission()
@@ -232,6 +235,13 @@ export function SettingsDialog({
     lastTab = next
     setTab(next)
   }
+  useEffect(() => {
+    if (tab !== 'agents') return
+    fetch('/api/browser-stats')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => data && setBrowserStats(data))
+      .catch(() => {})
+  }, [tab])
   useEffect(() => {
     if (tab !== 'agents' || accounts) return
     fetch('/api/providers/accounts')
@@ -499,6 +509,47 @@ export function SettingsDialog({
                     </div>
                   )
                 })}
+                {browserStats ? (
+                  <div className="setting-row">
+                    <div>
+                      <strong>Browser checks</strong>
+                      <small>
+                        Of the finished turns that changed UI files (components, pages, styles), how
+                        many also looked at the result in the browser. Since{' '}
+                        {new Date(browserStats.since).toLocaleDateString()}.
+                      </small>
+                      <small className="browser-stats">
+                        {(['claude', 'codex'] as const).map((provider) => {
+                          const { uiTurns, checked } = browserStats[provider]
+                          return (
+                            <span key={provider}>
+                              {provider === 'claude' ? 'Claude' : 'Codex'}:{' '}
+                              {uiTurns
+                                ? `${checked} of ${uiTurns} (${Math.round((checked / uiTurns) * 100)}%)`
+                                : 'no UI changes yet'}
+                            </span>
+                          )
+                        })}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        void fetch('/api/browser-stats/reset', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: '{}',
+                        })
+                          .then((response) => (response.ok ? response.json() : null))
+                          .then((data) => data && setBrowserStats(data))
+                          .catch(() => {})
+                      }
+                    >
+                      Reset
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : null}
           </Tabs.Panel>

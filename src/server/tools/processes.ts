@@ -48,7 +48,10 @@ export const startProcess = defineTool({
     for (let waited = 0; waited < 3000 && !info.url && info.status === 'running'; waited += 250)
       await wait(250)
     const output = context.processes.logs(info.id, 30).trim()
-    return `${describe(info)}\n\nFirst output:\n${output || '(no output yet)'}`
+    const next = info.url
+      ? `\n\nYou can look at it with browser_check (no url needed: it opens ${info.url}).`
+      : ''
+    return `${describe(info)}${next}\n\nFirst output:\n${output || '(no output yet)'}`
   },
 })
 

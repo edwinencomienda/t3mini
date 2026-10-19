@@ -5,7 +5,15 @@ import {
   tool,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { claudeToolName, findClaudeTool, maskInput, mcpServerName, runTool, tools } from '../tools'
+import {
+  claudeToolName,
+  findClaudeTool,
+  maskInput,
+  mcpServerName,
+  runTool,
+  toolInstructions,
+  tools,
+} from '../tools'
 import type { PromptImage, Runner } from './types'
 import { describeClaudeTool, toolOutput } from './activity'
 import { applyClaudeTodo, taskCreated, todoTools } from './todos'
@@ -132,6 +140,7 @@ export const runClaude: Runner = async (ctx) => {
   const t3Tools = createSdkMcpServer({
     name: mcpServerName,
     version: '1.0.0',
+    instructions: toolInstructions,
     tools: tools.map((definition) =>
       tool(
         definition.name,

@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { BrowserManager, allowRequest, checkPageUrl, snapshotRefs } from './browser'
 import {
+  browserCheck,
   browserClick,
   browserConsole,
   browserOpen,
@@ -217,14 +218,49 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
   it('reports console errors and failed requests, and never reaches t3 mini', async () => {
     const tools = context('thread-2')
     blockedHits = 0
-    await runTool(browserOpen, tools, { url: `${base}/` })
+    // Problems show up in the page health of the call that opened the page, and anything that
+    // happens later in browser_console (each only once).
+    const opened = await runTool(browserOpen, tools, { url: `${base}/` })
+    expect(opened.text).toMatch(/Page health: /)
     await new Promise((resolve) => setTimeout(resolve, 500))
-    const log = await runTool(browserConsole, tools, {})
+    const log = { text: opened.text + (await runTool(browserConsole, tools, {})).text }
     expect(log.text).toContain('boom from the page')
     expect(log.text).toMatch(/\/missing \(404\)/)
     expect(log.text).toMatch(/\[blocked\].*api\/approve/)
     expect(blockedHits).toBe(0)
     expect((await runTool(browserConsole, tools, {})).text).toMatch(/Nothing new/)
+  }, 30_000)
+
+  it('checks a page in one step, and opens the running dev server without a URL', async () => {
+    // No dev server running: a clear message, nothing opened.
+    const idle = { ...context('thread-8'), processes: { list: () => [] } as never }
+    expect(await runTool(browserCheck, idle, {})).toMatchObject({
+      ok: false,
+      text: expect.stringContaining('No running dev server'),
+    })
+    // The project's dev server printed this address; check opens it at phone size.
+    const running = {
+      ...context('thread-8'),
+      processes: {
+        list: () => [
+          { status: 'running', url: `${base}/`, startedAt: '2026-01-01T00:00:00.000Z' },
+          { status: 'exited', url: 'http://localhost:1/', startedAt: '2026-02-01T00:00:00.000Z' },
+        ],
+      } as never,
+    }
+    const checked = await runTool(browserCheck, running, { size: 'phone' })
+    expect(checked.ok).toBe(true)
+    expect(checked.image?.mimeType).toBe('image/png')
+    expect(Buffer.from(checked.image!.data, 'base64').readUInt32BE(16)).toBe(390)
+    expect(checked.text).toContain('Demo app')
+    expect(checked.text).toContain(`(${base}/)`)
+    expect(checked.text).toMatch(/Page health: /)
+    // browser_open without a URL does the same, and needs no approval (only loads a page).
+    const opened = await runTool(browserOpen, running, {})
+    expect(opened.text).toContain(`(${base}/)`)
+    expect(browserOpen.safety).toBe('safe')
+    expect(browserCheck.safety).toBe('safe')
+    expect(browserClick.safety).toBe('approval')
   }, 30_000)
 
   it('keeps the page on local sites: no outside addresses, links, or redirects', async () => {
@@ -319,7 +355,10 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       target: 'role=button[name="Sign in elsewhere"]',
     })
     expect(away.text).not.toMatch(/A new tab opened/)
-    expect((await runTool(browserConsole, tools, {})).text).toMatch(/\[blocked\].*example\.com/)
+    // Reported with the click (page health), or by browser_console if it came later.
+    expect(away.text + (await runTool(browserConsole, tools, {})).text).toMatch(
+      /\[blocked\].*example\.com/,
+    )
     // List, close, and the chip's count.
     let list = await runTool(browserTabs, tools, { action: 'list' })
     expect(list.text).toMatch(/t1 \(active\): Popups/)

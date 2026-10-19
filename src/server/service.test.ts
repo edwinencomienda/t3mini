@@ -892,6 +892,10 @@ it("lets a thread's tools manage only its own project's processes", async () => 
     await expect(processes.start({ name: 'x', command: 'true', cwd: '../' })).rejects.toThrow(
       'inside the project',
     )
+    // A folder that isn't there is named plainly (not "spawn /bin/sh ENOENT").
+    await expect(processes.start({ name: 'x', command: 'true', cwd: 'web' })).rejects.toThrow(
+      'Folder not found: web (cwd is relative to the project folder',
+    )
     await mkdir(join(created.cwd, 'web'))
     const info = await processes.start({ name: 'Web', command: 'exec sleep 60', cwd: 'web' })
     expect(info).toMatchObject({
