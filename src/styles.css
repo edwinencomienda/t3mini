@@ -4743,16 +4743,22 @@ body.resizing {
 .date-heading:hover {
   color: var(--muted-foreground);
 }
-.date-chevron {
+/* The chevron after a foldable heading's name (date sections and projects): shown on hover,
+   right when folded, down when open. */
+.fold-chevron {
+  flex-shrink: 0;
   opacity: 0;
   transition:
     opacity 0.12s,
     transform 0.15s;
 }
-.date-heading:hover .date-chevron,
-.date-heading:focus-visible .date-chevron {
+.date-heading:hover .fold-chevron,
+.date-heading:focus-visible .fold-chevron,
+.project-toggle:hover .fold-chevron,
+.project-toggle:focus-visible .fold-chevron {
   opacity: 1;
 }
-.date-heading.open .date-chevron {
+.date-heading.open .fold-chevron,
+.project-toggle.open .fold-chevron {
   transform: rotate(90deg);
 }

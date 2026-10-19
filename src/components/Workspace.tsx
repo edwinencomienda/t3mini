@@ -2370,7 +2370,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       onClick={() => toggleDateSection(section.label)}
                     >
                       <span>{section.label}</span>
-                      <ChevronRight size={12} className="date-chevron" aria-hidden />
+                      <ChevronRight size={12} className="fold-chevron" aria-hidden />
                     </button>
                     {open ? section.items.map((item) => threadRow(item, true)) : null}
                   </section>
@@ -2425,16 +2425,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   </div>
                 ) : (
                   <button
-                    className="project-toggle"
-                    // The second click of a double-click renames instead of toggling again.
-                    onClick={(event) => {
-                      if (event.detail < 2) setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })
-                    }}
-                    onDoubleClick={() => {
-                      // Undo the first click's toggle, then rename.
-                      setCollapsed((current) => ({ ...current, [cwd]: !current[cwd] }))
-                      setRenamingProject({ path: cwd, name: projectName(cwd) })
-                    }}
+                    className={`project-toggle ${collapsed[cwd] ? '' : 'open'}`}
+                    // Folds and unfolds; renaming is in the right-click menu.
+                    onClick={() => setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })}
                     aria-expanded={!collapsed[cwd]}
                     title={cwd}
                   >
@@ -2450,6 +2443,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <FolderOpen size={14} />
                     )}
                     <span>{projectName(cwd)}</span>
+                    <ChevronRight size={12} className="fold-chevron" aria-hidden />
                   </button>
                 )}
                 <button
