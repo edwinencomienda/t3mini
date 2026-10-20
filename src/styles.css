@@ -2826,14 +2826,14 @@ body.resizing {
 }
 .thread-lines .thread-title {
   flex: none;
+  margin-top: 0.3rem;
 }
 .thread-project {
   display: flex;
   align-items: center;
   gap: 0.3rem;
   min-width: 0;
-  margin-top: 0.3rem;
-  font-size: 11.5px;
+  font-size: 13px;
   /* Faint in light mode; dark mode uses the muted gray, since the faint one is too dim there. */
   color: var(--thread-project, var(--faint));
 }
@@ -2845,7 +2845,7 @@ body.resizing {
 .thread-project svg {
   flex-shrink: 0;
 }
-/* Two-line rows grow to fit, and keep the status dot and the time on the first line. */
+/* Two-line rows (project, then title) grow to fit, and keep the time on the first line. */
 .thread-row:has(.thread-lines) {
   align-items: flex-start;
   height: auto;

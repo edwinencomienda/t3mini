@@ -2292,9 +2292,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
             </span>
           ) : null}
           {showProject ? (
-            // Not grouped: the title, and its project under it.
+            // Not grouped: the project, and the thread's title under it.
             <span className="thread-lines">
-              <span className="thread-title">{item.title}</span>
               <span className="thread-project">
                 {projectIcons ? (
                   <ProjectAvatar
@@ -2307,6 +2306,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                 )}
                 <span>{projectName(item.cwd)}</span>
               </span>
+              <span className="thread-title">{item.title}</span>
             </span>
           ) : (
             <span className="thread-title">{item.title}</span>
