@@ -2684,6 +2684,118 @@ body.resizing {
 .sidebar-section > span {
   flex: 1;
 }
+/* The project filter in the header line: All projects, or one project. */
+.sidebar-section-label {
+  display: flex;
+  min-width: 0;
+}
+.project-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: 100%;
+  height: 1.5rem;
+  margin-left: -0.4rem;
+  padding: 0 0.4rem;
+  border-radius: 0.4rem;
+  color: var(--faint);
+}
+.project-filter > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-filter svg,
+.project-filter .project-avatar {
+  flex-shrink: 0;
+}
+.project-filter:hover,
+.project-filter[data-popup-open] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.project-filter-menu {
+  /* A steady width, so it doesn't shrink as you type. */
+  width: min(17rem, var(--available-width));
+}
+.project-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.project-filter-option > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A search box at the top of the project filter, then the matching projects. */
+.project-filter-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.project-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--faint);
+}
+.project-filter-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.project-filter-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.3rem;
+}
+.project-filter-list:empty {
+  padding: 0;
+}
+.project-filter-empty:not(:empty) {
+  padding: 0.75rem;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.project-filter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  font-size: 13px;
+  cursor: default;
+  outline: 0;
+  user-select: none;
+}
+.project-filter-item[data-highlighted] {
+  background: var(--accent);
+}
+.project-filter-item .picker-check {
+  color: var(--primary);
+}
+.project-filter-option svg {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+@media (hover: none), (any-pointer: coarse) {
+  /* 16px keeps iOS from zooming in when the search box is focused. */
+  .project-filter-search input {
+    font-size: 16px;
+  }
+}
 .sidebar-section .sidebar-view[data-popup-open] {
   background: var(--accent);
   color: var(--foreground);

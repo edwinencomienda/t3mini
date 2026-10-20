@@ -93,6 +93,7 @@ import { CommandPalette } from './CommandPalette'
 import { ProjectSettings } from './ProjectSettings'
 import { Autocomplete } from '@base-ui/react/autocomplete'
 import { SidebarResize } from './SidebarResize'
+import { ProjectFilter } from './ProjectFilter'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
 import { ScrollToBottom } from './ScrollToBottom'
@@ -383,7 +384,9 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 const composerMaxHeight = 240
 // Where Group by was saved per browser before it moved to the server (read once, then removed).
 const groupByKey = 't3-mini:sidebar-group'
-const dateFoldedKey = 't3-mini:date-sections-folded'
+// Only the sections you folded or opened yourself; v2 dropped the old defaults (Older folded).
+const projectFilterKey = 't3-mini:project-filter'
+const dateFoldedKey = 't3-mini:date-sections-folded-v2'
 const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
 // A project's name: the one you gave it in the sidebar, else its folder name.
 const projectLabel = (projects: ProjectSummary[], path: string) =>
@@ -550,10 +553,37 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   const toggleSidebarRef = useRef(toggleSidebar)
   toggleSidebarRef.current = toggleSidebar
+  // The sidebar's project filter: one project's path, or "" for all (this browser only).
+  const [projectFilter, setProjectFilterState] = useState('')
+  useEffect(() => {
+    try {
+      setProjectFilterState(localStorage.getItem(projectFilterKey) ?? '')
+    } catch {
+      // Storage unavailable: show all projects.
+    }
+  }, [])
+  function setProjectFilter(path: string) {
+    setProjectFilterState(path)
+    try {
+      if (path) localStorage.setItem(projectFilterKey, path)
+      else localStorage.removeItem(projectFilterKey)
+    } catch {
+      // Storage unavailable: it still applies until the page reloads.
+    }
+  }
+  // Opening a thread from another project (⌘K, New thread) shows all projects again, so the
+  // thread you just opened isn't hidden. Picking a project while one is open keeps the pick.
+  const filterThread = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!thread || thread.id === filterThread.current) return
+    filterThread.current = thread.id
+    if (projectFilter && thread.cwd !== projectFilter) setProjectFilter('')
+  }, [thread?.id, projectFilter])
   // Collapsed projects in the sidebar, remembered across reloads.
   const [collapsed, setCollapsedState] = useState<Record<string, boolean>>({})
-  // Group by date: which sections are folded (this browser only). Older starts folded.
-  const [dateFolded, setDateFolded] = useState<Record<string, boolean>>({ Older: true })
+  // Group by date: the sections you folded or opened yourself (this browser only). The rest
+  // follow the default: only the newest section with threads is open (see isDateFolded).
+  const [dateFolded, setDateFolded] = useState<Record<string, boolean>>({})
   useEffect(() => {
     try {
       const saved: unknown = JSON.parse(localStorage.getItem(dateFoldedKey) ?? 'null')
@@ -562,9 +592,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
       // Unreadable: keep the defaults.
     }
   }, [])
-  function toggleDateSection(label: string) {
+  // By default only the newest section with threads is open (Today, else Yesterday, …); the
+  // index is the section's place among the non-empty ones.
+  const isDateFolded = (label: string, index: number) => dateFolded[label] ?? index > 0
+  function toggleDateSection(label: string, folded: boolean) {
     setDateFolded((current) => {
-      const next = { ...current, [label]: !current[label] }
+      const next = { ...current, [label]: !folded }
       try {
         localStorage.setItem(dateFoldedKey, JSON.stringify(next))
       } catch {
@@ -1938,9 +1971,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
   }
   const query = search.trim().toLowerCase()
-  const visibleThreads = threads.filter((item) =>
-    `${item.title} ${item.cwd}`.toLowerCase().includes(query),
-  )
   // Projects stay put, newest added on top, so activity doesn't reshuffle them; only the
   // threads inside each project move (newest message first). A thread created a moment ago
   // may arrive before its project does, so fall back to thread folders.
@@ -1954,7 +1984,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .map((project) => project.path),
     ]),
   ]
+  // The project picked in the sidebar's filter, while it still exists.
+  const filterPath = projectFilter && projectPaths.includes(projectFilter) ? projectFilter : ''
+  const visibleThreads = threads.filter(
+    (item) =>
+      (!filterPath || item.cwd === filterPath) &&
+      `${item.title} ${item.cwd}`.toLowerCase().includes(query),
+  )
   const groups = projectPaths
+    .filter((path) => !filterPath || path === filterPath)
     .map((path) => ({ path, items: visibleThreads.filter((item) => item.cwd === path) }))
     .filter(
       (group) =>
@@ -1966,8 +2004,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // that still exist.
   const visibleOrder =
     groupBy === 'date'
-      ? dateSections(visibleThreads, now).flatMap((section) =>
-          !dateFolded[section.label] || query ? section.items.map((item) => item.id) : [],
+      ? dateSections(visibleThreads, now).flatMap((section, index) =>
+          !isDateFolded(section.label, index) || query ? section.items.map((item) => item.id) : [],
         )
       : groupBy !== 'project'
         ? visibleThreads.map((item) => item.id)
@@ -2363,7 +2401,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
         </label>
         {groups.length ? (
           <div className="sidebar-section">
-            <span>{groupBy === 'project' ? 'Projects' : 'Recents'}</span>
+            {/* Which project's threads to show: all, or one. */}
+            <span className="sidebar-section-label">
+              <ProjectFilter
+                value={filterPath}
+                paths={projectPaths}
+                projects={projects}
+                projectName={projectName}
+                projectIcons={projectIcons}
+                onChange={setProjectFilter}
+              />
+            </span>
             {/* View options (like Claude Desktop): group threads by project, by date, or not at
                 all. */}
             <SettingsMenu
@@ -2416,15 +2464,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
           {groupBy === 'none' && groups.length ? (
             // One list, newest message first, each thread with its project's name.
             <section className="project recents">
-              {visibleThreads.map((item) => threadRow(item, true))}
+              {visibleThreads.map((item) => threadRow(item, !filterPath))}
             </section>
           ) : null}
           {groupBy === 'date' && groups.length
             ? // The same list, split by when you last wrote in each thread (its own order, so
               // each section stays in one piece). Empty sections are left out.
               // Each section folds from its heading (the chevron shows on hover); search opens all.
-              dateSections(visibleThreads, now).map((section) => {
-                const open = !dateFolded[section.label] || Boolean(query)
+              dateSections(visibleThreads, now).map((section, index) => {
+                const folded = isDateFolded(section.label, index)
+                const open = !folded || Boolean(query)
                 return (
                   <section
                     className="project recents"
@@ -2435,12 +2484,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       type="button"
                       className={`date-heading ${open ? 'open' : ''}`}
                       aria-expanded={open}
-                      onClick={() => toggleDateSection(section.label)}
+                      onClick={() => toggleDateSection(section.label, folded)}
                     >
                       <span>{section.label}</span>
                       <ChevronRight size={12} className="fold-chevron" aria-hidden />
                     </button>
-                    {open ? section.items.map((item) => threadRow(item, true)) : null}
+                    {open ? section.items.map((item) => threadRow(item, !filterPath)) : null}
                   </section>
                 )
               })
