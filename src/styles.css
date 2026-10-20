@@ -4039,6 +4039,12 @@ body.resizing {
 .palette-role {
   font-weight: 600;
 }
+.palette-label.unread {
+  font-weight: 600;
+}
+.palette-hint .thread-time {
+  font-size: inherit;
+}
 .palette-hint {
   flex-shrink: 0;
   max-width: 40%;

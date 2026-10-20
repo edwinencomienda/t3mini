@@ -13,8 +13,10 @@ type Entry = {
   id: string
   label: string
   detail?: ReactNode
-  hint?: string
+  hint?: ReactNode
   icon?: ReactNode
+  // Unread threads have a bold title, as in the sidebar.
+  bold?: boolean
   run: () => void
 }
 type Group = { label: string; items: Entry[] }
@@ -30,8 +32,8 @@ export function CommandPalette({
   threads,
   commands,
   projectName,
-  statusDot,
-  time,
+  status,
+  isUnread,
   onOpenThread,
   onClose,
 }: {
@@ -39,9 +41,9 @@ export function CommandPalette({
   threads: ThreadSummary[]
   commands: PaletteCommand[]
   projectName: (path: string) => string
-  statusDot: (thread: ThreadSummary) => ReactNode
-  // The sidebar's time label ("3m", "2d", "Question"…).
-  time: (thread: ThreadSummary) => string
+  // The sidebar's time, which doubles as the status ("3m", working dots, "Question"…).
+  status: (thread: ThreadSummary) => ReactNode
+  isUnread: (thread: ThreadSummary) => boolean
   onOpenThread: (id: string) => void
   onClose: () => void
 }) {
@@ -79,8 +81,8 @@ export function CommandPalette({
     id: `thread:${thread.id}`,
     label: thread.title,
     detail: projectName(thread.cwd),
-    icon: statusDot(thread),
-    hint: time(thread),
+    hint: status(thread),
+    bold: isUnread(thread),
     run: run(() => onOpenThread(thread.id)),
   })
   const titled = terms.length
@@ -109,7 +111,7 @@ export function CommandPalette({
             {match.snippet}
           </>
         ),
-        hint: time(byId.get(match.threadId)!),
+        hint: status(byId.get(match.threadId)!),
         icon: <MessageSquare size={13} />,
         run: run(() => onOpenThread(match.threadId)),
       })),
@@ -169,9 +171,11 @@ export function CommandPalette({
                     className="palette-item"
                     onClick={item.run}
                   >
-                    <span className="palette-icon">{item.icon}</span>
+                    {item.icon ? <span className="palette-icon">{item.icon}</span> : null}
                     <span className="palette-text">
-                      <span className="palette-label">{item.label}</span>
+                      <span className={`palette-label ${item.bold ? 'unread' : ''}`}>
+                        {item.label}
+                      </span>
                       {item.detail ? <span className="palette-detail">{item.detail}</span> : null}
                     </span>
                     {item.hint ? <span className="palette-hint">{item.hint}</span> : null}

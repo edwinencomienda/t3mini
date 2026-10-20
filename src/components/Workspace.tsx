@@ -2190,6 +2190,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
     </div>
   )
 
+  // A thread's time, which doubles as its status (sidebar and ⌘K palette): the working dots
+  // while the agent works, a spinner while a new title is being written, Question or Approval
+  // while it waits for you, red after a failure.
+  const threadStatus = (item: ThreadSummary) =>
+    item.status === 'starting' || item.status === 'working' ? (
+      <span className="thread-time working">
+        <StatusDot status={item.status} />
+      </span>
+    ) : retitling.has(item.id) ? (
+      <span className="thread-time working">
+        <LoaderCircle size={12} className="status-spinner" aria-label="Writing a new title" />
+      </span>
+    ) : (
+      <span
+        className={`thread-time ${item.status}`}
+        title={item.status === 'failed' ? labels.failed : undefined}
+      >
+        {threadTime(item, now)}
+      </span>
+    )
   // One thread in the sidebar (with its project's name when the list isn't grouped).
   const threadRow = (item: ThreadSummary, showProject = false) =>
     renaming?.id === item.id ? (
@@ -2291,25 +2311,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ) : (
             <span className="thread-title">{item.title}</span>
           )}
-          {/* The time doubles as the status: the working dots while the agent works, a spinner
-              while a new title is being written, Question or Approval while it waits for you,
-              red after a failure. */}
-          {item.status === 'starting' || item.status === 'working' ? (
-            <span className="thread-time working">
-              <StatusDot status={item.status} />
-            </span>
-          ) : retitling.has(item.id) ? (
-            <span className="thread-time working">
-              <LoaderCircle size={12} className="status-spinner" aria-label="Writing a new title" />
-            </span>
-          ) : (
-            <span
-              className={`thread-time ${item.status}`}
-              title={item.status === 'failed' ? labels.failed : undefined}
-            >
-              {threadTime(item, now)}
-            </span>
-          )}
+          {threadStatus(item)}
         </ThreadPreviewTrigger>
         <button
           type="button"
@@ -3464,8 +3466,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
         <CommandPalette
           threads={[...threads].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))}
           projectName={projectName}
-          statusDot={(item) => <StatusDot status={item.status} unread={unread.has(item.id)} />}
-          time={(item) => threadTime(item, now)}
+          status={threadStatus}
+          isUnread={(item) => unread.has(item.id)}
           onOpenThread={select}
           onClose={() => setPaletteOpen(false)}
           commands={[
