@@ -606,6 +606,31 @@ kbd {
   gap: 0.5rem;
   min-width: 0;
 }
+/* The breadcrumb's project part: muted, and it gives way to the title when space is short. */
+.topbar-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  max-width: 40%;
+  flex-shrink: 1;
+  font-size: 13.5px;
+  color: var(--muted-foreground);
+}
+.topbar-project > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-project svg,
+.topbar-project .project-avatar {
+  flex-shrink: 0;
+}
+.topbar-separator {
+  flex-shrink: 0;
+  font-size: 13.5px;
+  color: var(--faint);
+}
 .topbar-title strong {
   font-size: 13.5px;
   font-weight: 600;
@@ -1800,7 +1825,9 @@ kbd {
   .topbar {
     padding: 0 0.75rem;
   }
-  .topbar .chip {
+  .topbar .chip,
+  .topbar-project,
+  .topbar-separator {
     display: none;
   }
   .chat-scroll {
@@ -4345,14 +4372,6 @@ body.resizing {
 }
 
 /* The project's avatar in the chat header's project chip (a little smaller). */
-.project-chip .project-avatar {
-  width: 14px;
-  height: 14px;
-  border-radius: 3.5px;
-}
-.project-chip .project-avatar-letter {
-  font-size: 9px;
-}
 
 /* An agent's HTML page (show_html), sandboxed in a card. */
 .html-card {

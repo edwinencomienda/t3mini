@@ -2614,21 +2614,28 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   aria-label="Writing a new title"
                 />
               ) : null}
-              <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
+              {/* A breadcrumb: the project, then the thread ("[avatar] nighteye / Fix the login").
+                  The project part is hidden on phones, where there's only room for the title. */}
               {thread ? (
-                <span className="chip project-chip" title={thread.cwd}>
-                  {projectIcons ? (
-                    <ProjectAvatar
-                      path={thread.cwd}
-                      name={folder ?? ''}
-                      project={projects.find((project) => project.path === thread.cwd)}
-                    />
-                  ) : (
-                    <FolderOpen size={12} />
-                  )}
-                  {folder}
-                </span>
+                <>
+                  <span className="topbar-project" title={thread.cwd}>
+                    {projectIcons ? (
+                      <ProjectAvatar
+                        path={thread.cwd}
+                        name={folder ?? ''}
+                        project={projects.find((project) => project.path === thread.cwd)}
+                      />
+                    ) : (
+                      <FolderOpen size={13} />
+                    )}
+                    <span>{folder}</span>
+                  </span>
+                  <span className="topbar-separator" aria-hidden>
+                    /
+                  </span>
+                </>
               ) : null}
+              <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
             </div>
             <div className="topbar-actions">
               {thread ? (
