@@ -288,6 +288,8 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  /* Some room between the project's name and its first thread. */
+  margin-bottom: 0.3rem;
 }
 .project-toggle {
   flex: 1;
@@ -326,7 +328,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  height: 1.9rem;
+  height: 2rem;
   /* Status icons line up under the project's folder icon; no extra indent needed. */
   padding: 0 0.5rem;
   border-radius: 0.4rem;
@@ -2847,8 +2849,8 @@ body.resizing {
 .thread-row:has(.thread-lines) {
   align-items: flex-start;
   height: auto;
-  padding-top: 0.35rem;
-  padding-bottom: 0.4rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.55rem;
 }
 .thread-row:has(.thread-lines) .thread-title {
   line-height: 1.35;
@@ -3402,6 +3404,10 @@ body.resizing {
 /* ⋮ on sidebar threads: shown on hover/focus (always on touch screens) in place of the time. */
 .thread-row-wrap {
   position: relative;
+}
+/* A little air between two-line rows (Date and None), so each thread reads on its own. */
+.thread-row-wrap:has(.thread-lines) + .thread-row-wrap {
+  margin-top: 2px;
 }
 .thread-more {
   position: absolute;
