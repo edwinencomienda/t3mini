@@ -2156,7 +2156,6 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const threadRow = (item: ThreadSummary, showProject = false) =>
     renaming?.id === item.id ? (
       <div className="thread-row selected renaming" key={item.id}>
-        <StatusDot status={item.status} unread={unread.has(item.id)} />
         <input
           className="thread-rename"
           aria-label="Thread name"
@@ -2228,21 +2227,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
             />
           }
         >
-          {/* A picked thread shows a check, and while a new title is being written a
-                              spinner, in place of the status dot. */}
+          {/* A picked thread shows a check before its title. */}
           {picked.has(item.id) ? (
             <span className="thread-pick" aria-hidden>
               <Check size={9} strokeWidth={3.5} />
             </span>
-          ) : retitling.has(item.id) ? (
-            <LoaderCircle
-              size={12}
-              className="status-spinner thread-retitling"
-              aria-label="Writing a new title"
-            />
-          ) : (
-            <StatusDot status={item.status} unread={unread.has(item.id)} />
-          )}
+          ) : null}
           {showProject ? (
             // Not grouped: the title, and its project under it.
             <span className="thread-lines">
@@ -2263,7 +2253,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ) : (
             <span className="thread-title">{item.title}</span>
           )}
-          <span className="thread-time">{threadTime(item, now)}</span>
+          {/* The time doubles as the status: the working dots while the agent works, a spinner
+              while a new title is being written, Question or Approval while it waits for you,
+              red after a failure. */}
+          {item.status === 'starting' || item.status === 'working' ? (
+            <span className="thread-time working">
+              <StatusDot status={item.status} />
+            </span>
+          ) : retitling.has(item.id) ? (
+            <span className="thread-time working">
+              <LoaderCircle size={12} className="status-spinner" aria-label="Writing a new title" />
+            </span>
+          ) : (
+            <span
+              className={`thread-time ${item.status}`}
+              title={item.status === 'failed' ? labels.failed : undefined}
+            >
+              {threadTime(item, now)}
+            </span>
+          )}
         </ThreadPreviewTrigger>
         <button
           type="button"

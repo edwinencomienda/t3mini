@@ -349,7 +349,6 @@ kbd {
   color: var(--foreground);
 }
 .thread-pick {
-  /* Same footprint as the status dot it replaces, so titles don't shift. */
   flex-shrink: 0;
   display: grid;
   place-items: center;
@@ -401,13 +400,15 @@ kbd {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
-.thread-retitling {
-  /* Same footprint as the status dot it replaces, so the title doesn't shift. */
-  width: 12px;
-  height: 12px;
-}
-.thread-row:has(.status-dot.waiting) .thread-time {
+.thread-time.waiting {
   color: var(--warning);
+}
+.thread-time.failed {
+  color: var(--danger);
+}
+.thread-time.working {
+  display: grid;
+  place-items: center;
 }
 .empty-sidebar {
   padding: 1rem 0.5rem;
@@ -2740,13 +2741,8 @@ body.resizing {
 .thread-row:has(.thread-lines) .thread-title {
   line-height: 1.35;
 }
-.thread-row:has(.thread-lines) > .status-dot,
 .thread-row:has(.thread-lines) > .thread-pick {
   margin-top: 0.3rem;
-}
-.thread-row:has(.thread-lines) > .live-dots,
-.thread-row:has(.thread-lines) > .status-spinner {
-  margin-top: 0.2rem;
 }
 .thread-row:has(.thread-lines) > .thread-time {
   margin-top: 0.1rem;
@@ -3329,6 +3325,10 @@ body.resizing {
   }
   .thread-row-wrap .thread-time {
     visibility: hidden;
+  }
+  /* Touch screens hide the time for the ⋮ button, but keep the status in view beside it. */
+  .thread-row-wrap .thread-time:is(.working, .waiting) {
+    visibility: visible;
   }
   .thread-row-wrap .thread-row {
     padding-right: 2rem;
