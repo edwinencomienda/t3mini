@@ -628,6 +628,9 @@ kbd {
 .topbar-project svg,
 .topbar-project .project-avatar {
   flex-shrink: 0;
+  /* Optical centering: lowercase text sits about 1px below its line box's middle, so the icon
+     follows it instead of looking raised next to the name. */
+  transform: translateY(1px);
 }
 .topbar-separator {
   flex-shrink: 0;
