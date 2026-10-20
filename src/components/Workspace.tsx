@@ -22,6 +22,7 @@ import {
   FolderPlus,
   FileUp,
   FileDiff,
+  FileText,
   GitBranch,
   GitPullRequest,
   FolderOpen,
@@ -114,12 +115,15 @@ import {
   basename,
   droppedPaths,
   formatPath,
+  formatSize,
   hasFiles,
   copyText,
   isAttachableImage,
+  longPaste,
   prepareImage,
   randomId,
   uploadFile,
+  withAttachedFiles,
   type PendingAttachment,
 } from '../attachments'
 import {
@@ -1259,8 +1263,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
         attachFilesRef.current(files, [])
         return
       }
-      if (!canRedirect(event.target)) return
       const text = event.clipboardData?.getData('text/plain')
+      // Long text (logs, whole files) attaches as a file the agent reads.
+      if (text && text.length > longPaste && (inComposer || canRedirect(event.target))) {
+        if (!canAttach()) return
+        event.preventDefault()
+        attachTextRef.current(text)
+        return
+      }
+      if (!canRedirect(event.target)) return
       if (!text) return
       event.preventDefault()
       insertTextRef.current(text, true)
@@ -1402,12 +1413,43 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   const attachFilesRef = useRef(attachFiles)
   attachFilesRef.current = attachFiles
+  // A long paste becomes a "Pasted text" chip backed by a saved .txt file.
+  async function attachText(text: string) {
+    const threadId = activeId
+    if (!threadId) return
+    setError('')
+    const file = new File([text], 'pasted-text.txt', { type: 'text/plain' })
+    const item: PendingAttachment = {
+      key: randomId(),
+      name: 'Pasted text',
+      previewUrl: '',
+      status: 'uploading',
+      size: file.size,
+    }
+    const update = (change: Partial<PendingAttachment> | null) =>
+      setPending((current) => ({
+        ...current,
+        [threadId]: (current[threadId] || []).flatMap((entry) =>
+          entry.key !== item.key ? [entry] : change ? [{ ...entry, ...change }] : [],
+        ),
+      }))
+    setPending((current) => ({ ...current, [threadId]: [...(current[threadId] || []), item] }))
+    try {
+      const uploaded = await uploadFile(file, 'file')
+      if (uploaded.kind === 'file') update({ status: 'ready', path: uploaded.path })
+    } catch (error) {
+      update(null)
+      setError((error as Error).message)
+    }
+  }
+  const attachTextRef = useRef(attachText)
+  attachTextRef.current = attachText
   function removePending(key: string) {
     if (!activeId) return
     setPending((current) => ({
       ...current,
       [activeId]: (current[activeId] || []).filter((item) => {
-        if (item.key === key) URL.revokeObjectURL(item.previewUrl)
+        if (item.key === key && item.previewUrl) URL.revokeObjectURL(item.previewUrl)
         return item.key !== key
       }),
     }))
@@ -1615,15 +1657,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
     try {
       await api(`threads/${activeId}/${replacing ? 'edit' : 'send'}`, 'POST', {
         ...(replacing ? { messageId: replacing } : {}),
-        text,
-        attachments: attached.map((item) => ({ id: item.id, name: item.name })),
+        text: withAttachedFiles(text, attached),
+        attachments: attached
+          .filter((item) => item.id)
+          .map((item) => ({ id: item.id, name: item.name })),
       })
       revealThread(activeId)
       recalled.current = null
       setEditing(null)
       if (selectedId.current === activeId) setDraft('')
       drafts.current.delete(activeId)
-      for (const item of attached) URL.revokeObjectURL(item.previewUrl)
+      for (const item of attached) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
       setPending((current) => ({ ...current, [activeId]: [] }))
     } catch (error) {
       setError((error as Error).message)
@@ -2936,11 +2980,23 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       <div className="pending-attachments">
                         {pending[thread.id]!.map((item) => (
                           <div
-                            className={`pending-image ${item.status}`}
+                            className={`pending-image ${item.status}${item.previewUrl ? '' : ' pending-file'}`}
                             key={item.key}
                             title={item.name}
                           >
-                            <img src={item.previewUrl} alt={item.name} />
+                            {item.previewUrl ? (
+                              <img src={item.previewUrl} alt={item.name} />
+                            ) : (
+                              <>
+                                <FileText size={16} />
+                                <span className="pending-file-text">
+                                  <strong>{item.name}</strong>
+                                  {item.size !== undefined ? (
+                                    <span>{formatSize(item.size)}</span>
+                                  ) : null}
+                                </span>
+                              </>
+                            )}
                             {item.status === 'uploading' ? (
                               <LoaderCircle size={14} className="status-spinner" />
                             ) : null}

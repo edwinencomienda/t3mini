@@ -2308,6 +2308,28 @@ a.git-branch:focus-visible .git-branch-external {
 .pending-image .status-spinner {
   position: relative;
 }
+/* A long paste attached as a text file: icon, name, size. */
+.pending-image.pending-file {
+  display: flex;
+  gap: 0.45rem;
+  width: auto;
+  max-width: 14rem;
+  padding: 0 1.6rem 0 0.6rem;
+  color: var(--muted-foreground);
+}
+.pending-file.uploading > svg:first-child {
+  display: none;
+}
+.pending-file-text {
+  display: grid;
+  line-height: 1.2;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.pending-file-text strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
 .pending-remove {
   position: absolute;
   top: 2px;

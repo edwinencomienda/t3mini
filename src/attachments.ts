@@ -29,7 +29,25 @@ export type PendingAttachment = {
   name: string
   previewUrl: string
   status: 'uploading' | 'ready'
+  // Images have an upload id; text files (long pastes) have the saved copy's path instead.
   id?: string
+  path?: string
+  size?: number
+}
+// Pastes longer than this attach as a text file instead of filling the composer (and running
+// into the message limit): logs, stack traces, whole files.
+export const longPaste = 10_000
+export function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+// Attached text files reach the agent as paths in the message, like dropped files.
+export function withAttachedFiles(text: string, items: PendingAttachment[]) {
+  const paths = items.flatMap((item) => (item.path ? [formatPath(item.path)] : []))
+  if (!paths.length) return text
+  const lines = paths.map((path) => `Pasted text: ${path}`).join('\n')
+  return text.trim() ? `${text}\n\n${lines}` : lines
 }
 export const imageMimeTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 // Any image the browser can decode is attached; formats the server doesn't take (HEIC from
