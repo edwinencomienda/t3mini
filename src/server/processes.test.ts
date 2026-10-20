@@ -32,6 +32,21 @@ afterEach(async () => {
   await rm(project, { recursive: true, force: true })
 })
 
+it('keeps every local address a process prints (a website and an API side by side)', async () => {
+  const info = manager.start({
+    name: 'Monorepo dev',
+    command:
+      'echo "api ready at http://0.0.0.0:3001"; echo "web on http://localhost:3000/login"; echo "again http://localhost:3000"; exec sleep 60',
+    cwd: project,
+    project,
+  })
+  await until(() => (manager.get(info.id)?.urls?.length ?? 0) >= 2)
+  expect(manager.get(info.id)).toMatchObject({
+    url: 'http://localhost:3001',
+    urls: ['http://localhost:3001', 'http://localhost:3000'],
+  })
+  await manager.stop(info.id)
+})
 it('runs a server-like process, finds its URL, and stops it with its children', async () => {
   const info = manager.start({
     name: 'Dev server',

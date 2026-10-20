@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, RotateCw, ScrollText, Square, Terminal, X } from 'lucide-react'
+import { ExternalLink, RotateCw, ScrollText, Smartphone, Square, Terminal, X } from 'lucide-react'
 import type { ProcessInfo } from '../server/processes'
 import { Popover } from '@base-ui/react/popover'
 import { Modal, ModalTitle } from './Modal'
+import { openPreview } from '../open-preview'
 
 // The "● 2 running" indicator under the composer for the open project's processes, a list of
 // them with Logs / Restart / Stop, and a live log viewer.
@@ -91,9 +92,12 @@ function LogViewer({ process, onClose }: { process: ProcessInfo; onClose: () => 
 export function ProcessIndicator({
   processes,
   project,
+  remote = false,
 }: {
   processes: ProcessInfo[]
   project: string
+  // On a paired device: dev servers open through a preview address instead of localhost.
+  remote?: boolean
 }) {
   const mine = processes.filter((info) => info.project === project)
   const running = mine.filter((info) => info.status === 'running' || info.status === 'stopping')
@@ -142,16 +146,44 @@ export function ProcessIndicator({
                         <Terminal size={12} />
                         {info.name}
                       </span>
+                      {/* Status, then the command, on one line. */}
                       <span className="process-meta">
-                        {statusLabel(info)}
-                        {live ? ` · ${since(info.startedAt, now)}` : ''}
+                        <span className={`process-status ${info.status}`}>
+                          {statusLabel(info)}
+                          {live ? ` · ${since(info.startedAt, now)}` : ''}
+                        </span>
+                        <code title={info.command}>{info.command}</code>
                       </span>
-                      <code title={info.command}>{info.command}</code>
-                      {info.url && live ? (
-                        <a href={info.url} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink size={11} />
-                          {info.url}
-                        </a>
+                      {live && (info.urls ?? info.url) ? (
+                        <span className="process-links">
+                          {
+                            // Every address it printed (a website and an API side by side): on
+                            // a paired device each opens through its preview address.
+                            (info.urls ?? (info.url ? [info.url] : [])).map((url) =>
+                              remote ? (
+                                <button
+                                  key={url}
+                                  type="button"
+                                  className="process-preview"
+                                  onClick={() =>
+                                    void openPreview(url).then(
+                                      () => setError(''),
+                                      (error: Error) => setError(error.message),
+                                    )
+                                  }
+                                >
+                                  <Smartphone size={11} />
+                                  Open :{new URL(url).port} on this device
+                                </button>
+                              ) : (
+                                <a key={url} href={url} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink size={11} />
+                                  {url.replace(/^https?:\/\//, '')}
+                                </a>
+                              ),
+                            )
+                          }
+                        </span>
                       ) : null}
                     </div>
                     <div className="process-actions">

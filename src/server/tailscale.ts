@@ -130,8 +130,11 @@ function serveOnce(command: string, args: string[], timeout: number) {
 const approvalLink = /https:\/\/login\.tailscale\.com\/\S+/
 
 // Serves http://127.0.0.1:<gatewayPort> at https://<dnsName>:<tailscalePort> on the tailnet.
-export async function serveGateway(gatewayPort: number) {
-  const args = ['serve', '--bg', `--https=${tailscalePort()}`, `http://127.0.0.1:${gatewayPort}`]
+export const serveGateway = (gatewayPort: number) => servePort(gatewayPort, tailscalePort())
+// Serves http://127.0.0.1:<localPort> at https://<dnsName>:<httpsPort> on the tailnet (the gateway,
+// and previews of dev servers).
+export async function servePort(localPort: number, httpsPort: number) {
+  const args = ['serve', '--bg', `--https=${httpsPort}`, `http://127.0.0.1:${localPort}`]
   let result: { ok: boolean; output: string } | undefined
   for (const command of commands())
     try {
@@ -152,38 +155,47 @@ export async function serveGateway(gatewayPort: number) {
 }
 
 // Whether the serve config sends our HTTPS port to this gateway (and so is ours to remove).
-export function servesGateway(config: unknown, gatewayPort: number) {
+export const servesGateway = (config: unknown, gatewayPort: number) =>
+  servesPort(config, tailscalePort(), gatewayPort)
+// Whether the serve config sends an HTTPS port to a local port on this Mac (any local port when
+// localPort is left out).
+export function servesPort(config: unknown, httpsPort: number, localPort?: number) {
   const web = (
     config as { Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }> }
   )?.Web
   return Object.entries(web ?? {}).some(
     ([host, entry]) =>
-      host.endsWith(`:${tailscalePort()}`) &&
+      host.endsWith(`:${httpsPort}`) &&
       Object.values(entry.Handlers ?? {}).some((handler) =>
         /^http:\/\/(127\.0\.0\.1|localhost):(\d+)\/?$/.test(handler.Proxy ?? '')
-          ? Number(handler.Proxy!.match(/:(\d+)\/?$/)![1]) === gatewayPort
+          ? localPort === undefined || Number(handler.Proxy!.match(/:(\d+)\/?$/)![1]) === localPort
           : false,
       ),
   )
 }
 
 // Removes our serve entry, and only ours: other things you serve are left alone.
-export async function stopServingGateway(gatewayPort: number) {
+export const stopServingGateway = (gatewayPort: number) =>
+  stopServingPort(tailscalePort(), gatewayPort)
+// Turns an HTTPS port off, only if it points at a local port on this Mac (and at localPort,
+// when given).
+export async function stopServingPort(httpsPort: number, localPort?: number) {
   let config: unknown
   try {
     config = JSON.parse((await run(['serve', 'status', '--json'], 5_000)).stdout || '{}')
   } catch {
     return
   }
-  if (servesGateway(config, gatewayPort))
-    await run(['serve', `--https=${tailscalePort()}`, 'off'], 10_000).catch(() => {})
+  if (servesPort(config, httpsPort, localPort))
+    await run(['serve', `--https=${httpsPort}`, 'off'], 10_000).catch(() => {})
 }
 
 // The same, synchronously, for process exit (async work can't run there).
-export function stopServingGatewayNow() {
+export const stopServingGatewayNow = () => stopServingPortNow(tailscalePort())
+export function stopServingPortNow(httpsPort: number) {
   for (const command of commands())
     try {
-      execFileSync(command, ['serve', `--https=${tailscalePort()}`, 'off'], {
+      execFileSync(command, ['serve', `--https=${httpsPort}`, 'off'], {
         timeout: 3_000,
         stdio: 'ignore',
       })

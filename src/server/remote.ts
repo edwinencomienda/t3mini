@@ -6,12 +6,16 @@ import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   serveGateway,
+  servePort,
   stopServingGateway,
   stopServingGatewayNow,
+  stopServingPort,
+  stopServingPortNow,
   tailscalePort,
   tailscaleStatus,
   type TailscaleStatus,
 } from './tailscale'
+import { Previews, type PreviewHost } from './previews'
 
 // Phone access. A gateway runs only while switched on, lets in only paired devices, and forwards their requests to the loopback-only app, marked so the app knows
 // they're remote. Two ways in:
@@ -74,6 +78,10 @@ export type TailscaleControl = {
   stopServe: (gatewayPort: number) => Promise<void>
   stopServeNow: () => void
   port: () => number
+  // Previews of dev servers: other HTTPS ports on the tailnet name.
+  servePort: (localPort: number, httpsPort: number) => Promise<void>
+  stopServePort: (httpsPort: number) => Promise<void>
+  stopServePortNow: (httpsPort: number) => void
 }
 const tailscale: TailscaleControl = {
   status: tailscaleStatus,
@@ -81,6 +89,9 @@ const tailscale: TailscaleControl = {
   stopServe: stopServingGateway,
   stopServeNow: stopServingGatewayNow,
   port: tailscalePort,
+  servePort,
+  stopServePort: (httpsPort) => stopServingPort(httpsPort),
+  stopServePortNow: stopServingPortNow,
 }
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -184,8 +195,11 @@ export class RemoteAccess {
   private sockets = new Map<string, Set<net.Socket>>()
   private lastSaved = 0
   private mode: PhoneMode = 'lan'
-  // Tailscale mode: the Host phones use, e.g. "macbook.tail1234.ts.net:8443".
+  // Tailscale mode: the Host phones use, e.g. "macbook.tail1234.ts.net:8443", and the name alone.
   private tailscaleHost?: string
+  private tailscaleDns?: string
+  // Dev servers opened on paired devices (see previews.ts); only while phone access is on.
+  readonly previews = new Previews(() => this.previewHost())
   private exitHooked = false
   private saved: Saved = { autoResume: true, wasOn: false }
   private resuming?: { cancelled: boolean }
@@ -427,15 +441,32 @@ export class RemoteAccess {
       if (!this.exitHooked) {
         this.exitHooked = true
         process.once('exit', () => {
-          if (this.mode === 'tailscale' && this.enabled) this.tailscale.stopServeNow()
+          if (this.mode !== 'tailscale' || !this.enabled) return
+          this.tailscale.stopServeNow()
+          for (const httpsPort of this.previews.publicPorts())
+            this.tailscale.stopServePortNow(httpsPort)
         })
       }
     }
     this.mode = mode
     this.tailscaleHost = host
+    this.tailscaleDns = host?.replace(/:\d+$/, '')
     this.server = server
   }
+  private previewHost(): PreviewHost | null {
+    if (!this.enabled) return null
+    return {
+      mode: this.mode,
+      ...(this.tailscaleDns ? { dnsName: this.tailscaleDns } : {}),
+      addresses: () => this.addresses(),
+      deviceExists: (id) => this.devices.has(id),
+      serve: (localPort, httpsPort) => this.tailscale.servePort(localPort, httpsPort),
+      stopServe: (httpsPort) => this.tailscale.stopServePort(httpsPort),
+    }
+  }
   async disable() {
+    // Previews first, while it's still known how they were published.
+    await this.previews.closeAll()
     const server = this.server
     const wasTailscale = this.mode === 'tailscale' && Boolean(server)
     this.server = undefined
@@ -476,7 +507,7 @@ export class RemoteAccess {
   }
   // Headers for the app: who's calling is the gateway (local), marked remote; nothing the
   // client sent can claim otherwise, and the session cookie stays here.
-  private forwardHeaders(request: http.IncomingMessage) {
+  private forwardHeaders(request: http.IncomingMessage, device: Device) {
     const headers: http.OutgoingHttpHeaders = {}
     // Tailscale's identity headers aren't used: being on the tailnet isn't authentication here.
     for (const [key, value] of Object.entries(request.headers))
@@ -497,6 +528,8 @@ export class RemoteAccess {
     if (rest) headers.cookie = rest
     else delete headers.cookie
     headers[remoteHeader] = '1'
+    // Which paired device is asking (previews are opened for that device).
+    headers['x-t3-device'] = device.id
     return headers
   }
 
@@ -564,7 +597,7 @@ export class RemoteAccess {
         port: this.upstreamPort,
         method: request.method,
         path: request.url,
-        headers: this.forwardHeaders(request),
+        headers: this.forwardHeaders(request, device),
       },
       (reply) => {
         response.writeHead(reply.statusCode ?? 502, reply.headers)
@@ -586,7 +619,7 @@ export class RemoteAccess {
       return
     }
     const upstream = net.connect(this.upstreamPort, '127.0.0.1', () => {
-      const headers = this.forwardHeaders(request)
+      const headers = this.forwardHeaders(request, device)
       const lines = Object.entries(headers).flatMap(([key, value]) =>
         (Array.isArray(value) ? value : [value]).map((item) => `${key}: ${item}`),
       )

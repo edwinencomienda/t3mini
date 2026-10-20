@@ -117,6 +117,15 @@ export async function serveMedia(
     },
   })
 }
+// The ports of the dev servers t3 mini is running (the local URL each one printed).
+function devServerPorts(processes: { status: string; url?: string; urls?: string[] }[]) {
+  return processes
+    .filter((item) => item.status === 'running')
+    .flatMap((item) => item.urls ?? (item.url ? [item.url] : []))
+    .map((url) => Number(new URL(url).port))
+    .filter(Boolean)
+}
+const watchedPreviews = new WeakSet<object>()
 export async function handleApi(request: Request) {
   try {
     checkRequest(request)
@@ -130,6 +139,47 @@ export async function handleApi(request: Request) {
     }
     const secretsPath = join(dirname(service.store.path), 'secrets.json')
     await loadDictationKey(secretsPath)
+    // Open a dev server that runs on this Mac on the paired device asking (see previews.ts).
+    // Only from a paired device (the Mac can open localhost itself), and only for the port of a
+    // dev server t3 mini is running, never any other local service.
+    if (parts[0] === 'previews' && !parts[1] && request.method === 'POST') {
+      const device = request.headers.get('x-t3-device')
+      if (!remote || !device)
+        throw new HttpError(
+          403,
+          'Previews are for paired devices: on this Mac, open the address directly.',
+        )
+      const { port, path } = z
+        .object({
+          port: z.number().int().min(1).max(65_535),
+          path: z.string().max(2000).optional(),
+        })
+        .parse(await request.json())
+      const running = devServerPorts(service.processes.list())
+      if (!running.includes(port))
+        throw new HttpError(404, `Nothing t3 mini started is running on :${port}.`)
+      const access = await getRemoteAccess(join(dirname(service.store.path), 'devices.json'))
+      // Previews close when their dev server stops (watched once per gateway).
+      if (!watchedPreviews.has(access)) {
+        watchedPreviews.add(access)
+        service.processes.subscribe(
+          () => void access.previews.keepOnly(devServerPorts(service.processes.list())),
+        )
+      }
+      await access.previews.keepOnly(running)
+      try {
+        return Response.json(await access.previews.open(port, device, path))
+      } catch (error) {
+        throw new HttpError(
+          (error as NodeJS.ErrnoException).code === 'EADDRINUSE' ? 409 : 500,
+          (error as NodeJS.ErrnoException).code === 'EADDRINUSE'
+            ? `Port ${port + 10_000} is in use, so this dev server can’t be previewed.`
+            : error instanceof Error
+              ? error.message
+              : 'Could not open the preview.',
+        )
+      }
+    }
     // The Deepgram key is managed from the Mac only, and never returned.
     if (parts[0] === 'dictation' && !parts[1]) {
       macOnly('Managing the dictation key')

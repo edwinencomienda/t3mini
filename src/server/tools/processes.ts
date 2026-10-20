@@ -9,7 +9,11 @@ import { defineTool } from './types'
 const describe = (info: ProcessInfo) =>
   [
     `${info.name} (id ${info.id}): ${info.status}`,
-    info.url ? `URL: ${info.url}` : '',
+    info.urls && info.urls.length > 1
+      ? `URLs: ${info.urls.join(', ')}`
+      : info.url
+        ? `URL: ${info.url}`
+        : '',
     `Command: ${info.command}`,
     info.exitCode !== undefined && info.exitCode !== null ? `Exit code: ${info.exitCode}` : '',
   ]

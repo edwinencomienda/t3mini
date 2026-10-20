@@ -95,6 +95,7 @@ import { SidebarResize } from './SidebarResize'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
 import { ScrollToBottom } from './ScrollToBottom'
+import { localDevUrl, openPreview } from '../open-preview'
 import { dateSections } from '../sidebar-groups'
 import {
   Celebration,
@@ -1036,6 +1037,21 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (loadedThread === activeId) restorePlace(loadedThread)
     pin()
   }, [loadedThread])
+  // On a paired phone or tablet, a localhost link in the chat (an agent's "running at
+  // http://localhost:3000/login") opens through t3 mini's preview address for that dev server,
+  // at the same page, instead of the device's own localhost. On the computer they open as usual.
+  const remoteView = Boolean(bootstrap?.remote)
+  useEffect(() => {
+    if (!remoteView) return
+    const onClick = (event: MouseEvent) => {
+      const link = (event.target as Element | null)?.closest?.('.chat-content a[href]')
+      if (!(link instanceof HTMLAnchorElement) || !localDevUrl(link.href)) return
+      event.preventDefault()
+      void openPreview(link.href).catch((error: Error) => setError(error.message))
+    }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  }, [remoteView])
   useEffect(() => {
     const saved = loadNotificationPreferences()
     const permission = desktopPermission()
@@ -3119,7 +3135,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         threadId={thread.id}
                         browser={browsers.find((item) => item.threadId === thread.id)}
                       />
-                      <ProcessIndicator processes={processes} project={thread.cwd} />
+                      <ProcessIndicator
+                        processes={processes}
+                        project={thread.cwd}
+                        remote={Boolean(bootstrap?.remote)}
+                      />
                     </span>
                   </div>
                 ) : null}

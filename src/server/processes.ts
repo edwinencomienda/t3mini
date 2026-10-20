@@ -20,6 +20,9 @@ export type ProcessInfo = {
   endedAt?: string
   // First local URL the process printed, e.g. http://localhost:5173.
   url?: string
+  // Every local address it printed (origins, in order, up to 5): a monorepo's `dev` often starts
+  // a website and an API side by side (http://localhost:3000, http://localhost:3001).
+  urls?: string[]
 }
 
 export const maxProcessesPerProject = 10
@@ -32,6 +35,7 @@ const privateEnv = ['DEEPGRAM_API_KEY', 'DEEPGRAM_MODEL', 'T3_MINI_PHONE_PORT', 
 const ansi = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g
 const localUrl =
   /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/[^\s'"`)]*)?/i
+const localUrls = new RegExp(localUrl.source, 'gi')
 
 // When t3 mini stops (Ctrl+C, a restart, an exit), take running process groups with it so dev
 // servers aren't left orphaned holding their ports. Signals matter too: by default Node exits
@@ -142,13 +146,18 @@ export class ProcessManager {
       const text = chunk.toString('utf8').replace(ansi, '')
       entry.log += text
       if (entry.log.length > maxLogBytes) entry.log = entry.log.slice(-maxLogBytes)
-      if (!entry.info.url) {
-        const found = localUrl.exec(text)?.[0]
-        if (found) {
-          entry.info.url = found.replace('0.0.0.0', 'localhost')
-          this.changed()
+      let found = false
+      for (const match of text.matchAll(localUrls)) {
+        const url = match[0].replace('0.0.0.0', 'localhost')
+        const origin = new URL(url).origin
+        const urls = entry.info.urls ?? []
+        if (!entry.info.url) entry.info.url = url
+        if (urls.length < 5 && !urls.includes(origin)) {
+          entry.info.urls = [...urls, origin]
+          found = true
         }
       }
+      if (found) this.changed()
     }
     child.stdout?.on('data', append)
     child.stderr?.on('data', append)
@@ -204,6 +213,7 @@ export class ProcessManager {
       endedAt: undefined,
       exitCode: undefined,
       url: undefined,
+      urls: undefined,
     })
     this.launch(entry)
     return entry.info

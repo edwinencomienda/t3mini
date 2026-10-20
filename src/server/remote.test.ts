@@ -29,6 +29,15 @@ const fakeTailscale: TailscaleControl = {
     served.push('stop now')
   },
   port: () => 8443,
+  servePort: async (local, https) => {
+    served.push(`serve ${local} as ${https}`)
+  },
+  stopServePort: async (https) => {
+    served.push(`stop ${https}`)
+  },
+  stopServePortNow: (https) => {
+    served.push(`stop now ${https}`)
+  },
 }
 const tailnetHost = 'mac.tail1234.ts.net:8443'
 

@@ -155,6 +155,25 @@ On a real phone: Settings → Devices → on → Connect a device → scan. For 
 | "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                                                                                              |
 | Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `bun run dev` (local-network phone access turns off; Tailscale access reconnects by itself).                                                      |
 
+## Previews of dev servers (proof of concept)
+
+A paired device can open a dev server that runs on this Mac (`localhost:3000`): **● running** → **Open on this device**.
+
+```text
+Phone ──► <tailnet name>:13000 (tailscale serve, HTTPS)  or  <LAN address>:13000 (HTTP)
+            ──► preview listener (previews.ts): right address? valid preview cookie (or one-time pass)?
+              ──► localhost:3000, as if from localhost
+```
+
+- **Files:** `src/server/previews.ts` (`Previews`: one listener per shared dev server), `RemoteAccess.previews` / `previewHost()` in `remote.ts`, `POST /api/previews` in `api.ts`, `servePort` / `stopServingPort` in `tailscale.ts`, `openPreview()` in `components/Processes.tsx`; tests in `previews.test.ts`.
+- **Address:** its own port, the dev server's + 10000, at the root: apps assume they live at `/` (a sub-path like `/preview/3000/` breaks React, Vue, Angular, and Svelte; see code-server's docs). Over Tailscale the listener is loopback-only and `tailscale serve --https=<port+10000>` publishes it; on the local network it listens on every interface, like the gateway. A taken port fails with a readable 409.
+- **Who gets in:** `POST /api/previews {port}` is refused unless it comes through the gateway from a paired device (the gateway adds `x-t3-device` with the device id; it strips every client `x-t3-*` header first), and only for a port a running process t3 mini started printed (`ProcessInfo.urls`: every local address it printed, up to 5, since a monorepo's `dev` often starts a website and an API side by side), never another local service. It returns one link per address with a one-time pass (2 minutes, stored hashed). Opening `/__t3-preview?pass=…` trades it for an HttpOnly cookie for that address (`__Host-t3p_<port>`, Secure, over Tailscale; `t3p_<port>` on the local network), good for 12 hours and only while the device stays paired. The same Host/source/Origin checks as the gateway block DNS rebinding and other sites.
+- **Forwarding:** to `localhost:<port>` (both IPv4 and IPv6) with `Host` and `Origin` set to `localhost:<port>` (so Vite's host check and auth libraries' origin checks pass), `Referer` rewritten, `x-forwarded-*`, `tailscale-*`, and `x-t3-*` removed, and t3 mini's cookies (`t3m_`/`t3p_`, which the browser sends to every port of the host) removed. Replies: a `Location` back to `localhost:<port>` points at the preview address; `Domain=localhost` is dropped from `Set-Cookie`. WebSockets (live reload) get the same checks and rewriting.
+- **Closing:** when the dev server's process stops (the process list is watched), when phone access turns off, and its `tailscale serve` port is turned off at exit like the gateway's.
+- **Not handled (outside the proxy):** app code that calls `http://localhost:<port>` directly from the browser, and OAuth providers' registered callback URLs.
+- **Links in the chat:** on a paired device, a tap on a `localhost` / `127.0.0.1` / `0.0.0.0` link inside the chat (one click listener on `.chat-content`, so messages don't re-render) opens it the same way (`src/open-preview.ts`), sending its path along: the pass lands on that page (`landingPath()` only allows a path on the same preview: one leading `/`, no `//`, backslashes, spaces, or control characters). Ports nothing t3 mini started is running on say so.
+- **Not yet:** a "Stop sharing" button, Copy link on the Mac, and an agent tool to share a preview.
+
 ## Tailscale (HTTPS)
 
 Local-network mode is plain HTTP. Tailscale mode adds encryption, a secure context on the phone, and access from anywhere on the tailnet (cellular included), without opening ports. The approach follows t3code (`packages/tailscale/src/tailscale.ts`).
