@@ -113,6 +113,9 @@ export function lanAddresses() {
     .filter((address) => isPrivateAddress(address))
 }
 function deviceName(userAgent = '') {
+  // Another t3 mini that added this one as a machine (machines.ts): "t3 mini · <its host name>".
+  const machine = /^t3mini\/\S+ \(([^)]{1,60})\)/.exec(userAgent)
+  if (machine) return `t3 mini · ${machine[1]}`
   const device = /iPhone/.test(userAgent)
     ? 'iPhone'
     : /iPad/.test(userAgent)

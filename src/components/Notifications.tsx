@@ -6,6 +6,7 @@ import {
   Music,
   Palette,
   MonitorSmartphone,
+  Server,
   CircleAlert,
   CircleCheck,
   CircleStop,
@@ -28,6 +29,7 @@ import { parseYouTube, saveMusic, useMusicSettings } from '../background-music'
 import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
+import { Machines } from './Machines'
 import { Modal, ModalTitle } from './Modal'
 import { Segmented, Toggle } from './ui'
 import { Tabs } from '@base-ui/react/tabs'
@@ -175,13 +177,15 @@ function accountLine(
 
 // Settings is split into tabs so each page stays short. The last tab is remembered while the
 // page is open; Mac-only tabs are hidden on a paired phone.
-type SettingsTab = 'appearance' | 'notifications' | 'music' | 'dictation' | 'phone' | 'agents'
+type SettingsTab =
+  'appearance' | 'notifications' | 'music' | 'dictation' | 'phone' | 'machines' | 'agents'
 const settingsTabs: { id: SettingsTab; label: string; icon: ReactNode; macOnly?: boolean }[] = [
   { id: 'appearance', label: 'Appearance', icon: <Palette size={14} /> },
   { id: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
   { id: 'music', label: 'Music', icon: <Music size={14} /> },
   { id: 'dictation', label: 'Dictation', icon: <Mic size={14} />, macOnly: true },
   { id: 'phone', label: 'Devices', icon: <MonitorSmartphone size={14} />, macOnly: true },
+  { id: 'machines', label: 'Machines', icon: <Server size={14} />, macOnly: true },
   { id: 'agents', label: 'Agents', icon: <Bot size={14} /> },
 ]
 let lastTab: SettingsTab = 'appearance'
@@ -229,7 +233,9 @@ export function SettingsDialog({
   }
   const desktopOn = preferences.desktop && permission === 'granted'
   const [tab, setTab] = useState<SettingsTab>(() =>
-    remote && (lastTab === 'dictation' || lastTab === 'phone') ? 'appearance' : lastTab,
+    remote && (lastTab === 'dictation' || lastTab === 'phone' || lastTab === 'machines')
+      ? 'appearance'
+      : lastTab,
   )
   const selectTab = (next: SettingsTab) => {
     lastTab = next
@@ -466,6 +472,7 @@ export function SettingsDialog({
             {tab === 'phone' && !remote ? (
               <PhoneAccess onChange={(enabled) => onPhoneAccessChange?.(enabled)} />
             ) : null}
+            {tab === 'machines' && !remote ? <Machines /> : null}
             {tab === 'agents' ? (
               <section className="settings-section">
                 <h3>Agents</h3>

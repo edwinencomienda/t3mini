@@ -2991,6 +2991,76 @@ body.resizing {
   color: var(--muted-foreground);
 }
 
+/* Settings → Machines */
+.machine-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+.machine-add .music-url {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.machine-add .machine-name {
+  flex: 0 1 10rem;
+}
+.machine-error {
+  color: var(--danger);
+}
+.machine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+.machine-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+.machine-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.machine-dot.online {
+  background: var(--success, #16a34a);
+}
+.machine-dot.unpaired {
+  background: var(--warning);
+}
+.machine-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.machine-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.machine-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-decoration: none;
+}
+.machine-open[aria-disabled='true'] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* Phone access */
 .phone-on {
   color: var(--primary);

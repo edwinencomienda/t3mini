@@ -165,6 +165,44 @@ async function update() {
   })
 }
 
+// Lets another computer add this one as a machine (docs/machines.md): turns on this t3 mini's
+// gateway for other devices (Tailscale HTTPS, or --lan for the local network) and prints a
+// one-time link (and QR) to paste into Settings → Machines → Add machine there. Starts t3mini
+// first if needed. --json prints { link, expiresAt } for scripts.
+async function pair() {
+  const mode = args.includes('--lan') ? 'lan' : 'tailscale'
+  const json = args.includes('--json')
+  if (!(await answers())) {
+    if (json) fail(`t3 mini isn’t running on port ${port}. Run t3mini start first.`)
+    await start()
+  }
+  const request = async (path: string, body?: unknown) => {
+    const response = await fetch(`${url}/api/${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'content-type': 'application/json', origin: url },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const data = (await response.json().catch(() => ({}))) as Record<string, any>
+    if (!response.ok) fail(data.error || `t3 mini refused (${response.status}).`)
+    return data
+  }
+  const status = await request('remote')
+  if (!status.enabled || status.mode !== mode) await request('remote', { enabled: true, mode })
+  const pairing = await request('remote/pair', {})
+  const first = pairing.links?.[0]
+  const link: string | undefined = typeof first === 'string' ? first : first?.url
+  if (!link) fail('t3 mini didn’t return a pairing link.')
+  if (json) return console.log(JSON.stringify({ link, expiresAt: pairing.expiresAt }))
+  const { default: QRCode } = await import('qrcode')
+  console.log(await QRCode.toString(link, { type: 'terminal', small: true }))
+  console.log(`Add this machine from your other computer: Settings → Machines → Add machine, then paste:
+
+  ${link}
+
+It works once and expires in 5 minutes. Paired machines are listed (and can be removed) here in
+Settings → Devices.`)
+}
+
 // Copies another t3 mini data folder (e.g. the repo's .data) in, only into an empty one.
 async function importData() {
   const from = args[0]
@@ -194,6 +232,7 @@ const commands: Record<string, () => unknown> = {
   open,
   update,
   import: importData,
+  pair,
   version: () => console.log(version),
 }
 const run = commands[command]
@@ -209,6 +248,8 @@ else {
   t3mini update [--force]   rebuild and reinstall from the repo it came from; restarts it
                             unless a thread is running (--force: restart anyway)
   t3mini import <folder>    copy another t3 mini data folder in (only into an empty one)
+  t3mini pair [--lan]       a one-time link for adding this machine from another computer
+                            (Settings → Machines); Tailscale by default, --lan: local network
   t3mini serve [--port N]   run in the foreground
 
 Data: ${dataDir}   Settings: ${envFile} (e.g. DEEPGRAM_API_KEY=…)`)

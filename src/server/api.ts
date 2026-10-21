@@ -10,6 +10,7 @@ import { Readable } from 'node:stream'
 import { mediaType } from './uploads'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
+import { getMachines, isMachineError } from './machines'
 import { tailscaleStatus } from './tailscale'
 import { providerAccount } from './accounts'
 import {
@@ -139,6 +140,38 @@ export async function handleApi(request: Request) {
     }
     const secretsPath = join(dirname(service.store.path), 'secrets.json')
     await loadDictationKey(secretsPath)
+    // Other machines (machines.ts): their local addresses open with the first request.
+    const machines = getMachines(join(dirname(service.store.path), 'machines.json'))
+    if (parts[0] === 'machines') {
+      macOnly('Managing machines')
+      const body = request.method === 'GET' ? null : ((await request.json()) as unknown)
+      const input = z
+        .object({
+          id: z.string().max(100).optional(),
+          link: z.string().max(2000).optional(),
+          name: z.string().max(60).optional(),
+        })
+        .parse(body ?? {})
+      try {
+        if (!parts[1] && request.method === 'GET') return Response.json(await machines.list())
+        if (!parts[1] && request.method === 'POST') {
+          const added = await machines.add({ link: input.link ?? '', name: input.name })
+          return Response.json({ id: added.id, name: added.name }, { status: 201 })
+        }
+        if (!parts[1] && request.method === 'DELETE' && input.id) {
+          await machines.remove(input.id)
+          return Response.json({ ok: true })
+        }
+        if (parts[1] === 'rename' && request.method === 'POST' && input.id) {
+          const renamed = await machines.rename(input.id, input.name ?? '')
+          return Response.json({ id: renamed.id, name: renamed.name })
+        }
+      } catch (error) {
+        if (isMachineError(error)) throw new HttpError(400, error.message)
+        throw error
+      }
+      throw new HttpError(404, 'Not found.')
+    }
     // Open a dev server that runs on this Mac on the paired device asking (see previews.ts).
     // Only from a paired device (the Mac can open localhost itself), and only for the port of a
     // dev server t3 mini is running, never any other local service.
