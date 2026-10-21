@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the t3mini binary from GitHub releases:
 #   curl -fsSL https://raw.githubusercontent.com/edwinencomienda/t3mini/main/install.sh | sh
-#   … | sh -s -- v0.1.0      a specific version (default: the latest)
+#   … | sh -s -- v0.1.1      a specific version (default: the latest)
 # It picks the binary for this machine (macOS or Linux, arm64 or x64), checks it against the
 # release's SHA256SUMS, and puts it in ~/.local/bin (or $T3_MINI_BIN_DIR).
 set -eu
