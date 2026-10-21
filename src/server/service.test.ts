@@ -1,7 +1,7 @@
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentService } from './service'
 import { ProjectStore, ThreadStore } from './store'
 import type { TitleWriter } from './titles'
@@ -1156,8 +1156,10 @@ describe('AI thread titles', () => {
     const created = await titled.create({ provider: 'codex', cwd: directory })
     await titled.send(created.id, { text: 'Fix the overflowing code blocks' })
     await started
-    await settled()
-    expect(titled.get(created.id)).toMatchObject({ title: 'Luna title', titleSource: 'ai' })
+    // Titles are written in the background: wait for it (slower machines, e.g. CI, need longer).
+    await vi.waitFor(() =>
+      expect(titled.get(created.id)).toMatchObject({ title: 'Luna title', titleSource: 'ai' }),
+    )
     expect(calls).toEqual([
       'codex User: Fix the overflowing code blocks',
       'name native-session Luna title',
@@ -1193,11 +1195,12 @@ describe('AI thread titles', () => {
     await started
     context.text('reply', 'The tool system')
     context.text('reply', ' has a registry…')
-    await settled()
-    expect(titled.get(created.id)).toMatchObject({
-      title: 'Claude session title',
-      titleSource: 'ai',
-    })
+    await vi.waitFor(() =>
+      expect(titled.get(created.id)).toMatchObject({
+        title: 'Claude session title',
+        titleSource: 'ai',
+      }),
+    )
     // One look while replying (throttled); none needed at the end.
     expect(calls).toEqual(['claudeSession native-session'])
     await settleTitled(created.id)
@@ -1222,8 +1225,9 @@ describe('AI thread titles', () => {
     expect(titled.get(created.id).titleSource).toBe('message')
     ready = true
     await settleTitled(created.id)
-    await settled()
-    expect(titled.get(created.id)).toMatchObject({ title: 'Claude session title' })
+    await vi.waitFor(() =>
+      expect(titled.get(created.id)).toMatchObject({ title: 'Claude session title' }),
+    )
     expect(calls).toEqual(['claudeSession native-session', 'claudeSession native-session'])
   })
 
