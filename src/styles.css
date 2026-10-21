@@ -415,6 +415,10 @@ kbd {
 .thread-time.failed {
   color: var(--danger);
 }
+/* "Done": a turn finished while you weren't looking, until you open the thread. */
+.thread-time.completed.unread {
+  color: var(--success);
+}
 .thread-time.working {
   display: grid;
   place-items: center;
@@ -3455,7 +3459,7 @@ body.resizing {
     visibility: hidden;
   }
   /* Touch screens hide the time for the ⋮ button, but keep the status in view beside it. */
-  .thread-row-wrap .thread-time:is(.working, .waiting) {
+  .thread-row-wrap .thread-time:is(.working, .waiting, .unread) {
     visibility: visible;
   }
   .thread-row-wrap .thread-row {

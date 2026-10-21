@@ -411,9 +411,12 @@ function relativeTime(iso: string, now: number) {
   if (days < 7) return `${days}d`
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
-// The sidebar's right-hand label for a thread: what it waits for, else when it last changed.
-function threadTime(item: ThreadSummary, now: number) {
+// The sidebar's right-hand label for a thread: what it waits for; Done or Failed for a turn that
+// ended while you weren't looking (until you open it); else when it last changed.
+function threadTime(item: ThreadSummary, now: number, unread = false) {
   if (item.status === 'waiting') return item.waitingFor === 'question' ? 'Question' : 'Approval'
+  if (unread && item.status === 'completed') return 'Done'
+  if (unread && item.status === 'failed') return 'Failed'
   return relativeTime(item.updatedAt, now)
 }
 
@@ -2192,7 +2195,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
 
   // A thread's time, which doubles as its status (sidebar and ⌘K palette): the working dots
   // while the agent works, a spinner while a new title is being written, Question or Approval
-  // while it waits for you, red after a failure.
+  // while it waits for you, Done (green) or Failed (red) when a turn ended and you haven't
+  // opened it yet, and a red time after a failure.
   const threadStatus = (item: ThreadSummary) =>
     item.status === 'starting' || item.status === 'working' ? (
       <span className="thread-time working">
@@ -2204,10 +2208,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
       </span>
     ) : (
       <span
-        className={`thread-time ${item.status}`}
+        className={`thread-time ${item.status} ${unread.has(item.id) ? 'unread' : ''}`}
         title={item.status === 'failed' ? labels.failed : undefined}
       >
-        {threadTime(item, now)}
+        {threadTime(item, now, unread.has(item.id))}
       </span>
     )
   // One thread in the sidebar (with its project's name when the list isn't grouped).
