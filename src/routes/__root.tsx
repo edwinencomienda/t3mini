@@ -10,7 +10,12 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: 'stylesheet', href: styles },
-      { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
+      // The dev server (bun run dev) gets an orange icon, so its tabs stand out from production's.
+      {
+        rel: 'icon',
+        type: 'image/svg+xml',
+        href: import.meta.env.DEV ? '/favicon-dev.svg' : '/favicon.svg',
+      },
     ],
   }),
   component: () => (

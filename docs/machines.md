@@ -5,7 +5,7 @@ Use t3 mini on another computer (a VPS, another Mac) from this one. Step 1 of th
 ## Using it
 
 1. On the other machine, install and start `t3mini` (see the README's **Install**) with Claude Code and/or Codex signed in there, and Tailscale signed in to the same tailnet as this Mac.
-2. Run `t3mini pair` there. It turns on that machine's gateway for other devices (Tailscale HTTPS; `--lan` for the local network) and prints a one-time link and QR, valid 5 minutes, usable once.
+2. Get a pairing link there: in its t3 mini, **Settings → Machines → Add this computer to another t3 mini → Get a pairing link** (pick Tailscale or Local network; **Copy link**), or run `t3mini pair` in a terminal (`--lan` for the local network). Either way it turns on that machine's gateway for other devices if it's off and makes a one-time link, valid 5 minutes, usable once. (Switching an active connection to the other kind asks first, since it drops devices using the old one.)
 3. On this Mac: **Settings → Machines**, paste the link (and a name if you like), **Add machine**.
 4. **Open** shows the machine's t3 mini in a new tab at a local address, `http://127.0.0.1:<port>`. Its threads, projects, agents, and files are all on that machine.
 
@@ -28,7 +28,7 @@ Browser on this Mac ──► 127.0.0.1:<port>  (machines.ts: MachineProxy, loop
 - **Mac-only actions** (Open in VS Code, folder picker, its Settings → Devices and Dictation) are refused by the machine, since the request arrives as a paired device.
 - **Links:** `https://` for any host (Tailscale), `http://` only for private network addresses.
 - **Status** (`list()`): online (its `/api/bootstrap` answers), offline, or unpaired (401: the session expired or was revoked).
-- Code: `src/server/machines.ts` (store, pairing, proxy), `/api/machines` in `api.ts`, `components/Machines.tsx` (Settings → Machines), `t3mini pair` in `cli/t3mini.ts`.
+- Code: `src/server/machines.ts` (store, pairing, proxy), `/api/machines` in `api.ts`, `components/Machines.tsx` (Settings → Machines: adding machines, and `ShareThisComputer`, the in-app `t3mini pair` built on `/api/remote` and `/api/remote/pair`), `t3mini pair` in `cli/t3mini.ts`.
 
 ## Security
 
