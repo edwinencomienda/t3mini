@@ -10,16 +10,16 @@ import {
 } from './hub'
 import type { ThreadSummary } from './types'
 
-const machine = { id: 'b5c7c1d8-9db5-4116-91fd-e4bc04bf3b6a', name: 'Cloud dev server' }
+const machine = { id: 'machine-1', name: 'Cloud dev server' }
 
 it('gives a machine’s threads and folders ids that carry the machine', () => {
-  const id = remoteId(machine.id, '06ee9230-1528')
-  expect(parseRemote(id)).toEqual({ machine: machine.id, id: '06ee9230-1528' })
+  const id = remoteId(machine.id, 'thread-1')
+  expect(parseRemote(id)).toEqual({ machine: machine.id, id: 'thread-1' })
   expect(isRemote(id)).toBe(true)
   // Folder paths keep their slashes.
   expect(parseRemote(remoteId(machine.id, '/home/t3/app'))?.id).toBe('/home/t3/app')
   // This computer's ids and folders aren't remote.
-  for (const local of ['06ee9230-1528', '/Users/me/app', '', null, undefined, 'm~broken'])
+  for (const local of ['thread-1', '/Users/me/app', '', null, undefined, 'm~broken'])
     expect(parseRemote(local)).toBeNull()
 })
 it('routes a thread’s calls to its machine', () => {
