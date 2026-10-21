@@ -25,6 +25,10 @@ export type Message = {
   rewindFailed?: boolean
   // Sent while the agent was waiting on its question, so it answered that question.
   answered?: boolean
+  // The agent's reply when it finished responding (Claude's result). A turn can have more than
+  // one: Claude answers, then wakes up again when background work it left running finishes and
+  // adds a follow-up. Every such reply stays in view when the turn folds, not just the last.
+  endsReply?: boolean
 }
 export type TurnCheckpoint = {
   // Claude: the turn was the session's first (an edit starts a new session), or the last

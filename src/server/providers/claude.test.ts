@@ -74,8 +74,11 @@ it.each(['', 'low'] as const)(
       text: vi.fn(),
       activity: vi.fn(),
       approve: vi.fn(async () => true),
+      replied: vi.fn(),
     }
     await runClaude(ctx)
+    // Each finished response is reported, so its reply stays in view when the turn folds.
+    expect(ctx.replied).toHaveBeenCalledTimes(1)
     expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: effort || null })
     expect(query).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -80,6 +80,27 @@ describe('agent lifecycle', () => {
     expect(created.messages.at(-1)?.text).toBe('Hello world')
     expect(created.completedAt).toBeTruthy()
   })
+  it('marks each reply the agent ended a response with, in this turn only', async () => {
+    const created = await thread()
+    await service.send(created.id, { text: 'Fix it and run the suite in the background' })
+    await started
+    context.text('note', 'Working on it')
+    context.text('summary', 'Fixed. The full suite is still running.')
+    context.replied?.()
+    // Background work finished: Claude wakes up and adds a follow-up.
+    context.text('followup', 'The full suite passed.')
+    context.replied?.()
+    context.replied?.()
+    await settle(created.id, finish)
+    const flags = created.messages
+      .filter((message) => message.role === 'assistant')
+      .map((message) => [message.text, Boolean(message.endsReply)])
+    expect(flags).toEqual([
+      ['Working on it', false],
+      ['Fixed. The full suite is still running.', true],
+      ['The full suite passed.', true],
+    ])
+  })
   it('waits for explicit approval, then returns to working', async () => {
     const created = await thread()
     await service.send(created.id, { text: 'Run a tool' })

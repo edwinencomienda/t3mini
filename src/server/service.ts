@@ -989,6 +989,20 @@ export class AgentService {
         thread.background = tasks.length ? tasks : undefined
         touch()
       },
+      // The agent's latest reply in this turn is an answer: keep it in view when the turn folds.
+      replied: () => {
+        // From the message that started this turn (a message queued meanwhile comes later).
+        const turnStart = started
+          ? thread.messages.indexOf(started)
+          : thread.messages.map((message) => message.role).lastIndexOf('user')
+        const reply = thread.messages
+          .slice(turnStart + 1)
+          .reverse()
+          .find((message) => message.role === 'assistant' && message.text.trim())
+        if (!reply || reply.endsReply) return
+        reply.endsReply = true
+        touch()
+      },
     }
     try {
       try {

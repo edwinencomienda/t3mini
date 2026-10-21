@@ -156,6 +156,46 @@ describe('buildTurns', () => {
   })
 })
 
+describe('replies that ended a response', () => {
+  it('stay in view, in order, when the turn folds; only the work before them folds', () => {
+    const [turn] = buildTurns({
+      messages: [
+        user('q', 0),
+        reply('note', 2),
+        { ...reply('summary', 5), endsReply: true },
+        { ...reply('followup', 9), endsReply: true },
+      ],
+      activities: [],
+      status: 'completed',
+      completedAt: at(10),
+    })
+    expect(turn!.answer?.id).toBe('followup')
+    expect(turn!.replies.map((message) => message.id)).toEqual(['summary'])
+    expect(turn!.work.map((item) => (item.kind === 'note' ? item.message.id : item.kind))).toEqual([
+      'note',
+    ])
+  })
+  it('a turn with one answer works as before', () => {
+    const [turn] = buildTurns({
+      messages: [user('q', 0), reply('note', 2), { ...reply('final', 5), endsReply: true }],
+      activities: [],
+      status: 'completed',
+      completedAt: at(6),
+    })
+    expect(turn!.answer?.id).toBe('final')
+    expect(turn!.replies).toEqual([])
+  })
+  it('keeps every note live while the turn is still running', () => {
+    const [turn] = buildTurns({
+      messages: [user('q', 0), { ...reply('summary', 5), endsReply: true }],
+      activities: [],
+      status: 'working',
+    })
+    expect(turn!.replies).toEqual([])
+    expect(turn!.work).toHaveLength(1)
+  })
+})
+
 describe('finishLabel', () => {
   const turn = (seconds: number, endedAt = '2026-10-19T06:00:00.000Z') =>
     ({

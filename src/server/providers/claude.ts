@@ -447,6 +447,8 @@ export const runClaude: Runner = async (ctx) => {
               ? message.errors.join('\n')
               : 'Claude could not complete this turn.',
           )
+        // Its reply so far is an answer, even if background work wakes it up again later.
+        ctx.replied?.()
       }
     }
     ctx.signal.throwIfAborted()

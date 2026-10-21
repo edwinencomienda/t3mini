@@ -25,6 +25,9 @@ export type Turn = {
   work: WorkItem[]
   // The agent's last message, once the turn has finished.
   answer?: Message
+  // Earlier replies the agent ended a response with (endsReply), shown before the answer instead
+  // of being folded away: e.g. its summary, before background work finished and it added more.
+  replies: Message[]
   // Images (and other tool content) from the folded notes, shown above the answer.
   blocks: Block[]
   done: boolean
@@ -53,6 +56,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
         ...(message.role === 'user' ? { user: message } : {}),
         work: [],
         blocks: [],
+        replies: [],
         done: true,
         steps: 0,
         ...(message.role === 'user' ? { startedAt: message.createdAt } : {}),
@@ -61,7 +65,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
       turns.at(-1)!.work.push({ kind: 'note', message, at: message.createdAt })
   }
   if (!turns.length && thread.activities.length)
-    turns.push({ key: 'work', work: [], blocks: [], done: true, steps: 0 })
+    turns.push({ key: 'work', work: [], blocks: [], replies: [], done: true, steps: 0 })
   if (!turns.length) return turns
 
   // The turn the current run belongs to: the one started by your latest message that was sent
@@ -107,6 +111,14 @@ export function buildTurns(thread: ThreadState): Turn[] {
         turn.answer = last.message
         turn.work = turn.work.filter((item) => item !== last)
       }
+      turn.replies = turn.work.flatMap((item) =>
+        item.kind === 'note' && item.message.endsReply && item.message.text.trim()
+          ? [item.message]
+          : [],
+      )
+      turn.work = turn.work.filter(
+        (item) => item.kind !== 'note' || !turn.replies.includes(item.message),
+      )
       turn.blocks = turn.work.flatMap((item) =>
         item.kind === 'note' ? (item.message.blocks ?? []) : [],
       )

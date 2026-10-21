@@ -33,6 +33,9 @@ export type ProviderContext = {
   }) => Promise<Record<string, string> | null>
   // The tasks the agent currently has running in the background.
   background?: (tasks: BackgroundTask[]) => void
+  // The agent finished a response (its latest reply is an answer to keep in view). Claude can
+  // do this more than once in a turn when background work wakes it up again.
+  replied?: () => void
   // What t3 mini tools (show_image…) use to act on this thread.
   tools: ToolContext
   // Providers that support steering register a handler once the run can accept messages.

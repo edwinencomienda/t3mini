@@ -2910,8 +2910,21 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         ) : !turn.done && turn.work.length ? (
                           workList(turn.work)
                         ) : null}
+                        {/* Replies the agent ended a response with before its last one (e.g. a
+                            summary, then a follow-up once background work finished): kept in
+                            view, in order, with what it showed while working above the first. */}
+                        {turn.replies.map((reply, index) => (
+                          <MessageView
+                            key={reply.id}
+                            message={reply}
+                            {...(index === 0 ? { leading: turn.blocks } : {})}
+                          />
+                        ))}
                         {turn.answer ? (
-                          <MessageView message={turn.answer} leading={turn.blocks} />
+                          <MessageView
+                            message={turn.answer}
+                            {...(turn.replies.length ? {} : { leading: turn.blocks })}
+                          />
                         ) : null}
                       </div>
                     ))}
