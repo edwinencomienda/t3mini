@@ -108,6 +108,7 @@ import {
   TodoCard,
   stepTitle,
 } from './WorkSteps'
+import { linkify } from '../linkify'
 import { buildTurns, finishLabel, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -273,6 +274,22 @@ const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }
 })
 // One message. Live updates parse a fresh copy of the thread every time, so rows compare by
 // content rather than identity; unchanged messages skip rendering entirely.
+// Your message with its web links clickable (new tab, like links in agent replies).
+function LinkedText({ text }: { text: string }) {
+  return (
+    <>
+      {linkify(text).map((part, index) =>
+        part.href ? (
+          <a key={index} href={part.href} target="_blank" rel="noopener noreferrer">
+            {part.text}
+          </a>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  )
+}
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
@@ -319,7 +336,11 @@ const MessageView = memo(
                 ))}
               </div>
             ) : null}
-            {message.text ? <div className="user-bubble">{message.text}</div> : null}
+            {message.text ? (
+              <div className="user-bubble">
+                <LinkedText text={message.text} />
+              </div>
+            ) : null}
             {message.queued ? (
               <span className="message-note">Queued · sends when the current turn ends</span>
             ) : message.unsent ? (

@@ -770,6 +770,15 @@ kbd {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.user-bubble a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.user-bubble a:hover {
+  text-decoration-color: currentColor;
+}
 .message-actions {
   display: flex;
   align-items: center;
