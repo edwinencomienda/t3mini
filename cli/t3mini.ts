@@ -153,16 +153,89 @@ function open() {
   })
 }
 
-// Rebuilds and reinstalls from the repo it was installed from (bun run install-cli), which
-// restarts it if it's running and no agent is working (--force: restart anyway).
+// Updates t3mini. Installed from the repo (bun run install-cli): rebuilds from it. Otherwise (a
+// release binary, e.g. from install.sh): downloads the newest release, or --version vX.Y.Z, checks
+// its SHA256SUMS, and replaces this binary. Either way it restarts if running, unless an agent
+// is working (--force: restart anyway). --release uses releases even with a repo.
 async function update() {
   const install = await readFile(installFile, 'utf8').then(JSON.parse, () => null)
-  if (!install?.repo || !existsSync(join(install.repo, 'package.json')))
-    fail('Don’t know where t3mini was installed from. Run `bun run install-cli` in the repo.')
-  execFileSync('bun', ['run', 'install-cli', ...(args.includes('--force') ? ['--force'] : [])], {
-    cwd: install.repo,
-    stdio: 'inherit',
-  })
+  const fromRepo =
+    install?.repo && existsSync(join(install.repo, 'package.json')) && !args.includes('--release')
+  if (fromRepo) {
+    execFileSync('bun', ['run', 'install-cli', ...(args.includes('--force') ? ['--force'] : [])], {
+      cwd: install.repo,
+      stdio: 'inherit',
+    })
+    return
+  }
+  await updateFromRelease()
+}
+
+const releaseRepo = 'edwinencomienda/t3mini'
+async function updateFromRelease() {
+  const wanted = option('version')
+  if (wanted && !/^v\d+\.\d+\.\d+$/.test(wanted)) fail('Versions look like v0.1.0.')
+  let tag = wanted
+  if (!tag) {
+    const response = await fetch(`https://api.github.com/repos/${releaseRepo}/releases/latest`, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 't3mini' },
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => null)
+    tag = response?.ok ? ((await response.json()) as { tag_name?: string }).tag_name : undefined
+    if (!tag) fail('Couldn’t find the latest release on GitHub.')
+    if (tag === `v${version}`) return console.log(`t3mini ${version} is already the latest.`)
+  }
+  const os = process.platform === 'darwin' ? 'darwin' : process.platform === 'linux' ? 'linux' : ''
+  const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : ''
+  if (!os || !arch) fail(`No t3mini release for ${process.platform} ${process.arch}.`)
+  const asset = `t3mini-${os}-${arch}`
+  const base = `https://github.com/${releaseRepo}/releases/download/${tag}`
+  console.log(`Downloading ${asset} ${tag}…`)
+  const download = async (name: string) => {
+    const response = await fetch(`${base}/${name}`, { signal: AbortSignal.timeout(300_000) }).catch(
+      () => null,
+    )
+    if (!response?.ok) fail(`Couldn’t download ${base}/${name}.`)
+    return Buffer.from(await response.arrayBuffer())
+  }
+  const [binary, sums] = await Promise.all([download(asset), download('SHA256SUMS')])
+  const expected = sums
+    .toString('utf8')
+    .split('\n')
+    .map((line) => line.trim().split(/\s+\*?/))
+    .find(([, name]) => name === asset)?.[0]
+  const { createHash } = await import('node:crypto')
+  if (!expected || createHash('sha256').update(binary).digest('hex') !== expected)
+    fail('The download didn’t match the release’s checksum; not installing it.')
+  // Next to this binary, then renamed over it: the running server keeps its file until restart.
+  const target = process.execPath
+  const staged = join(dirname(target), '.t3mini.new')
+  await writeFile(staged, binary, { mode: 0o755 })
+  const { rename } = await import('node:fs/promises')
+  await rename(staged, target)
+  console.log(`Installed t3mini ${tag} → ${target}`)
+  if (!runningPid()) return
+  const busy = await busyThreads()
+  if (busy.length && !args.includes('--force'))
+    return console.log(
+      `Not restarted: ${busy.length === 1 ? 'a thread is' : `${busy.length} threads are`} still running:\n` +
+        busy.map((title) => `  - ${title}`).join('\n') +
+        '\nRun `t3mini restart` when they finish, or `t3mini update --force` to restart now.',
+    )
+  // The new binary does the restart.
+  execFileSync(target, ['restart', '--port', String(port)], { stdio: 'inherit' })
+}
+// Threads an agent is working on right now (an update's restart would stop them).
+async function busyThreads() {
+  try {
+    const response = await fetch(`${url}/api/bootstrap`, { signal: AbortSignal.timeout(3000) })
+    const bootstrap = (await response.json()) as { threads: { title: string; status: string }[] }
+    return bootstrap.threads
+      .filter((thread) => ['starting', 'working', 'waiting'].includes(thread.status))
+      .map((thread) => thread.title)
+  } catch {
+    return []
+  }
 }
 
 // Lets another computer add this one as a machine (docs/machines.md): turns on this t3 mini's
@@ -245,8 +318,9 @@ else {
   t3mini status             running? address, version, data folder, log
   t3mini open               open it in the browser
   t3mini logs [--lines N]   the end of its log
-  t3mini update [--force]   rebuild and reinstall from the repo it came from; restarts it
-                            unless a thread is running (--force: restart anyway)
+  t3mini update [--force]   update: rebuild from the repo it came from, or download the newest
+                            release (--version vX.Y.Z, --release); restarts it unless a thread
+                            is running (--force: restart anyway)
   t3mini import <folder>    copy another t3 mini data folder in (only into an empty one)
   t3mini pair [--lan]       a one-time link for adding this machine from another computer
                             (Settings → Machines); Tailscale by default, --lan: local network

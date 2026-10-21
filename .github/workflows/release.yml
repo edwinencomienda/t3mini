@@ -1,0 +1,45 @@
+# Pushing a version tag (v0.1.0, matching package.json) builds the t3mini binaries for macOS
+# (Apple Silicon, Intel) and Linux (x64, arm64) and publishes them, with SHA256SUMS, as a GitHub
+# release. install.sh and `t3mini update` download from these. See docs/t3mini.md → Releases.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Only what publishing a release needs; actions are pinned to exact commits.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macOS, so the Mac binaries get the local code signature Apple Silicon requires; the Linux
+    # ones cross-compile from here.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.3
+      - name: Check the tag matches package.json
+        run: |
+          version=$(bun -e 'console.log(require("./package.json").version)')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match package.json version $version." >&2
+            exit 1
+          fi
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run compile --all
+      - name: Checksums
+        working-directory: dist/bin
+        run: shasum -a 256 t3mini-* > SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/bin/t3mini-* dist/bin/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

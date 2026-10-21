@@ -13,6 +13,17 @@ bun run dev
 
 ### Install (`t3mini`, the production copy)
 
+On any Mac or Linux machine (a VPS, another computer), install the latest release with one line, no repo or Node needed:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/edwinencomienda/t3mini/main/install.sh | sh
+t3mini start
+```
+
+It picks the binary for the machine (macOS or Linux, arm64 or x64), checks it against the release's checksums, and installs it to `~/.local/bin` (`| sh -s -- v0.1.0` for a specific version). On such a machine, `t3mini update` downloads the newest release. Claude Code and/or Codex still need to be installed and signed in there.
+
+From the repo (your own build, and the two-copy setup below):
+
 t3 mini can run as two separate copies, so you can work in a stable one (including on t3 mini itself) while changing the other:
 
 |                    | Production: `t3mini`                      | Dev: `bun run dev`                      |

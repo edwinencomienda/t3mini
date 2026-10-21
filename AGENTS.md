@@ -8,6 +8,7 @@ A small local web app for running Codex and Claude Code threads on project folde
 bun run dev        # Vite dev server on http://127.0.0.1:4016 (data in .data)
 bun run compile    # the t3mini binary in dist/bin (--all: Linux and Intel Mac too)
 bun run install-cli  # compile + install to ~/.local/bin/t3mini (production: :4011, ~/.t3-mini/data)
+# Releases: bump package.json version, commit, `git tag vX.Y.Z && git push origin vX.Y.Z` (.github/workflows/release.yml builds and publishes; install.sh installs from it)
 bun run test       # vitest (no paid provider calls; providers use fixtures/mocks)
 bun run typecheck  # tsc --noEmit
 bun run build
