@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -38,6 +39,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Server,
   Settings,
   Settings2,
   MonitorSmartphone,
@@ -111,6 +113,23 @@ import {
   stepTitle,
 } from './WorkSteps'
 import { linkify } from '../linkify'
+import { Segmented } from './ui'
+import {
+  ApiBase,
+  apiBaseFor,
+  useApiBase,
+  hubProject,
+  hubSummary,
+  hubThread,
+  isRemote,
+  machinePath,
+  parseRemote,
+  threadApi,
+  type HubMachine,
+} from '../hub'
+import type { MachineSummary } from '../server/machines'
+// A machine's part of the sidebar (the hub, src/hub.ts).
+type HubState = { threads: ThreadSummary[]; projects: ProjectSummary[] }
 import { buildTurns, finishLabel, foldLabel, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -346,6 +365,8 @@ const MessageView = memo(
     blocks?: Block[]
     leading?: Block[]
   }) {
+    // Where this thread's uploads live: here, or on its machine (the hub).
+    const base = useApiBase()
     // A helper thread's report to this (lead) thread: a card with a link to the helper.
     if (message.report)
       return (
@@ -362,18 +383,18 @@ const MessageView = memo(
                 {message.attachments.map((item) => (
                   <a
                     key={item.id}
-                    href={`/api/uploads/${encodeURIComponent(item.id)}`}
+                    href={`${base}/uploads/${encodeURIComponent(item.id)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     title={item.name}
                     onClick={previewOnClick({
-                      src: `/api/uploads/${encodeURIComponent(item.id)}`,
+                      src: `${base}/uploads/${encodeURIComponent(item.id)}`,
                       alt: item.name,
                       caption: item.name,
                     })}
                   >
                     <img
-                      src={`/api/uploads/${encodeURIComponent(item.id)}`}
+                      src={`${base}/uploads/${encodeURIComponent(item.id)}`}
                       alt={item.name}
                       loading="lazy"
                       decoding="async"
@@ -456,7 +477,17 @@ const groupByKey = 't3-mini:sidebar-group'
 // Only the sections you folded or opened yourself; v2 dropped the old defaults (Older folded).
 const projectFilterKey = 't3-mini:project-filter'
 const dateFoldedKey = 't3-mini:date-sections-folded-v2'
-const folderName = (cwd: string) => cwd.split('/').filter(Boolean).at(-1) || '/'
+// The folder's name (a machine's folder too: its hub id carries the machine, see src/hub.ts).
+const folderName = (cwd: string) => machinePath(cwd).split('/').filter(Boolean).at(-1) || '/'
+// The machine a project or thread lives on (the hub), next to its name.
+function MachineTag({ name }: { name: string }) {
+  return (
+    <span className="machine-tag" title={`On ${name}`}>
+      <Server size={10} aria-hidden />
+      {name}
+    </span>
+  )
+}
 // A project's name: the one you gave it in the sidebar, else its folder name.
 const projectLabel = (projects: ProjectSummary[], path: string) =>
   projects.find((project) => project.path === path)?.name || folderName(path)
@@ -608,7 +639,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const selectedId = useRef(activeId)
   selectedId.current = activeId
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
-  const [threads, setThreads] = useState<ThreadSummary[]>([])
+  // This computer's threads (its own live stream).
+  const [localThreads, setThreads] = useState<ThreadSummary[]>([])
+  // The hub (src/hub.ts): each machine's threads and projects, with hub ids, by machine id.
+  const [hub, setHub] = useState<Record<string, HubState>>({})
+  // The sidebar, ⌘K, and everything else see this computer's threads and every machine's.
+  // Merged in the server's order, newest message first, so a machine's thread sits where its
+  // time puts it, not after all of this computer's.
+  const threads = useMemo(() => {
+    const remote = Object.values(hub).flatMap((state) => state.threads)
+    return remote.length
+      ? [...localThreads, ...remote].sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+      : localThreads
+  }, [localThreads, hub])
+  // Online machines this sidebar shows (Settings → Machines), and a lookup for their names.
+  const [machines, setMachines] = useState<HubMachine[]>([])
+  const machinesRef = useRef(machines)
+  machinesRef.current = machines
+  const hubMachine = (id: string): HubMachine =>
+    machinesRef.current.find((machine) => machine.id === id) ?? { id, name: 'Machine' }
+  // A thread a call returned, with its hub id when it's a machine's (as the sidebar shows it).
+  const asShown = (shownId: string, value: Thread) => {
+    const remote = parseRemote(shownId)
+    return remote ? hubThread(hubMachine(remote.machine), value) : value
+  }
   const [thread, setThread] = useState<Thread | null>(null)
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
@@ -884,7 +938,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
     | { kind: 'project'; path: string; position: MenuPosition }
     | null
   >(null)
-  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [localProjects, setProjects] = useState<ProjectSummary[]>([])
+  // Also in the server's order (latest activity first).
+  const projects = useMemo(() => {
+    const remote = Object.values(hub).flatMap((state) => state.projects)
+    return remote.length
+      ? [...localProjects, ...remote].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+      : localProjects
+  }, [localProjects, hub])
   const projectName = (path: string) => projectLabel(projects, path)
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // Threads whose agent has a browser page open (browser_* tools).
@@ -950,11 +1011,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setError(notice.current ?? '')
     notice.current = undefined
     const controller = new AbortController()
+    // A machine's thread (the hub): its details come from that machine's stream, not this one.
+    const remoteActive = parseRemote(activeId)
     // Load the thread directly too: a first visit shows up without waiting for the stream, and
     // a deleted thread gets a clear error.
     if (activeId)
-      api<Thread>(`threads/${activeId}`, 'GET', undefined, controller.signal)
-        .then((loaded) => {
+      api<Thread>(threadApi(activeId), 'GET', undefined, controller.signal)
+        .then((fetched) => {
+          // A machine's thread gets its hub id (src/hub.ts).
+          const loaded = remoteActive
+            ? hubThread(hubMachine(remoteActive.machine), fetched)
+            : fetched
           threadCache.current.set(loaded.id, loaded)
           setThread((current) => (current?.id === loaded.id ? current : loaded))
         })
@@ -987,7 +1054,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const connect = () => {
       latest = { projects: [] }
       events = new EventSource(
-        `/api/events${activeId ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
+        `/api/events${activeId && !remoteActive ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
       )
       events.onopen = () => {
         attempts = 0
@@ -1030,6 +1097,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
           statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
           setThreads(data.threads)
         }
+        // A machine's open thread is followed by that machine's stream (the hub effect).
+        if (remoteActive) {
+          if (data.persistenceError) setError(data.persistenceError)
+          return
+        }
         if (data.thread !== undefined) latest.thread = data.thread
         if (
           activeId &&
@@ -1064,6 +1136,111 @@ export function Workspace({ threadId }: { threadId?: string }) {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [activeId])
+  // The hub: the machines added under Settings → Machines, checked now and every minute. Only on
+  // the computer itself (a paired phone can't manage machines). Offline ones drop out of the
+  // sidebar until they answer again.
+  useEffect(() => {
+    if (!bootstrap || bootstrap.remote) return
+    let cancelled = false
+    const load = () =>
+      api<MachineSummary[]>('machines')
+        .then((list) => {
+          if (cancelled) return
+          const online = list
+            .filter((machine) => machine.status === 'online')
+            .map((machine) => ({ id: machine.id, name: machine.name }))
+          setMachines((current) =>
+            JSON.stringify(current) === JSON.stringify(online) ? current : online,
+          )
+        })
+        .catch(() => {})
+    void load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [bootstrap])
+  // One live stream per machine, through this server (/api/m/<machine>/events), merged into the
+  // sidebar. The machine whose thread is open also streams that thread's details.
+  const remoteActiveId = parseRemote(activeId)
+  const activeMachine = remoteActiveId?.machine
+  const activeOnMachine = remoteActiveId?.id
+  useEffect(() => {
+    // Forget machines that were removed or went offline.
+    setHub((current) => {
+      const kept = Object.fromEntries(
+        Object.entries(current).filter(([id]) => machines.some((machine) => machine.id === id)),
+      )
+      return Object.keys(kept).length === Object.keys(current).length ? current : kept
+    })
+    const stops = machines.map((machine) => {
+      const followed = machine.id === activeMachine ? activeOnMachine : undefined
+      const hubStatuses = new Map<string, Status>()
+      let source: EventSource | undefined
+      let retry: ReturnType<typeof setTimeout> | undefined
+      let attempts = 0
+      let stopped = false
+      const connect = () => {
+        source = new EventSource(
+          `/api/m/${encodeURIComponent(machine.id)}/events${followed ? `?thread=${encodeURIComponent(followed)}` : ''}`,
+        )
+        source.onopen = () => {
+          attempts = 0
+        }
+        source.onerror = () => {
+          if (source?.readyState !== EventSource.CLOSED) return
+          source.close()
+          if (!stopped) retry = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 30_000))
+        }
+        source.onmessage = (event) => {
+          const data = JSON.parse(event.data) as {
+            threads?: ThreadSummary[]
+            projects?: ProjectSummary[]
+            thread?: Thread | null
+          }
+          const threadsHere = data.threads?.map((item) => hubSummary(machine, item))
+          const projectsHere = data.projects?.map((item) => hubProject(machine, item))
+          if (threadsHere) {
+            announce(threadEvents(hubStatuses, threadsHere), projectsHere ?? [])
+            hubStatuses.clear()
+            for (const item of threadsHere) hubStatuses.set(item.id, item.status)
+          }
+          if (threadsHere || projectsHere)
+            setHub((current) => {
+              const previous = current[machine.id] ?? { threads: [], projects: [] }
+              return {
+                ...current,
+                [machine.id]: {
+                  threads: threadsHere ?? previous.threads,
+                  projects: projectsHere ?? previous.projects,
+                },
+              }
+            })
+          if (followed && data.thread !== undefined) {
+            if (data.thread) {
+              const loaded = hubThread(machine, data.thread)
+              threadCache.current.set(loaded.id, loaded)
+              setThread(loaded)
+            } else if (threadsHere && !threadsHere.some((item) => item.id === activeId)) {
+              // Deleted on the machine (or from another window): go home, like a local thread.
+              threadCache.current.delete(activeId ?? '')
+              notice.current = 'That thread was deleted.'
+              void navigate({ to: '/', replace: true })
+            }
+          }
+        }
+      }
+      connect()
+      return () => {
+        stopped = true
+        clearTimeout(retry)
+        source?.close()
+      }
+    })
+    return () => stops.forEach((stop) => stop())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machines, activeMachine, activeOnMachine])
   // The thread's git branch. Refreshed when the thread opens, after each turn (the agent may
   // switch branches), and when you come back to the window.
   const turnActive = thread ? isActive(thread.status) : false
@@ -1076,7 +1253,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (!activeId || !gitFolder) return
     const controller = new AbortController()
     const load = () =>
-      api<GitInfo>(`threads/${activeId}/git`, 'GET', undefined, controller.signal)
+      api<GitInfo>(threadApi(activeId, 'git'), 'GET', undefined, controller.signal)
         .then((info) => {
           // Keep the last known pull request on screen while it's looked up again.
           const known = gitCache.current.get(gitFolder)
@@ -1089,7 +1266,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           // The pull request is a network lookup, so it follows the (instant) branch.
           if (!info.branch || info.detached || !info.url) return
           return api<{ pullRequest: PullRequest | null }>(
-            `threads/${activeId}/pull-request`,
+            threadApi(activeId, 'pull-request'),
             'GET',
             undefined,
             controller.signal,
@@ -1187,7 +1364,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   function markRead(id: string) {
     if (!unreadRef.current.has(id)) return
     setSeen((current) => new Set(current).add(id))
-    void api(`threads/${id}/read`, 'POST', {}).catch(() => {
+    void api(threadApi(id, 'read'), 'POST', {}).catch(() => {
       // Not saved: show it as unread again.
       setSeen((current) => {
         const next = new Set(current)
@@ -1478,7 +1655,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       try {
         const prepared = await prepareImage(file)
         if (!prepared) throw new Error(`${file.name} couldn't be read as an image.`)
-        const uploaded = await uploadFile(prepared, 'image')
+        const uploaded = await uploadFile(prepared, 'image', apiBaseFor(threadId))
         if (uploaded.kind === 'image') update(item.key, { status: 'ready', id: uploaded.id })
       } catch (error) {
         URL.revokeObjectURL(item.previewUrl)
@@ -1495,7 +1672,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         continue
       }
       try {
-        const uploaded = await uploadFile(file, 'file')
+        const uploaded = await uploadFile(file, 'file', apiBaseFor(threadId))
         if (uploaded.kind === 'file') inserted.push(uploaded.path)
       } catch (error) {
         setError((error as Error).message)
@@ -1542,7 +1719,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       }))
     setPending((current) => ({ ...current, [threadId]: [...(current[threadId] || []), item] }))
     try {
-      const uploaded = await uploadFile(file, 'file')
+      const uploaded = await uploadFile(file, 'file', apiBaseFor(threadId))
       if (uploaded.kind === 'file') update({ status: 'ready', path: uploaded.path })
     } catch (error) {
       update(null)
@@ -1662,7 +1839,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     try {
-      const updated = await api<Thread>(`threads/${activeId}/worktree`, 'POST', { enabled })
+      const updated = asShown(
+        activeId,
+        await api<Thread>(threadApi(activeId, 'worktree'), 'POST', { enabled }),
+      )
       if (selectedId.current === activeId) setThread(updated)
     } catch (error) {
       setError((error as Error).message)
@@ -1675,10 +1855,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     try {
-      const updated = await api<Thread>(`threads/${activeId}/settings`, 'POST', {
-        ...settings,
-        provider,
-      })
+      const updated = asShown(
+        activeId,
+        await api<Thread>(threadApi(activeId, 'settings'), 'POST', { ...settings, provider }),
+      )
       rememberChoice(updated.provider, settings)
       if (selectedId.current === activeId) setThread(updated)
     } catch (error) {
@@ -1696,15 +1876,29 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     try {
-      const created = await api<Thread>('threads', 'POST', {
-        provider,
-        ...(cwd === null ? { noProject: true } : { cwd }),
-        ...settingsFor(provider, preferences),
-      })
-      setThreads((current) => [
-        { ...created, lastMessageAt: created.createdAt },
-        ...current.filter((item) => item.id !== created.id),
-      ])
+      // A machine's project (the hub): the thread is created there, in its folder.
+      const remote = parseRemote(cwd)
+      const created = remote
+        ? hubThread(
+            hubMachine(remote.machine),
+            await api<Thread>(`m/${encodeURIComponent(remote.machine)}/threads`, 'POST', {
+              provider,
+              cwd: remote.id,
+              ...settingsFor(provider, preferences),
+            }),
+          )
+        : await api<Thread>('threads', 'POST', {
+            provider,
+            ...(cwd === null ? { noProject: true } : { cwd }),
+            ...settingsFor(provider, preferences),
+          })
+      // A machine's thread joins the sidebar from its machine's stream a moment later.
+      if (remote) threadCache.current.set(created.id, created)
+      else
+        setThreads((current) => [
+          { ...created, lastMessageAt: created.createdAt },
+          ...current.filter((item) => item.id !== created.id),
+        ])
       select(created.id)
       revealThread(created.id)
     } catch (error) {
@@ -1741,7 +1935,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       [thread.id]: (message?.attachments ?? []).map((item) => ({
         key: `recalled:${item.id}`,
         name: item.name,
-        previewUrl: `/api/uploads/${encodeURIComponent(item.id)}`,
+        previewUrl: `${apiBaseFor(thread.id)}/uploads/${encodeURIComponent(item.id)}`,
         status: 'ready' as const,
         id: item.id,
       })),
@@ -1778,7 +1972,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setError('')
     stickToBottom.current = true
     try {
-      await api(`threads/${activeId}/${replacing ? 'edit' : 'send'}`, 'POST', {
+      await api(threadApi(activeId, replacing ? 'edit' : 'send'), 'POST', {
         ...(replacing ? { messageId: replacing } : {}),
         text: withAttachedFiles(text, attached),
         attachments: attached
@@ -1832,7 +2026,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     try {
-      await api(`threads/${activeId}/${path}`, 'POST', body)
+      if (!activeId) return false
+      await api(threadApi(activeId, path), 'POST', body)
       return true
     } catch (error) {
       setError((error as Error).message)
@@ -1873,7 +2068,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     const next = nextAfterDelete([target.id])
     try {
-      keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
+      keptWorktrees(await api<DeleteResult>(threadApi(target.id), 'DELETE', {}))
       forget(target.id, next)
     } catch (error) {
       setError((error as Error).message)
@@ -1947,7 +2142,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const next = nextAfterDelete(deletable.map((item) => item.id))
     for (const target of deletable)
       try {
-        keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
+        keptWorktrees(await api<DeleteResult>(threadApi(target.id), 'DELETE', {}))
         forget(target.id, next)
       } catch {
         failed++
@@ -2039,7 +2234,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setError('')
     setRetitling((current) => new Set(current).add(id))
     try {
-      await api(`threads/${id}/title`, 'POST', {})
+      await api(threadApi(id, 'title'), 'POST', {})
     } catch (error) {
       setError((error as Error).message)
     } finally {
@@ -2064,7 +2259,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       list.map((item) => (item.id === id ? { ...item, title: title.trim() } : item)),
     )
     try {
-      await api(`threads/${id}/rename`, 'POST', { title })
+      await api(threadApi(id, 'rename'), 'POST', { title })
     } catch (error) {
       if (current)
         setThreads((list) =>
@@ -2237,7 +2432,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
       ? finishLabel(lastTurn, lastTurn.endedAt === thread.completedAt ? thread.status : undefined)
       : undefined
   // The preview steps through this thread's images (← / →).
-  useEffect(() => setPreviewGallery(thread ? threadImages(thread.messages) : []), [thread])
+  useEffect(
+    () => setPreviewGallery(thread ? threadImages(thread.messages, apiBaseFor(thread.id)) : []),
+    [thread],
+  )
   shownThread.current = thread?.id
   // The drawn part: from the turn you'd scrolled back to, but at least the latest few.
   const place = thread ? places.current.get(thread.id) : undefined
@@ -2435,6 +2633,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <Folder size={14} />
                 )}
                 <span>{projectName(item.cwd)}</span>
+                {item.machine ? <MachineTag name={item.machine} /> : null}
               </span>
               <span className="thread-title">{item.title}</span>
             </span>
@@ -2464,1280 +2663,1314 @@ export function Workspace({ threadId }: { threadId?: string }) {
       </div>
     )
   return (
-    <div className="workspace">
-      {confirmDialog}
-      {/* Working background music (off unless turned on in Settings). */}
-      <BackgroundMusic
-        working={threads.some((item) => item.status === 'starting' || item.status === 'working')}
-        onPlayingChange={setMusicPlaying}
-      />
-      {sidebarOpen ? (
-        <button
-          className="sidebar-scrim"
-          aria-label="Close sidebar"
-          onClick={() => setSidebarOpen(false)}
+    // Images, media, and pages in the open thread load from where it lives (the hub).
+    <ApiBase.Provider value={apiBaseFor(activeId)}>
+      <div className="workspace">
+        {confirmDialog}
+        {/* Working background music (off unless turned on in Settings). */}
+        <BackgroundMusic
+          working={threads.some((item) => item.status === 'starting' || item.status === 'working')}
+          onPlayingChange={setMusicPlaying}
         />
-      ) : null}
-      <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
-        <div className="sidebar-header">
-          <Link className="brand" to="/" aria-label="t3 mini home">
-            <span className="brand-mark">t3</span>
-            <span>mini</span>
-          </Link>
-          <div className="sidebar-header-actions">
-            <button
-              className="icon-button"
-              onClick={() => setPaletteOpen(true)}
-              disabled={!bootstrap}
-              aria-label="Search"
-              title={`Search (${isMac ? '⌘K' : 'Ctrl+K'})`}
-            >
-              <Search size={15} />
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => openNewThread()}
-              disabled={!bootstrap}
-              aria-label="New thread"
-              title={`New thread (${isMac ? '⇧⌘O' : 'Ctrl+Shift+O'})`}
-            >
-              <SquarePen size={15} />
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setAddProject(true)}
-              disabled={!bootstrap}
-              aria-label="Add project"
-              title="Add project"
-            >
-              <FolderPlus size={15} />
-            </button>
-            <button
-              className="icon-button"
-              onClick={toggleSidebar}
-              aria-label="Hide sidebar"
-              title={`Hide sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
-            >
-              <PanelLeftClose size={15} />
-            </button>
-          </div>
-        </div>
-        <label className="search">
-          <Search size={14} />
-          <input
-            aria-label="Search threads and projects"
-            placeholder="Search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+        {sidebarOpen ? (
+          <button
+            className="sidebar-scrim"
+            aria-label="Close sidebar"
+            onClick={() => setSidebarOpen(false)}
           />
-        </label>
-        {groups.length ? (
-          <div className="sidebar-section">
-            {/* Which project's threads to show: all, or one. */}
-            <span className="sidebar-section-label">
-              <ProjectFilter
-                value={filterPath}
-                paths={projectPaths}
-                projects={projects}
-                projectName={projectName}
-                projectIcons={projectIcons}
-                onChange={setProjectFilter}
-              />
-            </span>
-            {/* View options (like Claude Desktop): group threads by project, by date, or not at
-                all. */}
-            <SettingsMenu
-              label="Sidebar view"
-              text={groupLabels[groupBy].summary}
-              title="View options"
-              triggerClassName="icon-button sidebar-view"
-              trigger={<Settings2 size={13} />}
-              placement="down"
-              rows={[
-                {
-                  key: 'group',
-                  label: 'Group by',
-                  text: groupLabels[groupBy].label,
-                  value: groupBy,
-                  options: (['project', 'date', 'none'] as const).map((value) => ({
-                    value,
-                    label: groupLabels[value].label,
-                  })),
-                  onSelect: (value) =>
-                    changeGroupBy(value === 'none' || value === 'date' ? value : 'project'),
-                  closeOnSelect: true,
-                },
-              ]}
-            />
-            {groupBy !== 'project'
-              ? null
-              : (() => {
-                  const anyExpanded = groups.some((group) => !collapsed[group.path])
-                  return (
-                    <button
-                      className="icon-button"
-                      aria-label={anyExpanded ? 'Collapse all projects' : 'Expand all projects'}
-                      title={anyExpanded ? 'Collapse all' : 'Expand all'}
-                      onClick={() =>
-                        setCollapsed(
-                          anyExpanded
-                            ? Object.fromEntries(projectPaths.map((path) => [path, true]))
-                            : {},
-                        )
-                      }
-                    >
-                      {anyExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
-                    </button>
-                  )
-                })()}
-          </div>
         ) : null}
-        <nav className="thread-list" aria-label="Threads" ref={threadList}>
-          {groupBy === 'none' && groups.length ? (
-            // One list, newest message first, each thread with its project's name.
-            <section className="project recents">
-              {visibleThreads.map((item) => threadRow(item, !filterPath))}
-            </section>
+        <aside className={`sidebar ${sidebarOpen ? 'is-open' : ''}`}>
+          <div className="sidebar-header">
+            <Link className="brand" to="/" aria-label="t3 mini home">
+              <span className="brand-mark">t3</span>
+              <span>mini</span>
+            </Link>
+            <div className="sidebar-header-actions">
+              <button
+                className="icon-button"
+                onClick={() => setPaletteOpen(true)}
+                disabled={!bootstrap}
+                aria-label="Search"
+                title={`Search (${isMac ? '⌘K' : 'Ctrl+K'})`}
+              >
+                <Search size={15} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={() => openNewThread()}
+                disabled={!bootstrap}
+                aria-label="New thread"
+                title={`New thread (${isMac ? '⇧⌘O' : 'Ctrl+Shift+O'})`}
+              >
+                <SquarePen size={15} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={() => setAddProject(true)}
+                disabled={!bootstrap}
+                aria-label="Add project"
+                title="Add project"
+              >
+                <FolderPlus size={15} />
+              </button>
+              <button
+                className="icon-button"
+                onClick={toggleSidebar}
+                aria-label="Hide sidebar"
+                title={`Hide sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
+              >
+                <PanelLeftClose size={15} />
+              </button>
+            </div>
+          </div>
+          <label className="search">
+            <Search size={14} />
+            <input
+              aria-label="Search threads and projects"
+              placeholder="Search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          {groups.length ? (
+            <div className="sidebar-section">
+              {/* Which project's threads to show: all, or one. */}
+              <span className="sidebar-section-label">
+                <ProjectFilter
+                  value={filterPath}
+                  paths={projectPaths}
+                  projects={projects}
+                  projectName={projectName}
+                  projectIcons={projectIcons}
+                  onChange={setProjectFilter}
+                />
+              </span>
+              {/* View options (like Claude Desktop): group threads by project, by date, or not at
+                all. */}
+              <SettingsMenu
+                label="Sidebar view"
+                text={groupLabels[groupBy].summary}
+                title="View options"
+                triggerClassName="icon-button sidebar-view"
+                trigger={<Settings2 size={13} />}
+                placement="down"
+                rows={[
+                  {
+                    key: 'group',
+                    label: 'Group by',
+                    text: groupLabels[groupBy].label,
+                    value: groupBy,
+                    options: (['project', 'date', 'none'] as const).map((value) => ({
+                      value,
+                      label: groupLabels[value].label,
+                    })),
+                    onSelect: (value) =>
+                      changeGroupBy(value === 'none' || value === 'date' ? value : 'project'),
+                    closeOnSelect: true,
+                  },
+                ]}
+              />
+              {groupBy !== 'project'
+                ? null
+                : (() => {
+                    const anyExpanded = groups.some((group) => !collapsed[group.path])
+                    return (
+                      <button
+                        className="icon-button"
+                        aria-label={anyExpanded ? 'Collapse all projects' : 'Expand all projects'}
+                        title={anyExpanded ? 'Collapse all' : 'Expand all'}
+                        onClick={() =>
+                          setCollapsed(
+                            anyExpanded
+                              ? Object.fromEntries(projectPaths.map((path) => [path, true]))
+                              : {},
+                          )
+                        }
+                      >
+                        {anyExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                      </button>
+                    )
+                  })()}
+            </div>
           ) : null}
-          {groupBy === 'date' && groups.length
-            ? // The same list, split by when you last wrote in each thread (its own order, so
-              // each section stays in one piece). Empty sections are left out.
-              // Each section folds from its heading (the chevron shows on hover); search opens all.
-              dateSections(visibleThreads, now).map((section, index) => {
-                const folded = isDateFolded(section.label, index)
-                const open = !folded || Boolean(query)
-                return (
-                  <section
-                    className="project recents"
-                    key={section.label}
-                    aria-label={section.label}
-                  >
-                    <button
-                      type="button"
-                      className={`date-heading ${open ? 'open' : ''}`}
-                      aria-expanded={open}
-                      onClick={() => toggleDateSection(section.label, folded)}
+          <nav className="thread-list" aria-label="Threads" ref={threadList}>
+            {groupBy === 'none' && groups.length ? (
+              // One list, newest message first, each thread with its project's name.
+              <section className="project recents">
+                {visibleThreads.map((item) => threadRow(item, !filterPath))}
+              </section>
+            ) : null}
+            {groupBy === 'date' && groups.length
+              ? // The same list, split by when you last wrote in each thread (its own order, so
+                // each section stays in one piece). Empty sections are left out.
+                // Each section folds from its heading (the chevron shows on hover); search opens all.
+                dateSections(visibleThreads, now).map((section, index) => {
+                  const folded = isDateFolded(section.label, index)
+                  const open = !folded || Boolean(query)
+                  return (
+                    <section
+                      className="project recents"
+                      key={section.label}
+                      aria-label={section.label}
                     >
-                      <span>{section.label}</span>
+                      <button
+                        type="button"
+                        className={`date-heading ${open ? 'open' : ''}`}
+                        aria-expanded={open}
+                        onClick={() => toggleDateSection(section.label, folded)}
+                      >
+                        <span>{section.label}</span>
+                        <ChevronRight size={12} className="fold-chevron" aria-hidden />
+                      </button>
+                      {open ? section.items.map((item) => threadRow(item, !filterPath)) : null}
+                    </section>
+                  )
+                })
+              : null}
+            {(groupBy === 'project' ? groups : []).map(({ path: cwd, items }) => (
+              <section className="project" key={cwd}>
+                <div
+                  className="project-header"
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    setMenu({ kind: 'project', path: cwd, position: menuPosition(event) })
+                  }}
+                >
+                  {renamingProject?.path === cwd ? (
+                    <div className="project-toggle renaming">
+                      {projectIcons ? (
+                        <ProjectAvatar
+                          path={cwd}
+                          name={projectName(cwd)}
+                          project={projects.find((project) => project.path === cwd)}
+                        />
+                      ) : collapsed[cwd] ? (
+                        <Folder size={14} />
+                      ) : (
+                        <FolderOpen size={14} />
+                      )}
+                      <input
+                        className="thread-rename"
+                        aria-label="Project name"
+                        autoFocus
+                        maxLength={80}
+                        placeholder={folderName(cwd)}
+                        title="Leave empty to use the folder name"
+                        value={renamingProject.name}
+                        onFocus={(event) => event.target.select()}
+                        onChange={(event) =>
+                          setRenamingProject({ path: cwd, name: event.target.value })
+                        }
+                        onBlur={() => void renameProject()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            void renameProject()
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault()
+                            setRenamingProject(null)
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      className={`project-toggle ${collapsed[cwd] ? '' : 'open'}`}
+                      // Folds and unfolds; renaming is in the right-click menu.
+                      onClick={() => setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })}
+                      aria-expanded={!collapsed[cwd]}
+                      title={machinePath(cwd)}
+                    >
+                      {projectIcons ? (
+                        <ProjectAvatar
+                          path={cwd}
+                          name={projectName(cwd)}
+                          project={projects.find((project) => project.path === cwd)}
+                        />
+                      ) : collapsed[cwd] ? (
+                        <Folder size={14} />
+                      ) : (
+                        <FolderOpen size={14} />
+                      )}
+                      <span>{projectName(cwd)}</span>
+                      {isRemote(cwd) ? (
+                        <MachineTag name={hubMachine(parseRemote(cwd)!.machine).name} />
+                      ) : null}
                       <ChevronRight size={12} className="fold-chevron" aria-hidden />
                     </button>
-                    {open ? section.items.map((item) => threadRow(item, !filterPath)) : null}
-                  </section>
-                )
-              })
-            : null}
-          {(groupBy === 'project' ? groups : []).map(({ path: cwd, items }) => (
-            <section className="project" key={cwd}>
-              <div
-                className="project-header"
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  setMenu({ kind: 'project', path: cwd, position: menuPosition(event) })
-                }}
-              >
-                {renamingProject?.path === cwd ? (
-                  <div className="project-toggle renaming">
-                    {projectIcons ? (
-                      <ProjectAvatar
-                        path={cwd}
-                        name={projectName(cwd)}
-                        project={projects.find((project) => project.path === cwd)}
-                      />
-                    ) : collapsed[cwd] ? (
-                      <Folder size={14} />
-                    ) : (
-                      <FolderOpen size={14} />
-                    )}
-                    <input
-                      className="thread-rename"
-                      aria-label="Project name"
-                      autoFocus
-                      maxLength={80}
-                      placeholder={folderName(cwd)}
-                      title="Leave empty to use the folder name"
-                      value={renamingProject.name}
-                      onFocus={(event) => event.target.select()}
-                      onChange={(event) =>
-                        setRenamingProject({ path: cwd, name: event.target.value })
-                      }
-                      onBlur={() => void renameProject()}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          void renameProject()
-                        } else if (event.key === 'Escape') {
-                          event.preventDefault()
-                          setRenamingProject(null)
-                        }
-                      }}
-                    />
-                  </div>
-                ) : (
+                  )}
                   <button
-                    className={`project-toggle ${collapsed[cwd] ? '' : 'open'}`}
-                    // Folds and unfolds; renaming is in the right-click menu.
-                    onClick={() => setCollapsed({ ...collapsed, [cwd]: !collapsed[cwd] })}
-                    aria-expanded={!collapsed[cwd]}
-                    title={cwd}
+                    className="icon-button project-add"
+                    aria-label={`New thread in ${projectName(cwd)}`}
+                    title={`New thread in ${projectName(cwd)}`}
+                    disabled={busy}
+                    onClick={() => void quickCreate(cwd)}
                   >
-                    {projectIcons ? (
-                      <ProjectAvatar
-                        path={cwd}
-                        name={projectName(cwd)}
-                        project={projects.find((project) => project.path === cwd)}
-                      />
-                    ) : collapsed[cwd] ? (
-                      <Folder size={14} />
-                    ) : (
-                      <FolderOpen size={14} />
-                    )}
-                    <span>{projectName(cwd)}</span>
-                    <ChevronRight size={12} className="fold-chevron" aria-hidden />
+                    <Plus size={15} />
                   </button>
-                )}
-                <button
-                  className="icon-button project-add"
-                  aria-label={`New thread in ${projectName(cwd)}`}
-                  title={`New thread in ${projectName(cwd)}`}
-                  disabled={busy}
-                  onClick={() => void quickCreate(cwd)}
-                >
-                  <Plus size={15} />
-                </button>
+                </div>
+                {!collapsed[cwd] || query ? items.map((item) => threadRow(item)) : null}
+                {!collapsed[cwd] && !items.length && !query ? (
+                  <button
+                    className="thread-row empty-project"
+                    disabled={busy}
+                    onClick={() => openNewThread(cwd)}
+                  >
+                    <Plus size={12} />
+                    Start a thread
+                  </button>
+                ) : null}
+              </section>
+            ))}
+            {!groups.length ? (
+              <div className="empty-sidebar">
+                {search
+                  ? 'Nothing matches your search.'
+                  : bootstrap
+                    ? 'Add a project folder to get started.'
+                    : 'Loading…'}
               </div>
-              {!collapsed[cwd] || query ? items.map((item) => threadRow(item)) : null}
-              {!collapsed[cwd] && !items.length && !query ? (
-                <button
-                  className="thread-row empty-project"
-                  disabled={busy}
-                  onClick={() => openNewThread(cwd)}
-                >
-                  <Plus size={12} />
-                  Start a thread
-                </button>
-              ) : null}
-            </section>
-          ))}
-          {!groups.length ? (
-            <div className="empty-sidebar">
-              {search
-                ? 'Nothing matches your search.'
-                : bootstrap
-                  ? 'Add a project folder to get started.'
-                  : 'Loading…'}
+            ) : null}
+          </nav>
+          {pickedIds.length ? (
+            <div className="selection-bar" role="toolbar" aria-label="Selected threads">
+              <span>{pickedIds.length} selected</span>
+              <button
+                type="button"
+                className="link-button selection-cancel"
+                onClick={() => setPicked(new Set())}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="secondary selection-delete"
+                disabled={busy}
+                onClick={() => void removeMany(pickedIds)}
+              >
+                <Trash2 size={13} />
+                Delete
+              </button>
             </div>
           ) : null}
-        </nav>
-        {pickedIds.length ? (
-          <div className="selection-bar" role="toolbar" aria-label="Selected threads">
-            <span>{pickedIds.length} selected</span>
-            <button
-              type="button"
-              className="link-button selection-cancel"
-              onClick={() => setPicked(new Set())}
+          <ProviderUpdates
+            enabled={Boolean(bootstrap && !bootstrap.remote)}
+            onUpdated={updatedProvider}
+          />
+          <div className="sidebar-footer">
+            <div
+              className="connection"
+              role="status"
+              title={
+                connected ? 'Connected to the local server' : 'Reconnecting to the local server'
+              }
             >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="secondary selection-delete"
-              disabled={busy}
-              onClick={() => void removeMany(pickedIds)}
-            >
-              <Trash2 size={13} />
-              Delete
-            </button>
-          </div>
-        ) : null}
-        <ProviderUpdates
-          enabled={Boolean(bootstrap && !bootstrap.remote)}
-          onUpdated={updatedProvider}
-        />
-        <div className="sidebar-footer">
-          <div
-            className="connection"
-            role="status"
-            title={connected ? 'Connected to the local server' : 'Reconnecting to the local server'}
-          >
-            <span className={`health-dot ${connected ? 'available' : ''}`} />
-            {runningCount ? `${runningCount} running` : connected ? 'Connected' : 'Connecting…'}
-          </div>
-          {missingClis.length ? (
-            <button
-              className="icon-button footer-warning"
-              aria-label={`${missingClis.join(' and ')} CLI not found. Open settings`}
-              title={`${missingClis.join(' and ')} CLI not found`}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <TriangleAlert size={14} />
-            </button>
-          ) : null}
-          <button
-            className="icon-button"
-            aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme(theme)]}`}
-            title={`Theme: ${themeLabels[theme]}`}
-            onClick={() => changeTheme(nextTheme(theme))}
-          >
-            {theme === 'light' ? (
-              <Sun size={14} />
-            ) : theme === 'dark' ? (
-              <Moon size={14} />
-            ) : (
-              <Monitor size={14} />
-            )}
-          </button>
-          {/* A reminder on the Mac while other devices can connect. */}
-          {bootstrap?.phoneAccess && !bootstrap.remote ? (
-            <button
-              className="icon-button phone-on"
-              aria-label="Other devices can connect. Open settings"
-              title="Other devices can connect"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <MonitorSmartphone size={14} />
-            </button>
-          ) : null}
-          <button
-            className="icon-button"
-            aria-label="Settings"
-            title="Settings"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings size={14} />
-          </button>
-        </div>
-        <SidebarResize />
-      </aside>
-      <main className="main">
-        <div className="main-column">
-          <header className="topbar">
-            <button
-              className="icon-button mobile-menu"
-              aria-label="Open threads"
-              onClick={() => setSidebarOpen(true)}
-            >
-              <Menu size={18} />
-            </button>
-            {sidebarHidden ? (
+              <span className={`health-dot ${connected ? 'available' : ''}`} />
+              {runningCount ? `${runningCount} running` : connected ? 'Connected' : 'Connecting…'}
+            </div>
+            {missingClis.length ? (
               <button
-                className="icon-button show-sidebar"
-                aria-label="Show sidebar"
-                title={`Show sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
-                onClick={toggleSidebar}
+                className="icon-button footer-warning"
+                aria-label={`${missingClis.join(' and ')} CLI not found. Open settings`}
+                title={`${missingClis.join(' and ')} CLI not found`}
+                onClick={() => setSettingsOpen(true)}
               >
-                <PanelLeftOpen size={16} />
+                <TriangleAlert size={14} />
               </button>
             ) : null}
-            <div className="topbar-title">
-              {musicPlaying ? (
-                // The open thread's agent (or a working one's) with its radio.
-                <img
-                  className={`music-mascot ${musicAgent}`}
-                  src={`/mascots/${musicAgent}-radio.gif`}
-                  alt=""
-                  width={32}
-                  height={32}
-                  title="Working background music is playing"
-                />
-              ) : null}
-              {thread && retitling.has(thread.id) ? (
-                <LoaderCircle
-                  size={13}
-                  className="status-spinner"
-                  aria-label="Writing a new title"
-                />
-              ) : null}
-              {/* A breadcrumb: the project, then the thread ("[avatar] nighteye / Fix the login").
-                  The project part is hidden on phones, where there's only room for the title. */}
-              {thread ? (
-                <>
-                  <span className="topbar-project" title={thread.cwd}>
-                    {projectIcons ? (
-                      <ProjectAvatar
-                        path={thread.cwd}
-                        name={folder ?? ''}
-                        project={projects.find((project) => project.path === thread.cwd)}
-                      />
-                    ) : (
-                      <FolderOpen size={13} />
-                    )}
-                    <span>{folder}</span>
-                  </span>
-                  <span className="topbar-separator" aria-hidden>
-                    /
-                  </span>
-                  {/* A helper thread: its lead, one step up the breadcrumb. */}
-                  {thread.parentId ? (
-                    <>
-                      <Link
-                        className="topbar-lead"
-                        to="/threads/$threadId"
-                        params={{ threadId: thread.parentId }}
-                        title="The lead thread that started this helper"
-                      >
-                        <Workflow size={13} aria-hidden />
-                        <span>
-                          {threads.find((item) => item.id === thread.parentId)?.title ??
-                            'Lead thread'}
-                        </span>
-                      </Link>
-                      <span className="topbar-separator" aria-hidden>
-                        /
-                      </span>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-              <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
-            </div>
-            <div className="topbar-actions">
-              {thread ? (
-                <>
-                  {bootstrap?.editors?.vscode && !bootstrap.remote ? (
-                    <button
-                      className="icon-button"
-                      aria-label="Open project in VS Code"
-                      title={`Open ${folder} in VS Code`}
-                      onClick={() =>
-                        void api(`threads/${thread.id}/open-editor`, 'POST', {}).catch(
-                          (error: Error) => setError(error.message),
-                        )
-                      }
-                    >
-                      <VSCodeIcon size={15} />
-                    </button>
-                  ) : null}
-                  {git?.branch ? (
-                    <button
-                      className={`icon-button ${diffOpen ? 'active' : ''}`}
-                      aria-label={diffOpen ? 'Hide changes' : 'Show changes'}
-                      aria-pressed={diffOpen}
-                      title={`${diffOpen ? 'Hide' : 'Show'} changes (${isMac ? '⌘D' : 'Ctrl+D'})`}
-                      onClick={() => toggleDiff(!diffOpen)}
-                    >
-                      <FileDiff size={15} />
-                    </button>
-                  ) : null}
-                  <button
-                    className="icon-button"
-                    aria-label="Delete thread"
-                    title="Delete thread"
-                    onClick={() => void remove()}
-                    disabled={active || busy}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </>
-              ) : null}
-            </div>
-            {/* While the agent works: a thin sliding bar along the header's bottom edge, like a
-                terminal's progress bar. Not while it waits on you (an approval or a question). */}
-            {active && thread?.status !== 'waiting' ? (
-              <div className="working-bar" role="progressbar" aria-label="Agent is working" />
-            ) : null}
-          </header>
-          <div className="chat-column">
-            <div
-              className="chat-scroll"
-              ref={scrollArea}
-              onScroll={() => {
-                const element = scrollArea.current
-                // Scroll positions while a thread is still settling aren't the user's choice.
-                if (!element || Date.now() < settleUntil.current) return
-                stickToBottom.current =
-                  element.scrollHeight - element.scrollTop - element.clientHeight < 120
-                savePlace()
-              }}
+            <button
+              className="icon-button"
+              aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme(theme)]}`}
+              title={`Theme: ${themeLabels[theme]}`}
+              onClick={() => changeTheme(nextTheme(theme))}
             >
-              <div className="chat-content" ref={content}>
-                {!thread?.messages.length ? (
-                  <section className="empty-state">
-                    {thread ? (
-                      <>
-                        <ProviderMark provider={thread.provider} size={28} />
-                        <h1>What should we build in {folder}?</h1>
-                        <p>
-                          {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
-                        </p>
-                        <div className="starters">
-                          {starters.map((starter) => (
-                            <button
-                              key={starter.title}
-                              onClick={() => {
-                                setDraft(starter.text)
-                                drafts.current.set(thread.id, starter.text)
-                                composer.current?.focus()
-                              }}
-                            >
-                              {starter.title}
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    ) : activeId ? null : (
-                      <>
-                        <span className="brand-mark large">t3</span>
-                        <h1>Your coding agents, one quiet place.</h1>
-                        <p>Pick a project folder and start a thread with Claude or Codex.</p>
-                        <div className="empty-actions">
-                          <button
-                            className="primary"
-                            disabled={!bootstrap}
-                            onClick={() => openNewThread()}
-                          >
-                            <SquarePen size={15} />
-                            New thread
-                            <kbd>{isMac ? '⇧⌘O' : 'Ctrl+Shift+O'}</kbd>
-                          </button>
-                          <button
-                            className="secondary"
-                            disabled={!bootstrap}
-                            onClick={() => setAddProject(true)}
-                          >
-                            <FolderPlus size={15} />
-                            Add project
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </section>
-                ) : (
-                  <div className="conversation">
-                    {firstDrawn ? (
-                      <OlderTurns
-                        key={firstDrawn}
-                        count={firstDrawn}
-                        root={scrollArea}
-                        onShow={showOlder}
-                      />
-                    ) : null}
-                    {drawnTurns.map((turn) => (
-                      <div className="turn" key={turn.key}>
-                        {turn.user ? <MessageView message={turn.user} /> : null}
-                        {turn.done && turn.work.length ? (
-                          <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>
-                            <button
-                              type="button"
-                              className="turn-fold-toggle"
-                              aria-expanded={openTurns.has(turn.key)}
-                              onClick={() => toggleTurn(turn.key)}
-                            >
-                              <span>
-                                {foldLabel(
-                                  turn,
-                                  turn.endedAt === thread.completedAt ? thread.status : undefined,
-                                )}
-                              </span>
-                              <ChevronRight size={13} className="chevron" />
-                            </button>
-                            {openTurns.has(turn.key) ? workList(turn.work, true) : null}
-                          </div>
-                        ) : !turn.done && turn.work.length ? (
-                          workList(turn.work)
-                        ) : null}
-                        {/* Replies the agent ended a response with before its last one (e.g. a
-                            summary, then a follow-up once background work finished): kept in
-                            view, in order, with what it showed while working above the first. */}
-                        {turn.replies.map((reply, index) => (
-                          <MessageView
-                            key={reply.id}
-                            message={reply}
-                            {...(index === 0 ? { leading: turn.blocks } : {})}
-                          />
-                        ))}
-                        {turn.answer ? (
-                          <MessageView
-                            message={turn.answer}
-                            {...(turn.replies.length ? {} : { leading: turn.blocks })}
-                          />
-                        ) : null}
-                      </div>
-                    ))}
-                    {thread.approvals.map((approval) =>
-                      approval.questions?.length ? (
-                        <QuestionCard
-                          key={approval.id}
-                          approval={{ ...approval, questions: approval.questions }}
-                          disabled={busy || !connected}
-                          onAnswer={(answers) =>
-                            action('approve', { approvalId: approval.id, allow: true, answers })
-                          }
-                          onSkip={() =>
-                            action('approve', { approvalId: approval.id, allow: false })
-                          }
+              {theme === 'light' ? (
+                <Sun size={14} />
+              ) : theme === 'dark' ? (
+                <Moon size={14} />
+              ) : (
+                <Monitor size={14} />
+              )}
+            </button>
+            {/* A reminder on the Mac while other devices can connect. */}
+            {bootstrap?.phoneAccess && !bootstrap.remote ? (
+              <button
+                className="icon-button phone-on"
+                aria-label="Other devices can connect. Open settings"
+                title="Other devices can connect"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <MonitorSmartphone size={14} />
+              </button>
+            ) : null}
+            <button
+              className="icon-button"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings size={14} />
+            </button>
+          </div>
+          <SidebarResize />
+        </aside>
+        <main className="main">
+          <div className="main-column">
+            <header className="topbar">
+              <button
+                className="icon-button mobile-menu"
+                aria-label="Open threads"
+                onClick={() => setSidebarOpen(true)}
+              >
+                <Menu size={18} />
+              </button>
+              {sidebarHidden ? (
+                <button
+                  className="icon-button show-sidebar"
+                  aria-label="Show sidebar"
+                  title={`Show sidebar (${isMac ? '⌘S' : 'Ctrl+S'})`}
+                  onClick={toggleSidebar}
+                >
+                  <PanelLeftOpen size={16} />
+                </button>
+              ) : null}
+              <div className="topbar-title">
+                {musicPlaying ? (
+                  // The open thread's agent (or a working one's) with its radio.
+                  <img
+                    className={`music-mascot ${musicAgent}`}
+                    src={`/mascots/${musicAgent}-radio.gif`}
+                    alt=""
+                    width={32}
+                    height={32}
+                    title="Working background music is playing"
+                  />
+                ) : null}
+                {thread && retitling.has(thread.id) ? (
+                  <LoaderCircle
+                    size={13}
+                    className="status-spinner"
+                    aria-label="Writing a new title"
+                  />
+                ) : null}
+                {/* A breadcrumb: the project, then the thread ("[avatar] nighteye / Fix the login").
+                  The project part is hidden on phones, where there's only room for the title. */}
+                {thread ? (
+                  <>
+                    <span className="topbar-project" title={machinePath(thread.cwd)}>
+                      {projectIcons ? (
+                        <ProjectAvatar
+                          path={thread.cwd}
+                          name={folder ?? ''}
+                          project={projects.find((project) => project.path === thread.cwd)}
                         />
                       ) : (
-                        <section className="approval" key={approval.id}>
-                          <div className="approval-title">
-                            <ShieldAlert size={16} />
-                            <strong>{approval.title}</strong>
+                        <FolderOpen size={13} />
+                      )}
+                      <span>{folder}</span>
+                      {thread.machine ? <MachineTag name={thread.machine} /> : null}
+                    </span>
+                    <span className="topbar-separator" aria-hidden>
+                      /
+                    </span>
+                    {/* A helper thread: its lead, one step up the breadcrumb. */}
+                    {thread.parentId ? (
+                      <>
+                        <Link
+                          className="topbar-lead"
+                          to="/threads/$threadId"
+                          params={{ threadId: thread.parentId }}
+                          title="The lead thread that started this helper"
+                        >
+                          <Workflow size={13} aria-hidden />
+                          <span>
+                            {threads.find((item) => item.id === thread.parentId)?.title ??
+                              'Lead thread'}
+                          </span>
+                        </Link>
+                        <span className="topbar-separator" aria-hidden>
+                          /
+                        </span>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+                <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
+              </div>
+              <div className="topbar-actions">
+                {thread ? (
+                  <>
+                    {/* VS Code is on this computer, so not for a machine's thread. */}
+                    {bootstrap?.editors?.vscode && !bootstrap.remote && !thread.machine ? (
+                      <button
+                        className="icon-button"
+                        aria-label="Open project in VS Code"
+                        title={`Open ${folder} in VS Code`}
+                        onClick={() =>
+                          void api(`threads/${thread.id}/open-editor`, 'POST', {}).catch(
+                            (error: Error) => setError(error.message),
+                          )
+                        }
+                      >
+                        <VSCodeIcon size={15} />
+                      </button>
+                    ) : null}
+                    {git?.branch ? (
+                      <button
+                        className={`icon-button ${diffOpen ? 'active' : ''}`}
+                        aria-label={diffOpen ? 'Hide changes' : 'Show changes'}
+                        aria-pressed={diffOpen}
+                        title={`${diffOpen ? 'Hide' : 'Show'} changes (${isMac ? '⌘D' : 'Ctrl+D'})`}
+                        onClick={() => toggleDiff(!diffOpen)}
+                      >
+                        <FileDiff size={15} />
+                      </button>
+                    ) : null}
+                    <button
+                      className="icon-button"
+                      aria-label="Delete thread"
+                      title="Delete thread"
+                      onClick={() => void remove()}
+                      disabled={active || busy}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </>
+                ) : null}
+              </div>
+              {/* While the agent works: a thin sliding bar along the header's bottom edge, like a
+                terminal's progress bar. Not while it waits on you (an approval or a question). */}
+              {active && thread?.status !== 'waiting' ? (
+                <div className="working-bar" role="progressbar" aria-label="Agent is working" />
+              ) : null}
+            </header>
+            <div className="chat-column">
+              <div
+                className="chat-scroll"
+                ref={scrollArea}
+                onScroll={() => {
+                  const element = scrollArea.current
+                  // Scroll positions while a thread is still settling aren't the user's choice.
+                  if (!element || Date.now() < settleUntil.current) return
+                  stickToBottom.current =
+                    element.scrollHeight - element.scrollTop - element.clientHeight < 120
+                  savePlace()
+                }}
+              >
+                <div className="chat-content" ref={content}>
+                  {!thread?.messages.length ? (
+                    <section className="empty-state">
+                      {thread ? (
+                        <>
+                          <ProviderMark provider={thread.provider} size={28} />
+                          <h1>What should we build in {folder}?</h1>
+                          <p>
+                            {names[thread.provider]} works directly in <code>{thread.cwd}</code>.
+                          </p>
+                          <div className="starters">
+                            {starters.map((starter) => (
+                              <button
+                                key={starter.title}
+                                onClick={() => {
+                                  setDraft(starter.text)
+                                  drafts.current.set(thread.id, starter.text)
+                                  composer.current?.focus()
+                                }}
+                              >
+                                {starter.title}
+                              </button>
+                            ))}
                           </div>
-                          <pre>{approval.detail}</pre>
-                          <div className="approval-actions">
-                            <button
-                              className="secondary"
-                              disabled={busy || !connected}
-                              onClick={() =>
-                                action('approve', { approvalId: approval.id, allow: false })
-                              }
-                            >
-                              Decline
-                            </button>
+                        </>
+                      ) : activeId ? null : (
+                        <>
+                          <span className="brand-mark large">t3</span>
+                          <h1>Your coding agents, one quiet place.</h1>
+                          <p>Pick a project folder and start a thread with Claude or Codex.</p>
+                          <div className="empty-actions">
                             <button
                               className="primary"
-                              disabled={busy || !connected}
-                              onClick={() =>
-                                action('approve', { approvalId: approval.id, allow: true })
-                              }
+                              disabled={!bootstrap}
+                              onClick={() => openNewThread()}
                             >
-                              Allow once
+                              <SquarePen size={15} />
+                              New thread
+                              <kbd>{isMac ? '⇧⌘O' : 'Ctrl+Shift+O'}</kbd>
                             </button>
-                          </div>
-                        </section>
-                      ),
-                    )}
-                    {finished ? (
-                      <div className="thread-end" role="status">
-                        <span>{finished}</span>
-                      </div>
-                    ) : null}
-                    {/* Work Claude left running in the background (e.g. a subagent) keeps the turn
-                        open after its last reply; say so, so it doesn't look stuck. */}
-                    {active && thread.background?.length ? (
-                      <div className="background-tasks" role="status">
-                        <LoaderCircle size={13} className="status-spinner" />
-                        <span>
-                          Still running in the background:{' '}
-                          <strong>
-                            {thread.background.map((task) => task.description).join(', ')}
-                          </strong>
-                        </span>
-                      </div>
-                    ) : null}
-                    {/* What the agent is doing right now, and for how long. */}
-                    {active && !thread.approvals.length ? (
-                      liveStep ? (
-                        <LiveLine
-                          text={stepTitle(liveStep)}
-                          since={liveStep.startedAt}
-                          provider={thread.provider}
-                          mood={liveStep.compact ? 'thinking' : 'working'}
-                          compacting={Boolean(liveStep.compact)}
-                          // A browser step names the site it's on (opening one already does).
-                          {...(liveStep.browser
-                            ? {
-                                site:
-                                  liveStep.label === 'Open page'
-                                    ? ''
-                                    : siteOf(
-                                        browsers.find((item) => item.threadId === thread.id)?.url,
-                                      ),
-                              }
-                            : {})}
-                        />
-                      ) : currentTodo ? (
-                        // Between steps, the checklist's current item in its "-ing" form.
-                        <LiveLine
-                          text={currentTodo.activeText || currentTodo.text}
-                          since={lastTodoAt ?? thread.startedAt}
-                          provider={thread.provider}
-                          mood="working"
-                        />
-                      ) : (
-                        <LiveLine
-                          text={thread.status === 'starting' ? 'Starting…' : 'Thinking…'}
-                          since={thread.startedAt}
-                          provider={thread.provider}
-                          mood="thinking"
-                        />
-                      )
-                    ) : thread.status === 'completed' && thread.completedAt ? (
-                      <Celebration provider={thread.provider} at={thread.completedAt} />
-                    ) : null}
-                    {thread.error ? (
-                      <div className="error-banner" role="alert">
-                        {thread.error}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            </div>
-            {thread || !activeId ? (
-              <footer className="composer-area">
-                <ScrollToBottom scrollArea={scrollArea} stickToBottom={stickToBottom} />
-                {error ? (
-                  <div className="error-banner" role="alert">
-                    <span>{error}</span>
-                    <button
-                      className="icon-button"
-                      aria-label="Dismiss error"
-                      onClick={() => setError('')}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ) : null}
-                {thread ? (
-                  <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
-                    {editingMessage ? (
-                      <div className="composer-editing">
-                        <Pencil size={12} />
-                        <span>
-                          Editing your last message · it replaces the stopped turn{' '}
-                          <small>(files it changed stay changed)</small>
-                        </span>
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label="Cancel editing"
-                          title="Cancel (Esc)"
-                          onClick={cancelEdit}
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ) : null}
-                    {pending[thread.id]?.length ? (
-                      <div className="pending-attachments">
-                        {pending[thread.id]!.map((item) => (
-                          <div
-                            className={`pending-image ${item.status}${item.previewUrl ? '' : ' pending-file'}`}
-                            key={item.key}
-                            title={item.name}
-                          >
-                            {item.previewUrl ? (
-                              <img src={item.previewUrl} alt={item.name} />
-                            ) : (
-                              <>
-                                <FileText size={16} />
-                                <span className="pending-file-text">
-                                  <strong>{item.name}</strong>
-                                  {item.size !== undefined ? (
-                                    <span>{formatSize(item.size)}</span>
-                                  ) : null}
-                                </span>
-                              </>
-                            )}
-                            {item.status === 'uploading' ? (
-                              <LoaderCircle size={14} className="status-spinner" />
-                            ) : null}
                             <button
-                              type="button"
-                              className="pending-remove"
-                              aria-label={`Remove ${item.name}`}
-                              onClick={() => removePending(item.key)}
+                              className="secondary"
+                              disabled={!bootstrap}
+                              onClick={() => setAddProject(true)}
                             >
-                              <X size={11} />
+                              <FolderPlus size={15} />
+                              Add project
                             </button>
                           </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    <textarea
-                      ref={composer}
-                      aria-label="Message your agent"
-                      placeholder={composerPlaceholder}
-                      defaultValue={draftText.current}
-                      onChange={(e) => draftChanged(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                          e.preventDefault()
-                          void send()
-                        } else if (
-                          (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
-                          !e.shiftKey &&
-                          !e.altKey &&
-                          !e.metaKey &&
-                          !e.ctrlKey &&
-                          !e.nativeEvent.isComposing &&
-                          recall(e.key === 'ArrowUp' ? -1 : 1)
-                        )
-                          e.preventDefault()
-                        else if (e.key === 'Escape' && editingMessage) {
-                          e.preventDefault()
-                          cancelEdit()
-                        }
-                      }}
-                      rows={1}
-                    />
-                    <div className="composer-toolbar">
-                      <div className="composer-left">
-                        {/* The file input covers the button so a tap opens the picker natively;
-                            iOS Safari won't open a hidden input from a script click. */}
-                        <label
-                          className={`round-button attach-button ${busy ? 'disabled' : ''}`}
-                          title="Attach images or files (or paste / drop them)"
-                        >
-                          <Plus size={15} />
-                          <input
-                            ref={filePicker}
-                            type="file"
-                            multiple
-                            aria-label="Attach images or files"
-                            disabled={busy}
-                            onChange={(event) => {
-                              const files = [...(event.target.files || [])]
-                              event.target.value = ''
-                              if (files.length) attachFiles(files, [])
-                            }}
-                          />
-                        </label>
-                        <AgentSettingsControls
-                          key={thread.id}
-                          provider={thread.provider}
-                          cwd={thread.cwd}
-                          value={{
-                            model: thread.model,
-                            effort: thread.effort || '',
-                            serviceTier: thread.serviceTier || '',
-                            permissionMode: thread.permissionMode || defaultPermission,
-                          }}
-                          onChange={(settings) => void updateSettings(settings)}
-                          disabled={active || !connected}
-                          busy={busy}
-                          agent={
-                            bootstrap
-                              ? {
-                                  installed: {
-                                    claude: bootstrap.providers.claude.installed,
-                                    codex: bootstrap.providers.codex.installed,
-                                  },
-                                  locked: thread.messages.length > 0 || Boolean(thread.sessionId),
-                                  // Switching agents brings back that agent's last-used settings,
-                                  // or the model picked from its tab (with default effort).
-                                  onChange: (provider, model) => {
-                                    if (provider === thread.provider) return
-                                    const remembered = settingsFor(provider)
-                                    // Your last model for that agent keeps its effort and tier.
-                                    void updateSettings(
-                                      model === undefined || model === remembered.model
-                                        ? remembered
-                                        : { ...remembered, model, effort: '', serviceTier: '' },
-                                      provider,
-                                    )
-                                  },
-                                }
-                              : undefined
-                          }
+                        </>
+                      )}
+                    </section>
+                  ) : (
+                    <div className="conversation">
+                      {firstDrawn ? (
+                        <OlderTurns
+                          key={firstDrawn}
+                          count={firstDrawn}
+                          root={scrollArea}
+                          onShow={showOlder}
                         />
-                      </div>
-                      <div className="composer-actions">
-                        {bootstrap?.dictation && dictationSupported() ? (
-                          <DictationButton
-                            threadId={thread.id}
-                            onText={(text) => {
-                              const element = composer.current
-                              const before =
-                                element?.value.slice(0, element.selectionStart ?? 0) ?? ''
-                              insertText((before && !/\s$/.test(before) ? ' ' : '') + text)
-                            }}
-                            // Live words go straight onto the placeholder (no re-render per word).
-                            onPreview={showPreview}
-                            onError={setError}
+                      ) : null}
+                      {drawnTurns.map((turn) => (
+                        <div className="turn" key={turn.key}>
+                          {turn.user ? <MessageView message={turn.user} /> : null}
+                          {turn.done && turn.work.length ? (
+                            <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>
+                              <button
+                                type="button"
+                                className="turn-fold-toggle"
+                                aria-expanded={openTurns.has(turn.key)}
+                                onClick={() => toggleTurn(turn.key)}
+                              >
+                                <span>
+                                  {foldLabel(
+                                    turn,
+                                    turn.endedAt === thread.completedAt ? thread.status : undefined,
+                                  )}
+                                </span>
+                                <ChevronRight size={13} className="chevron" />
+                              </button>
+                              {openTurns.has(turn.key) ? workList(turn.work, true) : null}
+                            </div>
+                          ) : !turn.done && turn.work.length ? (
+                            workList(turn.work)
+                          ) : null}
+                          {/* Replies the agent ended a response with before its last one (e.g. a
+                            summary, then a follow-up once background work finished): kept in
+                            view, in order, with what it showed while working above the first. */}
+                          {turn.replies.map((reply, index) => (
+                            <MessageView
+                              key={reply.id}
+                              message={reply}
+                              {...(index === 0 ? { leading: turn.blocks } : {})}
+                            />
+                          ))}
+                          {turn.answer ? (
+                            <MessageView
+                              message={turn.answer}
+                              {...(turn.replies.length ? {} : { leading: turn.blocks })}
+                            />
+                          ) : null}
+                        </div>
+                      ))}
+                      {thread.approvals.map((approval) =>
+                        approval.questions?.length ? (
+                          <QuestionCard
+                            key={approval.id}
+                            approval={{ ...approval, questions: approval.questions }}
+                            disabled={busy || !connected}
+                            onAnswer={(answers) =>
+                              action('approve', { approvalId: approval.id, allow: true, answers })
+                            }
+                            onSkip={() =>
+                              action('approve', { approvalId: approval.id, allow: false })
+                            }
                           />
-                        ) : null}
-                        {/* One button at a time: while the agent works, Stop until there's
-                            something to send (text or an image), then Send, which steers it. */}
-                        {active && !hasDraft && !pending[thread.id]?.length ? (
+                        ) : (
+                          <section className="approval" key={approval.id}>
+                            <div className="approval-title">
+                              <ShieldAlert size={16} />
+                              <strong>{approval.title}</strong>
+                            </div>
+                            <pre>{approval.detail}</pre>
+                            <div className="approval-actions">
+                              <button
+                                className="secondary"
+                                disabled={busy || !connected}
+                                onClick={() =>
+                                  action('approve', { approvalId: approval.id, allow: false })
+                                }
+                              >
+                                Decline
+                              </button>
+                              <button
+                                className="primary"
+                                disabled={busy || !connected}
+                                onClick={() =>
+                                  action('approve', { approvalId: approval.id, allow: true })
+                                }
+                              >
+                                Allow once
+                              </button>
+                            </div>
+                          </section>
+                        ),
+                      )}
+                      {finished ? (
+                        <div className="thread-end" role="status">
+                          <span>{finished}</span>
+                        </div>
+                      ) : null}
+                      {/* Work Claude left running in the background (e.g. a subagent) keeps the turn
+                        open after its last reply; say so, so it doesn't look stuck. */}
+                      {active && thread.background?.length ? (
+                        <div className="background-tasks" role="status">
+                          <LoaderCircle size={13} className="status-spinner" />
+                          <span>
+                            Still running in the background:{' '}
+                            <strong>
+                              {thread.background.map((task) => task.description).join(', ')}
+                            </strong>
+                          </span>
+                        </div>
+                      ) : null}
+                      {/* What the agent is doing right now, and for how long. */}
+                      {active && !thread.approvals.length ? (
+                        liveStep ? (
+                          <LiveLine
+                            text={stepTitle(liveStep)}
+                            since={liveStep.startedAt}
+                            provider={thread.provider}
+                            mood={liveStep.compact ? 'thinking' : 'working'}
+                            compacting={Boolean(liveStep.compact)}
+                            // A browser step names the site it's on (opening one already does).
+                            {...(liveStep.browser
+                              ? {
+                                  site:
+                                    liveStep.label === 'Open page'
+                                      ? ''
+                                      : siteOf(
+                                          browsers.find((item) => item.threadId === thread.id)?.url,
+                                        ),
+                                }
+                              : {})}
+                          />
+                        ) : currentTodo ? (
+                          // Between steps, the checklist's current item in its "-ing" form.
+                          <LiveLine
+                            text={currentTodo.activeText || currentTodo.text}
+                            since={lastTodoAt ?? thread.startedAt}
+                            provider={thread.provider}
+                            mood="working"
+                          />
+                        ) : (
+                          <LiveLine
+                            text={thread.status === 'starting' ? 'Starting…' : 'Thinking…'}
+                            since={thread.startedAt}
+                            provider={thread.provider}
+                            mood="thinking"
+                          />
+                        )
+                      ) : thread.status === 'completed' && thread.completedAt ? (
+                        <Celebration provider={thread.provider} at={thread.completedAt} />
+                      ) : null}
+                      {thread.error ? (
+                        <div className="error-banner" role="alert">
+                          {thread.error}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {thread || !activeId ? (
+                <footer className="composer-area">
+                  <ScrollToBottom scrollArea={scrollArea} stickToBottom={stickToBottom} />
+                  {error ? (
+                    <div className="error-banner" role="alert">
+                      <span>{error}</span>
+                      <button
+                        className="icon-button"
+                        aria-label="Dismiss error"
+                        onClick={() => setError('')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : null}
+                  {thread ? (
+                    <form className={`composer ${active ? 'agent-active' : ''}`} onSubmit={send}>
+                      {editingMessage ? (
+                        <div className="composer-editing">
+                          <Pencil size={12} />
+                          <span>
+                            Editing your last message · it replaces the stopped turn{' '}
+                            <small>(files it changed stay changed)</small>
+                          </span>
                           <button
-                            className="stop-button"
                             type="button"
-                            aria-label="Stop"
-                            title="Stop"
-                            onClick={() => void stop()}
-                            disabled={!connected}
+                            className="icon-button"
+                            aria-label="Cancel editing"
+                            title="Cancel (Esc)"
+                            onClick={cancelEdit}
                           >
-                            <Square size={10} fill="currentColor" />
+                            <X size={12} />
                           </button>
+                        </div>
+                      ) : null}
+                      {pending[thread.id]?.length ? (
+                        <div className="pending-attachments">
+                          {pending[thread.id]!.map((item) => (
+                            <div
+                              className={`pending-image ${item.status}${item.previewUrl ? '' : ' pending-file'}`}
+                              key={item.key}
+                              title={item.name}
+                            >
+                              {item.previewUrl ? (
+                                <img src={item.previewUrl} alt={item.name} />
+                              ) : (
+                                <>
+                                  <FileText size={16} />
+                                  <span className="pending-file-text">
+                                    <strong>{item.name}</strong>
+                                    {item.size !== undefined ? (
+                                      <span>{formatSize(item.size)}</span>
+                                    ) : null}
+                                  </span>
+                                </>
+                              )}
+                              {item.status === 'uploading' ? (
+                                <LoaderCircle size={14} className="status-spinner" />
+                              ) : null}
+                              <button
+                                type="button"
+                                className="pending-remove"
+                                aria-label={`Remove ${item.name}`}
+                                onClick={() => removePending(item.key)}
+                              >
+                                <X size={11} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      <textarea
+                        ref={composer}
+                        aria-label="Message your agent"
+                        placeholder={composerPlaceholder}
+                        defaultValue={draftText.current}
+                        onChange={(e) => draftChanged(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                            e.preventDefault()
+                            void send()
+                          } else if (
+                            (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+                            !e.shiftKey &&
+                            !e.altKey &&
+                            !e.metaKey &&
+                            !e.ctrlKey &&
+                            !e.nativeEvent.isComposing &&
+                            recall(e.key === 'ArrowUp' ? -1 : 1)
+                          )
+                            e.preventDefault()
+                          else if (e.key === 'Escape' && editingMessage) {
+                            e.preventDefault()
+                            cancelEdit()
+                          }
+                        }}
+                        rows={1}
+                      />
+                      <div className="composer-toolbar">
+                        <div className="composer-left">
+                          {/* The file input covers the button so a tap opens the picker natively;
+                            iOS Safari won't open a hidden input from a script click. */}
+                          <label
+                            className={`round-button attach-button ${busy ? 'disabled' : ''}`}
+                            title="Attach images or files (or paste / drop them)"
+                          >
+                            <Plus size={15} />
+                            <input
+                              ref={filePicker}
+                              type="file"
+                              multiple
+                              aria-label="Attach images or files"
+                              disabled={busy}
+                              onChange={(event) => {
+                                const files = [...(event.target.files || [])]
+                                event.target.value = ''
+                                if (files.length) attachFiles(files, [])
+                              }}
+                            />
+                          </label>
+                          <AgentSettingsControls
+                            key={thread.id}
+                            provider={thread.provider}
+                            cwd={thread.cwd}
+                            value={{
+                              model: thread.model,
+                              effort: thread.effort || '',
+                              serviceTier: thread.serviceTier || '',
+                              permissionMode: thread.permissionMode || defaultPermission,
+                            }}
+                            onChange={(settings) => void updateSettings(settings)}
+                            disabled={active || !connected}
+                            busy={busy}
+                            agent={
+                              bootstrap
+                                ? {
+                                    installed: {
+                                      claude: bootstrap.providers.claude.installed,
+                                      codex: bootstrap.providers.codex.installed,
+                                    },
+                                    locked: thread.messages.length > 0 || Boolean(thread.sessionId),
+                                    // Switching agents brings back that agent's last-used settings,
+                                    // or the model picked from its tab (with default effort).
+                                    onChange: (provider, model) => {
+                                      if (provider === thread.provider) return
+                                      const remembered = settingsFor(provider)
+                                      // Your last model for that agent keeps its effort and tier.
+                                      void updateSettings(
+                                        model === undefined || model === remembered.model
+                                          ? remembered
+                                          : { ...remembered, model, effort: '', serviceTier: '' },
+                                        provider,
+                                      )
+                                    },
+                                  }
+                                : undefined
+                            }
+                          />
+                        </div>
+                        <div className="composer-actions">
+                          {bootstrap?.dictation && dictationSupported() ? (
+                            <DictationButton
+                              threadId={thread.id}
+                              onText={(text) => {
+                                const element = composer.current
+                                const before =
+                                  element?.value.slice(0, element.selectionStart ?? 0) ?? ''
+                                insertText((before && !/\s$/.test(before) ? ' ' : '') + text)
+                              }}
+                              // Live words go straight onto the placeholder (no re-render per word).
+                              onPreview={showPreview}
+                              onError={setError}
+                            />
+                          ) : null}
+                          {/* One button at a time: while the agent works, Stop until there's
+                            something to send (text or an image), then Send, which steers it. */}
+                          {active && !hasDraft && !pending[thread.id]?.length ? (
+                            <button
+                              className="stop-button"
+                              type="button"
+                              aria-label="Stop"
+                              title="Stop"
+                              onClick={() => void stop()}
+                              disabled={!connected}
+                            >
+                              <Square size={10} fill="currentColor" />
+                            </button>
+                          ) : null}
+                          {!active || hasDraft || pending[thread.id]?.length ? (
+                            <button
+                              className="send-button"
+                              type="submit"
+                              aria-label="Send message"
+                              title="Send (Enter)"
+                              disabled={
+                                (!hasDraft && !pending[thread.id]?.length) ||
+                                Boolean(
+                                  pending[thread.id]?.some((item) => item.status !== 'ready'),
+                                ) ||
+                                busy ||
+                                !connected
+                              }
+                            >
+                              <ArrowUp size={15} />
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </form>
+                  ) : null}
+                  {thread &&
+                  (git?.branch ||
+                    processes.some((item) => item.project === thread.cwd) ||
+                    browsers.some((item) => item.threadId === thread.id)) ? (
+                    <div className="composer-meta">
+                      {/* Branch and its pull request stay together on the left. */}
+                      <span className="git-info">
+                        {/* Where the thread works: chosen before the first message, then a
+                          Worktree badge for the rest of the thread. */}
+                        {git?.branch && !thread.worktree && !thread.messages.length ? (
+                          <Picker
+                            label="Work in"
+                            icon={
+                              thread.useWorktree ? <FolderGit2 size={12} /> : <Folder size={12} />
+                            }
+                            text={thread.useWorktree ? 'New worktree' : 'Local'}
+                            value={thread.useWorktree ? 'worktree' : 'local'}
+                            options={[
+                              {
+                                value: 'local',
+                                label: 'Local',
+                                description: 'Work in the project folder',
+                              },
+                              {
+                                value: 'worktree',
+                                label: 'New worktree',
+                                description: `Its own checkout on a new branch, from ${git.branch}`,
+                              },
+                            ]}
+                            onSelect={(value) => void chooseWorktree(value === 'worktree')}
+                            disabled={busy || !connected}
+                            placement="up"
+                          />
+                        ) : thread.worktree ? (
+                          <span
+                            className="worktree-badge"
+                            title={`Worktree: ${thread.worktree.path}`}
+                          >
+                            <FolderGit2 size={12} />
+                            <span>Worktree</span>
+                          </span>
                         ) : null}
-                        {!active || hasDraft || pending[thread.id]?.length ? (
-                          <button
-                            className="send-button"
-                            type="submit"
-                            aria-label="Send message"
-                            title="Send (Enter)"
-                            disabled={
-                              (!hasDraft && !pending[thread.id]?.length) ||
-                              Boolean(
-                                pending[thread.id]?.some((item) => item.status !== 'ready'),
-                              ) ||
-                              busy ||
-                              !connected
+                        {git?.branch ? (
+                          // Opens the branch on GitHub in a new tab when the remote is there.
+                          <a
+                            className="git-branch"
+                            href={git.url}
+                            target={git.url ? '_blank' : undefined}
+                            rel={git.url ? 'noopener noreferrer' : undefined}
+                            title={
+                              (git.detached
+                                ? `Detached HEAD at ${git.branch}`
+                                : `Branch ${git.branch}`) + (git.url ? ' — open on GitHub' : '')
                             }
                           >
-                            <ArrowUp size={15} />
-                          </button>
+                            <GitBranch size={12} />
+                            <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
+                            {git.url ? (
+                              <ExternalLink size={11} className="git-branch-external" />
+                            ) : null}
+                          </a>
                         ) : null}
-                      </div>
-                    </div>
-                  </form>
-                ) : null}
-                {thread &&
-                (git?.branch ||
-                  processes.some((item) => item.project === thread.cwd) ||
-                  browsers.some((item) => item.threadId === thread.id)) ? (
-                  <div className="composer-meta">
-                    {/* Branch and its pull request stay together on the left. */}
-                    <span className="git-info">
-                      {/* Where the thread works: chosen before the first message, then a
-                          Worktree badge for the rest of the thread. */}
-                      {git?.branch && !thread.worktree && !thread.messages.length ? (
-                        <Picker
-                          label="Work in"
-                          icon={
-                            thread.useWorktree ? <FolderGit2 size={12} /> : <Folder size={12} />
-                          }
-                          text={thread.useWorktree ? 'New worktree' : 'Local'}
-                          value={thread.useWorktree ? 'worktree' : 'local'}
-                          options={[
-                            {
-                              value: 'local',
-                              label: 'Local',
-                              description: 'Work in the project folder',
-                            },
-                            {
-                              value: 'worktree',
-                              label: 'New worktree',
-                              description: `Its own checkout on a new branch, from ${git.branch}`,
-                            },
-                          ]}
-                          onSelect={(value) => void chooseWorktree(value === 'worktree')}
-                          disabled={busy || !connected}
-                          placement="up"
+                        {git?.pullRequest ? (
+                          // The branch's pull request on GitHub, in a new tab.
+                          <a
+                            className="git-pr"
+                            href={git.pullRequest.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`Open pull request #${git.pullRequest.number} on GitHub`}
+                          >
+                            <GitPullRequest size={12} />
+                            <span>#{git.pullRequest.number}</span>
+                          </a>
+                        ) : null}
+                      </span>
+                      {/* The agent's open browser page, then dev servers and other processes. */}
+                      <span className="composer-meta-chips">
+                        <BrowserChip
+                          threadId={thread.id}
+                          browser={browsers.find((item) => item.threadId === thread.id)}
                         />
-                      ) : thread.worktree ? (
-                        <span
-                          className="worktree-badge"
-                          title={`Worktree: ${thread.worktree.path}`}
-                        >
-                          <FolderGit2 size={12} />
-                          <span>Worktree</span>
-                        </span>
-                      ) : null}
-                      {git?.branch ? (
-                        // Opens the branch on GitHub in a new tab when the remote is there.
-                        <a
-                          className="git-branch"
-                          href={git.url}
-                          target={git.url ? '_blank' : undefined}
-                          rel={git.url ? 'noopener noreferrer' : undefined}
-                          title={
-                            (git.detached
-                              ? `Detached HEAD at ${git.branch}`
-                              : `Branch ${git.branch}`) + (git.url ? ' — open on GitHub' : '')
-                          }
-                        >
-                          <GitBranch size={12} />
-                          <span>{git.detached ? `detached at ${git.branch}` : git.branch}</span>
-                          {git.url ? (
-                            <ExternalLink size={11} className="git-branch-external" />
-                          ) : null}
-                        </a>
-                      ) : null}
-                      {git?.pullRequest ? (
-                        // The branch's pull request on GitHub, in a new tab.
-                        <a
-                          className="git-pr"
-                          href={git.pullRequest.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={`Open pull request #${git.pullRequest.number} on GitHub`}
-                        >
-                          <GitPullRequest size={12} />
-                          <span>#{git.pullRequest.number}</span>
-                        </a>
-                      ) : null}
-                    </span>
-                    {/* The agent's open browser page, then dev servers and other processes. */}
-                    <span className="composer-meta-chips">
-                      <BrowserChip
-                        threadId={thread.id}
-                        browser={browsers.find((item) => item.threadId === thread.id)}
-                      />
-                      <ProcessIndicator
-                        processes={processes}
-                        project={thread.cwd}
-                        remote={Boolean(bootstrap?.remote)}
-                      />
-                    </span>
-                  </div>
-                ) : null}
-              </footer>
-            ) : null}
+                        <ProcessIndicator
+                          processes={processes}
+                          project={thread.cwd}
+                          remote={Boolean(bootstrap?.remote)}
+                        />
+                      </span>
+                    </div>
+                  ) : null}
+                </footer>
+              ) : null}
+            </div>
           </div>
+          {/* Full height beside the header and chat, like an editor's side panel. */}
+          {thread && diffOpen && git?.branch ? (
+            <DiffPanel
+              threadId={thread.id}
+              project={thread.cwd}
+              refreshKey={`${thread.status}:${thread.activities.filter((item) => item.status !== 'running').length}`}
+              onClose={closeDiff}
+            />
+          ) : null}
+        </main>
+        <ImagePreview />
+        {dragging ? (
+          <div className="drop-overlay" aria-hidden>
+            <div>
+              <FileUp size={22} />
+              <strong>Drop to attach</strong>
+              <span>Images attach to your message · other files add their path</span>
+            </div>
+          </div>
+        ) : null}
+        <div className="overlay-stack">
+          {showPrompt ? (
+            <NotificationPrompt
+              onEnable={() => void enableDesktop()}
+              onDismiss={() => {
+                updateNotify({ ...notifyRef.current, prompted: true })
+                setShowPrompt(false)
+              }}
+            />
+          ) : null}
+          <Toasts
+            events={toasts}
+            projectName={projectName}
+            onOpen={(event) => {
+              setToasts((current) => current.filter((item) => item.key !== event.key))
+              select(event.thread.id)
+            }}
+            onDismiss={(key) => setToasts((current) => current.filter((item) => item.key !== key))}
+          />
         </div>
-        {/* Full height beside the header and chat, like an editor's side panel. */}
-        {thread && diffOpen && git?.branch ? (
-          <DiffPanel
-            threadId={thread.id}
-            project={thread.cwd}
-            refreshKey={`${thread.status}:${thread.activities.filter((item) => item.status !== 'running').length}`}
-            onClose={closeDiff}
+        {menu
+          ? (() => {
+              let items: MenuItem[] = []
+              if (menu.kind === 'thread' && picked.has(menu.id) && pickedIds.length > 1) {
+                // Right-click inside a selection acts on all of it.
+                items = [
+                  {
+                    label: `Delete ${pickedIds.length} threads`,
+                    icon: <Trash2 size={14} />,
+                    danger: true,
+                    disabled: busy,
+                    onSelect: () => void removeMany(pickedIds),
+                  },
+                  {
+                    label: 'Clear selection',
+                    icon: <X size={14} />,
+                    onSelect: () => setPicked(new Set()),
+                  },
+                ]
+              } else if (menu.kind === 'thread') {
+                const target = threads.find((item) => item.id === menu.id)
+                if (!target) return null
+                items = [
+                  {
+                    label: 'Rename',
+                    icon: <Pencil size={14} />,
+                    onSelect: () => setRenaming({ id: target.id, title: target.title }),
+                  },
+                  {
+                    label: retitling.has(target.id) ? 'Writing a title…' : 'Regenerate title',
+                    icon: <Sparkles size={14} />,
+                    disabled: retitling.has(target.id),
+                    onSelect: () => void regenerateTitle(target.id),
+                  },
+                  'separator',
+                  {
+                    label: `New thread in ${shortName(projectName(target.cwd))}`,
+                    icon: <SquarePen size={14} />,
+                    onSelect: () => void quickCreate(target.cwd),
+                  },
+                  // A machine's thread (the hub): its project's settings and read_thread links
+                  // belong to that machine, so they aren't offered here.
+                  ...(isRemote(target.id)
+                    ? []
+                    : [
+                        {
+                          label: 'Project settings…',
+                          icon: <Settings2 size={14} />,
+                          onSelect: () => setProjectSettings(target.cwd),
+                        },
+                        {
+                          // Paste it into another thread so its agent can read this one (read_thread).
+                          label: 'Copy link',
+                          icon: <Link2 size={14} />,
+                          onSelect: () =>
+                            copyPath(`${window.location.origin}/threads/${target.id}`),
+                        },
+                      ]),
+                  {
+                    label: 'Copy project path',
+                    icon: <Copy size={14} />,
+                    onSelect: () => copyPath(machinePath(target.cwd)),
+                  },
+                  {
+                    label: picked.has(target.id) ? 'Unselect' : 'Select',
+                    icon: <SquareCheck size={14} />,
+                    onSelect: () => togglePick(target.id),
+                  },
+                  'separator',
+                  {
+                    label: 'Delete',
+                    icon: <Trash2 size={14} />,
+                    danger: true,
+                    disabled: isActive(target.status) || busy,
+                    title: isActive(target.status)
+                      ? 'Stop the agent before deleting this thread.'
+                      : undefined,
+                    onSelect: () => void remove(target),
+                  },
+                ]
+              } else {
+                const path = menu.path
+                const runningHere = threads.some(
+                  (item) => item.cwd === path && isActive(item.status),
+                )
+                // "No project" isn't a real project: no renaming or avatar.
+                const chats = projects.some((project) => project.path === path && project.chats)
+                // A machine's project (the hub): renaming, settings, and removing happen there.
+                const remote = isRemote(path)
+                items = [
+                  {
+                    label: 'New thread here',
+                    icon: <SquarePen size={14} />,
+                    onSelect: () => void quickCreate(path),
+                  },
+                  ...(chats || remote
+                    ? []
+                    : [
+                        {
+                          label: 'Rename',
+                          icon: <Pencil size={14} />,
+                          onSelect: () => setRenamingProject({ path, name: projectName(path) }),
+                        },
+                        {
+                          label: 'Project settings…',
+                          icon: <Settings2 size={14} />,
+                          onSelect: () => setProjectSettings(path),
+                        },
+                      ]),
+                  {
+                    label: 'Copy path',
+                    icon: <Copy size={14} />,
+                    onSelect: () => copyPath(machinePath(path)),
+                  },
+                  ...(remote
+                    ? []
+                    : [
+                        'separator' as const,
+                        {
+                          label: chats ? 'Delete all chats' : 'Remove project',
+                          icon: <Trash2 size={14} />,
+                          danger: true,
+                          disabled: runningHere || busy,
+                          title: runningHere
+                            ? 'Stop the running threads in this project first.'
+                            : undefined,
+                          onSelect: () => void removeProject(path),
+                        },
+                      ]),
+                ]
+              }
+              return (
+                <ContextMenu
+                  position={menu.position}
+                  label={menu.kind === 'thread' ? 'Thread actions' : 'Project actions'}
+                  items={items}
+                  onClose={closeMenu}
+                />
+              )
+            })()
+          : null}
+        {projectSettings ? (
+          <ProjectSettings
+            key={projectSettings}
+            path={projectSettings}
+            project={projects.find((project) => project.path === projectSettings)}
+            projectIcons={projectIcons}
+            onClose={() => setProjectSettings(null)}
           />
         ) : null}
-      </main>
-      <ImagePreview />
-      {dragging ? (
-        <div className="drop-overlay" aria-hidden>
-          <div>
-            <FileUp size={22} />
-            <strong>Drop to attach</strong>
-            <span>Images attach to your message · other files add their path</span>
-          </div>
-        </div>
-      ) : null}
-      <div className="overlay-stack">
-        {showPrompt ? (
-          <NotificationPrompt
-            onEnable={() => void enableDesktop()}
-            onDismiss={() => {
-              updateNotify({ ...notifyRef.current, prompted: true })
-              setShowPrompt(false)
+        {settingsOpen ? (
+          <SettingsDialog
+            preferences={notify}
+            providers={bootstrap?.providers}
+            remote={Boolean(bootstrap?.remote)}
+            onDictationChange={(dictation) =>
+              setBootstrap((current) => (current ? { ...current, dictation } : current))
+            }
+            onPhoneAccessChange={(phoneAccess) =>
+              setBootstrap((current) => (current ? { ...current, phoneAccess } : current))
+            }
+            theme={theme}
+            onThemeChange={changeTheme}
+            onChange={(preferences) => {
+              updateNotify(preferences)
+              if (preferences.prompted) setShowPrompt(false)
+            }}
+            onClose={() => setSettingsOpen(false)}
+          />
+        ) : null}
+        <ThreadPreviewCard
+          projectName={projectName}
+          statusLabel={(status) => labels[status]}
+          ago={(iso) => {
+            const label = relativeTime(iso, now)
+            return label === 'now' ? 'Just now' : /^\d+[mhd]$/.test(label) ? `${label} ago` : label
+          }}
+        />
+        {paletteOpen ? (
+          <CommandPalette
+            threads={[...threads].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))}
+            projectName={projectName}
+            status={threadStatus}
+            isUnread={(item) => unread.has(item.id)}
+            onOpenThread={select}
+            onClose={() => setPaletteOpen(false)}
+            commands={[
+              {
+                id: 'new-thread',
+                label: 'New thread',
+                shortcut: isMac ? '⇧⌘O' : 'Ctrl+Shift+O',
+                run: () => openNewThread(),
+              },
+              {
+                id: 'new-chat',
+                label: 'New thread without a project',
+                run: () => void quickCreate(null),
+              },
+              { id: 'add-project', label: 'Add project', run: () => setAddProject(true) },
+              {
+                id: 'sidebar',
+                label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar',
+                shortcut: isMac ? '⌘S' : 'Ctrl+S',
+                run: toggleSidebar,
+              },
+              { id: 'settings', label: 'Settings', run: () => setSettingsOpen(true) },
+            ]}
+          />
+        ) : null}
+        {newThreadProject !== null && bootstrap ? (
+          <NewThread
+            bootstrap={bootstrap}
+            projects={projects}
+            projectName={projectName}
+            projectIcons={projectIcons}
+            initialProject={newThreadProject}
+            onAddProject={() => {
+              setNewThreadProject(null)
+              setAddProject(true)
+            }}
+            onClose={() => setNewThreadProject(null)}
+            onCreated={(created) => {
+              setNewThreadProject(null)
+              // A machine's thread joins the sidebar from its machine's stream (the hub).
+              if (isRemote(created.id)) threadCache.current.set(created.id, created)
+              else
+                setThreads((current) => [
+                  { ...created, lastMessageAt: created.createdAt },
+                  ...current.filter((item) => item.id !== created.id),
+                ])
+              select(created.id)
+              revealThread(created.id)
             }}
           />
         ) : null}
-        <Toasts
-          events={toasts}
-          projectName={projectName}
-          onOpen={(event) => {
-            setToasts((current) => current.filter((item) => item.key !== event.key))
-            select(event.thread.id)
-          }}
-          onDismiss={(key) => setToasts((current) => current.filter((item) => item.key !== key))}
-        />
+        {addProject && bootstrap ? (
+          <AddProject
+            canBrowse={!bootstrap.remote}
+            machines={machines}
+            onClose={() => setAddProject(false)}
+            onAdded={(project) => {
+              // A machine's project joins the sidebar from its machine's stream (the hub).
+              if (!project.machine)
+                setProjects((current) => [
+                  project,
+                  ...current.filter((item) => item.path !== project.path),
+                ])
+              setCollapsed((current) => ({ ...current, [project.path]: false }))
+              setAddProject(false)
+              // Start working in it right away: a new thread with your last agent and settings.
+              void quickCreate(project.path)
+            }}
+          />
+        ) : null}
       </div>
-      {menu
-        ? (() => {
-            let items: MenuItem[] = []
-            if (menu.kind === 'thread' && picked.has(menu.id) && pickedIds.length > 1) {
-              // Right-click inside a selection acts on all of it.
-              items = [
-                {
-                  label: `Delete ${pickedIds.length} threads`,
-                  icon: <Trash2 size={14} />,
-                  danger: true,
-                  disabled: busy,
-                  onSelect: () => void removeMany(pickedIds),
-                },
-                {
-                  label: 'Clear selection',
-                  icon: <X size={14} />,
-                  onSelect: () => setPicked(new Set()),
-                },
-              ]
-            } else if (menu.kind === 'thread') {
-              const target = threads.find((item) => item.id === menu.id)
-              if (!target) return null
-              items = [
-                {
-                  label: 'Rename',
-                  icon: <Pencil size={14} />,
-                  onSelect: () => setRenaming({ id: target.id, title: target.title }),
-                },
-                {
-                  label: retitling.has(target.id) ? 'Writing a title…' : 'Regenerate title',
-                  icon: <Sparkles size={14} />,
-                  disabled: retitling.has(target.id),
-                  onSelect: () => void regenerateTitle(target.id),
-                },
-                'separator',
-                {
-                  label: `New thread in ${shortName(projectName(target.cwd))}`,
-                  icon: <SquarePen size={14} />,
-                  onSelect: () => void quickCreate(target.cwd),
-                },
-                {
-                  label: 'Project settings…',
-                  icon: <Settings2 size={14} />,
-                  onSelect: () => setProjectSettings(target.cwd),
-                },
-                {
-                  // Paste it into another thread so its agent can read this one (read_thread).
-                  label: 'Copy link',
-                  icon: <Link2 size={14} />,
-                  onSelect: () => copyPath(`${window.location.origin}/threads/${target.id}`),
-                },
-                {
-                  label: 'Copy project path',
-                  icon: <Copy size={14} />,
-                  onSelect: () => copyPath(target.cwd),
-                },
-                {
-                  label: picked.has(target.id) ? 'Unselect' : 'Select',
-                  icon: <SquareCheck size={14} />,
-                  onSelect: () => togglePick(target.id),
-                },
-                'separator',
-                {
-                  label: 'Delete',
-                  icon: <Trash2 size={14} />,
-                  danger: true,
-                  disabled: isActive(target.status) || busy,
-                  title: isActive(target.status)
-                    ? 'Stop the agent before deleting this thread.'
-                    : undefined,
-                  onSelect: () => void remove(target),
-                },
-              ]
-            } else {
-              const path = menu.path
-              const runningHere = threads.some((item) => item.cwd === path && isActive(item.status))
-              // "No project" isn't a real project: no renaming or avatar.
-              const chats = projects.some((project) => project.path === path && project.chats)
-              items = [
-                {
-                  label: 'New thread here',
-                  icon: <SquarePen size={14} />,
-                  onSelect: () => void quickCreate(path),
-                },
-                ...(chats
-                  ? []
-                  : [
-                      {
-                        label: 'Rename',
-                        icon: <Pencil size={14} />,
-                        onSelect: () => setRenamingProject({ path, name: projectName(path) }),
-                      },
-                      {
-                        label: 'Project settings…',
-                        icon: <Settings2 size={14} />,
-                        onSelect: () => setProjectSettings(path),
-                      },
-                    ]),
-                { label: 'Copy path', icon: <Copy size={14} />, onSelect: () => copyPath(path) },
-                'separator',
-                {
-                  label: chats ? 'Delete all chats' : 'Remove project',
-                  icon: <Trash2 size={14} />,
-                  danger: true,
-                  disabled: runningHere || busy,
-                  title: runningHere
-                    ? 'Stop the running threads in this project first.'
-                    : undefined,
-                  onSelect: () => void removeProject(path),
-                },
-              ]
-            }
-            return (
-              <ContextMenu
-                position={menu.position}
-                label={menu.kind === 'thread' ? 'Thread actions' : 'Project actions'}
-                items={items}
-                onClose={closeMenu}
-              />
-            )
-          })()
-        : null}
-      {projectSettings ? (
-        <ProjectSettings
-          key={projectSettings}
-          path={projectSettings}
-          project={projects.find((project) => project.path === projectSettings)}
-          projectIcons={projectIcons}
-          onClose={() => setProjectSettings(null)}
-        />
-      ) : null}
-      {settingsOpen ? (
-        <SettingsDialog
-          preferences={notify}
-          providers={bootstrap?.providers}
-          remote={Boolean(bootstrap?.remote)}
-          onDictationChange={(dictation) =>
-            setBootstrap((current) => (current ? { ...current, dictation } : current))
-          }
-          onPhoneAccessChange={(phoneAccess) =>
-            setBootstrap((current) => (current ? { ...current, phoneAccess } : current))
-          }
-          theme={theme}
-          onThemeChange={changeTheme}
-          onChange={(preferences) => {
-            updateNotify(preferences)
-            if (preferences.prompted) setShowPrompt(false)
-          }}
-          onClose={() => setSettingsOpen(false)}
-        />
-      ) : null}
-      <ThreadPreviewCard
-        projectName={projectName}
-        statusLabel={(status) => labels[status]}
-        ago={(iso) => {
-          const label = relativeTime(iso, now)
-          return label === 'now' ? 'Just now' : /^\d+[mhd]$/.test(label) ? `${label} ago` : label
-        }}
-      />
-      {paletteOpen ? (
-        <CommandPalette
-          threads={[...threads].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))}
-          projectName={projectName}
-          status={threadStatus}
-          isUnread={(item) => unread.has(item.id)}
-          onOpenThread={select}
-          onClose={() => setPaletteOpen(false)}
-          commands={[
-            {
-              id: 'new-thread',
-              label: 'New thread',
-              shortcut: isMac ? '⇧⌘O' : 'Ctrl+Shift+O',
-              run: () => openNewThread(),
-            },
-            {
-              id: 'new-chat',
-              label: 'New thread without a project',
-              run: () => void quickCreate(null),
-            },
-            { id: 'add-project', label: 'Add project', run: () => setAddProject(true) },
-            {
-              id: 'sidebar',
-              label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar',
-              shortcut: isMac ? '⌘S' : 'Ctrl+S',
-              run: toggleSidebar,
-            },
-            { id: 'settings', label: 'Settings', run: () => setSettingsOpen(true) },
-          ]}
-        />
-      ) : null}
-      {newThreadProject !== null && bootstrap ? (
-        <NewThread
-          bootstrap={bootstrap}
-          projects={projects}
-          projectName={projectName}
-          projectIcons={projectIcons}
-          initialProject={newThreadProject}
-          onAddProject={() => {
-            setNewThreadProject(null)
-            setAddProject(true)
-          }}
-          onClose={() => setNewThreadProject(null)}
-          onCreated={(created) => {
-            setNewThreadProject(null)
-            setThreads((current) => [
-              { ...created, lastMessageAt: created.createdAt },
-              ...current.filter((item) => item.id !== created.id),
-            ])
-            select(created.id)
-            revealThread(created.id)
-          }}
-        />
-      ) : null}
-      {addProject && bootstrap ? (
-        <AddProject
-          canBrowse={!bootstrap.remote}
-          initialPath={loadPreferences().cwd || bootstrap.defaultCwd}
-          onClose={() => setAddProject(false)}
-          onAdded={(project) => {
-            setProjects((current) => [
-              project,
-              ...current.filter((item) => item.path !== project.path),
-            ])
-            setCollapsed((current) => ({ ...current, [project.path]: false }))
-            setAddProject(false)
-            // Start working in it right away: a new thread with your last agent and settings.
-            void quickCreate(project.path)
-          }}
-        />
-      ) : null}
-    </div>
+    </ApiBase.Provider>
   )
 }
 // The New thread dialog's "No project" choice (a chat, see server/chats.ts).
@@ -3776,6 +4009,23 @@ function NewThread({
       const preferences = loadPreferences()
       const provider = defaultAgent(bootstrap, preferences)
       const settings = settingsFor(provider, preferences)
+      // A machine's project (the hub): the thread is created on that machine.
+      const remote = parseRemote(cwd)
+      if (remote) {
+        const machine = {
+          id: remote.machine,
+          name: projects.find((project) => project.path === cwd)?.machine ?? 'Machine',
+        }
+        const created = await api<Thread>(
+          `m/${encodeURIComponent(remote.machine)}/threads`,
+          'POST',
+          { provider, cwd: remote.id, ...settings },
+        )
+        // Not remembered as your folder: that's for this computer's projects.
+        rememberChoice(provider, settings)
+        onCreated(hubThread(machine, created))
+        return
+      }
       const created = await api<Thread>('threads', 'POST', {
         provider,
         ...(cwd === noProject ? { noProject: true } : { cwd }),
@@ -3790,7 +4040,8 @@ function NewThread({
   }
   // No project (a chat in its own folder) first, always offered even before the first chat
   // makes its folder; then the project you're in, then the rest by recent activity.
-  const chatsPath = projects.find((project) => project.chats)?.path
+  // This computer's "No project" (a machine's chats stay on that machine).
+  const chatsPath = projects.find((project) => project.chats && !project.machine)?.path
   const current = chatsPath && initialProject === chatsPath ? noProject : initialProject
   const noProjectItem: ProjectSummary = {
     path: noProject,
@@ -3879,11 +4130,14 @@ function NewThread({
                 )}
               </span>
               <span className="palette-text">
-                <span className="palette-label">{label(project)}</span>
-                <span className="palette-detail" title={project.path}>
+                <span className="palette-label">
+                  {label(project)}
+                  {project.machine ? <MachineTag name={project.machine} /> : null}
+                </span>
+                <span className="palette-detail" title={machinePath(project.path)}>
                   {project.path === noProject
                     ? 'A chat with its own folder, outside your projects'
-                    : project.path}
+                    : machinePath(project.path)}
                 </span>
               </span>
               <span className="palette-hint">
@@ -3916,20 +4170,27 @@ function NewThread({
 }
 function AddProject({
   canBrowse,
-  initialPath,
+  machines,
   onClose,
   onAdded,
 }: {
   // The folder chooser opens on the Mac, so a paired phone types the path instead.
   canBrowse: boolean
-  initialPath: string
+  // Online machines (the hub): the project can be added on one of them instead.
+  machines: HubMachine[]
   onClose: () => void
   onAdded: (project: ProjectSummary) => void
 }) {
-  const [path, setPath] = useState(initialPath)
+  // Always starts at the home folder of the computer it's added on (this Mac or a machine).
+  const [path, setPath] = useState('~/')
   const [error, setError] = useState('')
+  // The folder doesn't exist yet: offer to create it (inside the home folder only).
+  const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [picking, setPicking] = useState(false)
+  // Where the project goes: this computer ('') or a machine's id.
+  const [machineId, setMachineId] = useState('')
+  const machine = machines.find((item) => item.id === machineId)
   async function browse() {
     setPicking(true)
     setError('')
@@ -3942,17 +4203,38 @@ function AddProject({
       setPicking(false)
     }
   }
-  async function add(event: FormEvent) {
-    event.preventDefault()
+  async function add(event?: FormEvent, create = false) {
+    event?.preventDefault()
     if (busy || picking) return
     setBusy(true)
     setError('')
+    setMissing(false)
     try {
-      onAdded(await api<ProjectSummary>('projects', 'POST', { path }))
+      const body = { path, ...(create ? { create: true } : {}) }
+      onAdded(
+        machine
+          ? hubProject(
+              machine,
+              await api<ProjectSummary>(
+                `m/${encodeURIComponent(machine.id)}/projects`,
+                'POST',
+                body,
+              ),
+            )
+          : await api<ProjectSummary>('projects', 'POST', body),
+      )
     } catch (error) {
-      setError((error as Error).message)
+      const message = (error as Error).message
+      setError(message)
+      setMissing(!create && /does not exist/.test(message))
       setBusy(false)
     }
+  }
+  function choose(id: string) {
+    setMachineId(id)
+    setError('')
+    setMissing(false)
+    setPath('~/')
   }
   return (
     <Modal
@@ -3974,6 +4256,20 @@ function AddProject({
             <X size={16} />
           </button>
         </div>
+        {machines.length ? (
+          <div className="field">
+            <span className="field-label">On</span>
+            <Segmented
+              label="Machine"
+              value={machineId}
+              onChange={choose}
+              options={[
+                { value: '', label: 'This Mac' },
+                ...machines.map((item) => ({ value: item.id, label: item.name })),
+              ]}
+            />
+          </div>
+        ) : null}
         <div className="field">
           <label className="field-label" htmlFor="project-folder">
             Project folder
@@ -3988,7 +4284,7 @@ function AddProject({
               disabled={busy || picking}
               required
             />
-            {canBrowse ? (
+            {canBrowse && !machine ? (
               <button
                 className="secondary"
                 type="button"
@@ -4003,12 +4299,25 @@ function AddProject({
           <small className="field-hint">
             {picking
               ? 'Choose a folder in the macOS window, or cancel to return.'
-              : 'An absolute path or ~/… on this machine. Agents can edit files in this folder.'}
+              : machine
+                ? `An absolute path or ~/… on ${machine.name}. Agents there can edit files in this folder.`
+                : 'An absolute path or ~/… on this machine. Agents can edit files in this folder.'}
           </small>
         </div>
         {error ? (
           <div className="error-banner" role="alert">
             {error}
+            {missing ? (
+              <button
+                className="secondary add-project-create"
+                type="button"
+                disabled={busy}
+                onClick={() => void add(undefined, true)}
+              >
+                <FolderPlus size={14} />
+                Create it and add
+              </button>
+            ) : null}
           </div>
         ) : null}
         <div className="dialog-actions">

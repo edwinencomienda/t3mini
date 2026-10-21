@@ -97,8 +97,13 @@ function toBase64(file: File) {
     reader.readAsDataURL(file)
   })
 }
-export async function uploadFile(file: File, kind: 'image' | 'file'): Promise<Uploaded> {
-  const response = await fetch('/api/uploads', {
+// `base`: "/api", or a machine's (src/hub.ts apiBaseFor) when the thread lives there.
+export async function uploadFile(
+  file: File,
+  kind: 'image' | 'file',
+  base = '/api',
+): Promise<Uploaded> {
+  const response = await fetch(`${base}/uploads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

@@ -142,6 +142,16 @@ export async function handleApi(request: Request) {
     await loadDictationKey(secretsPath)
     // Other machines (machines.ts): their local addresses open with the first request.
     const machines = getMachines(join(dirname(service.store.path), 'machines.json'))
+    // The hub: a machine's threads in this sidebar. /api/m/<machine>/<path> goes to that machine's
+    // /api/<path> with its session (machines.ts forward(); only thread-related paths).
+    if (parts[0] === 'm' && parts[1] && parts[2]) {
+      const prefix = `/api/m/${parts[1]}/`
+      return await machines.forward(
+        decodeURIComponent(parts[1]),
+        url.pathname.slice(prefix.length),
+        request,
+      )
+    }
     if (parts[0] === 'machines') {
       macOnly('Managing machines')
       const body = request.method === 'GET' ? null : ((await request.json()) as unknown)

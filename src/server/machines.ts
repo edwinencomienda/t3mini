@@ -232,6 +232,36 @@ class MachineProxy {
   }
 }
 
+// The hub (one sidebar for this Mac and every machine): the browser reaches a machine's API
+// through this server at /api/m/<machine>/<path>, and this server adds the machine's session.
+// Only what threads need is forwarded; anything else (device access, machines, settings…) isn't.
+const hubPaths = new Set([
+  'bootstrap',
+  'events',
+  'threads',
+  'uploads',
+  'media',
+  'html',
+  'projects',
+  'models',
+  'search',
+])
+// Request headers a forwarded call keeps (never the browser's cookies or t3 mini's own headers).
+const forwardedRequest = ['content-type', 'accept', 'range', 'last-event-id']
+// Response headers passed back (never Set-Cookie: the machine's session stays here).
+const forwardedResponse = [
+  'content-type',
+  'content-length',
+  'content-range',
+  'accept-ranges',
+  'cache-control',
+  'content-security-policy',
+  'x-content-type-options',
+  'content-disposition',
+  'etag',
+  'last-modified',
+]
+
 // A free loopback port, from `start` up.
 async function freePort(start: number, taken: Set<number>) {
   for (let port = start; port < start + 200; port++) {
@@ -378,6 +408,48 @@ export class Machines {
         }
       }),
     )
+  }
+  // The hub: one call to a machine's API (see hubPaths), streamed both ways so live updates
+  // (Server-Sent Events) and media pass through. `path` is what follows /api/ on the machine.
+  async forward(id: string, path: string, request: Request) {
+    await this.load()
+    const machine = this.machines.get(id)
+    if (!machine) return Response.json({ error: 'That machine isn’t added.' }, { status: 404 })
+    const first = path.split('/')[0] ?? ''
+    if (!hubPaths.has(first)) return Response.json({ error: 'Not available.' }, { status: 404 })
+    const target = new URL(`/api/${path}`, machine.origin)
+    target.search = new URL(request.url).search
+    const headers = new Headers({
+      cookie: `${machine.cookie}=${machine.token}`,
+      origin: machine.origin,
+      'user-agent': agent,
+    })
+    for (const name of forwardedRequest) {
+      const value = request.headers.get(name)
+      if (value) headers.set(name, value)
+    }
+    const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
+    let reply: Response
+    try {
+      reply = await fetch(target, {
+        method: request.method,
+        headers,
+        redirect: 'manual',
+        signal: request.signal,
+        ...(hasBody ? { body: request.body, duplex: 'half' } : {}),
+      } as RequestInit)
+    } catch {
+      return Response.json(
+        { error: `Can’t reach ${machine.name}. Is it on, and on the same tailnet?` },
+        { status: 502 },
+      )
+    }
+    const back = new Headers()
+    for (const name of forwardedResponse) {
+      const value = reply.headers.get(name)
+      if (value) back.set(name, value)
+    }
+    return new Response(reply.body, { status: reply.status, headers: back })
   }
   async close() {
     await Promise.all([...this.proxies.values()].map((proxy) => proxy.stop()))

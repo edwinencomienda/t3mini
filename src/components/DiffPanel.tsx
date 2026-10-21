@@ -1,4 +1,5 @@
 import { Fragment, memo, useEffect, useRef, useState } from 'react'
+import { threadApi } from '../hub'
 import {
   ChevronRight,
   ChevronsDownUp,
@@ -232,7 +233,7 @@ export const DiffPanel = memo(function DiffPanel({
     // Debounced so a burst of tool steps triggers one git run.
     const timer = setTimeout(() => {
       setLoading(true)
-      fetch(`/api/threads/${threadId}/diff`, { signal: controller.signal })
+      fetch(`/api/${threadApi(threadId, 'diff')}`, { signal: controller.signal })
         .then(async (response) => {
           const data = await response.json()
           if (!response.ok) throw new Error(data.error || 'Could not load changes.')
@@ -266,7 +267,7 @@ export const DiffPanel = memo(function DiffPanel({
     const tick = async () => {
       if (document.visibilityState === 'visible') {
         try {
-          const response = await fetch(`/api/threads/${threadId}/diff/version`, {
+          const response = await fetch(`/api/${threadApi(threadId, 'diff/version')}`, {
             signal: controller.signal,
           })
           const { version } = (await response.json()) as { version: string | null }

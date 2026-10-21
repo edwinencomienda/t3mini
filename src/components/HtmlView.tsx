@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useApiBase } from '../hub'
 import { AppWindow, Code2, Maximize2, RotateCcw, TriangleAlert } from 'lucide-react'
 import { CopyButton } from './CopyButton'
 import { Modal } from './Modal'
@@ -42,15 +43,17 @@ const tokens = [
 const sizer = `(function(){var last=0;function post(){var h=Math.ceil(document.documentElement.scrollHeight);if(h!==last){last=h;parent.postMessage({t3html:'size',h:h},'*')}}addEventListener('load',post);new ResizeObserver(post).observe(document.documentElement);setTimeout(post,50)})()`
 
 const pages = new Map<string, Promise<string>>()
-const loadPage = (id: string) => {
-  let page = pages.get(id)
+// `base`: where the thread lives, here or on a machine (the hub's ApiBase).
+const loadPage = (base: string, id: string) => {
+  const key = `${base}/${id}`
+  let page = pages.get(key)
   if (!page) {
-    page = fetch(`/api/html/${encodeURIComponent(id)}`).then((response) => {
+    page = fetch(`${base}/html/${encodeURIComponent(id)}`).then((response) => {
       if (!response.ok) throw new Error('missing')
       return response.text()
     })
-    page.catch(() => pages.delete(id))
-    pages.set(id, page)
+    page.catch(() => pages.delete(key))
+    pages.set(key, page)
   }
   return page
 }
@@ -141,16 +144,17 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
   // Bumped to rebuild the frame (after it tried to navigate away, or on Reload).
   const [run, setRun] = useState(0)
   const [escaped, setEscaped] = useState(false)
+  const base = useApiBase()
   useEffect(() => {
     let current = true
-    loadPage(id).then(
+    loadPage(base, id).then(
       (page) => current && setHtml(page),
       () => current && setFailed(true),
     )
     return () => {
       current = false
     }
-  }, [id])
+  }, [base, id])
   const label = title || 'HTML from the agent'
   const restart = () => setRun((value) => value + 1)
   // Stopped, not restarted: running it again would just try again (you can, with Run again).

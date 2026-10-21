@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { threadApi } from '../hub'
 import { PreviewCard } from '@base-ui/react/preview-card'
 import { LoaderCircle } from 'lucide-react'
 import { effortLabel, permissionModes } from '../agent-settings'
@@ -39,7 +40,7 @@ function Glance({
   const [failed, setFailed] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
-    fetch(`/api/threads/${encodeURIComponent(id)}/glance`, { signal: controller.signal })
+    fetch(`/api/${threadApi(id, 'glance')}`, { signal: controller.signal })
       .then((response) => (response.ok ? (response.json() as Promise<ThreadGlance>) : null))
       .then((data) => {
         if (!data) return setFailed(true)

@@ -118,6 +118,8 @@ export type ThreadWorktree = {
 }
 export type Thread = {
   id: string
+  // In the hub only (the browser): the name of the machine this thread lives on (src/hub.ts).
+  machine?: string
   title: string
   provider: Provider
   // The project folder: what the sidebar groups by. A worktree thread works in its worktree.
@@ -166,6 +168,8 @@ export type ThreadSummary = Pick<
   Thread,
   'id' | 'title' | 'provider' | 'cwd' | 'status' | 'updatedAt'
 > & {
+  // In the hub only: the machine this thread lives on (src/hub.ts).
+  machine?: string
   // When you last sent a message (or created the thread). The sidebar sorts by this, so
   // streaming agents don't keep reshuffling the list.
   lastMessageAt: string
@@ -231,6 +235,8 @@ export type Project = {
 export type ProjectSummary = {
   path: string
   name?: string
+  // In the hub only: the machine this project is on (src/hub.ts).
+  machine?: string
   lastActiveAt: string
   // When it was added (or, for a folder that only has threads, its first thread): the
   // sidebar keeps projects in this order so they don't jump around with activity.

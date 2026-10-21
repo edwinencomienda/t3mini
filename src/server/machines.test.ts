@@ -116,3 +116,56 @@ it('refuses used codes, odd links, and public plain-HTTP addresses', async () =>
     code: 'x',
   })
 })
+
+it('forwards thread calls for the hub with the session, and nothing else', async () => {
+  const added = await machines.add({ link: `${origin}/pair?code=${code}` })
+  const forward = (path: string, init: RequestInit = {}) =>
+    machines.forward(
+      added.id,
+      path,
+      new Request(`http://127.0.0.1:4011/api/m/${added.id}/${path}?thread=t1`, init),
+    )
+  const reply = await forward('threads/t1', {
+    headers: { cookie: 'mine=1', 'x-t3-remote': '0', accept: 'application/json' },
+  })
+  expect(reply.status).toBe(200)
+  expect(await reply.json()).toMatchObject({ path: '/api/threads/t1?thread=t1' })
+  // The machine got this server's session, not the browser's cookies or t3 mini headers.
+  expect(seen.cookie).toBe('t3m_session=secret-token')
+  expect(seen['x-t3-remote']).toBeUndefined()
+  expect(seen.origin).toBe(origin)
+  // POST bodies pass through.
+  const sent = await forward('threads/t1/send', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'hi' }),
+  })
+  expect(sent.status).toBe(200)
+  // Only thread-related paths: not device access, machines, or settings.
+  for (const path of ['remote/pair', 'machines', 'ui-settings', 'dictation'])
+    expect((await forward(path)).status).toBe(404)
+  // An unknown machine.
+  const unknown = await machines.forward(
+    'nope',
+    'bootstrap',
+    new Request('http://127.0.0.1:4011/api/m/nope/bootstrap'),
+  )
+  expect(unknown.status).toBe(404)
+})
+it('keeps the machine’s cookies out of forwarded replies and says when it’s unreachable', async () => {
+  const added = await machines.add({ link: `${origin}/pair?code=${code}` })
+  const reply = await machines.forward(
+    added.id,
+    'threads/go',
+    new Request(`http://127.0.0.1:4011/api/m/${added.id}/threads/go`),
+  )
+  expect(reply.headers.get('set-cookie')).toBeNull()
+  await new Promise((resolve) => gateway.close(resolve))
+  const down = await machines.forward(
+    added.id,
+    'bootstrap',
+    new Request(`http://127.0.0.1:4011/api/m/${added.id}/bootstrap`),
+  )
+  expect(down.status).toBe(502)
+  gateway = http.createServer().listen(0)
+})

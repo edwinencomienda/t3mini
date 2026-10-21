@@ -29,17 +29,18 @@ let gallery: Preview[] = []
 export function setPreviewGallery(images: Preview[]) {
   gallery = images
 }
-export const uploadUrl = (id: string) => `/api/uploads/${encodeURIComponent(id)}`
-export function threadImages(messages: Message[]): Preview[] {
+// `base`: "/api" here, or a machine's (src/hub.ts apiBaseFor) for its thread's images.
+export const uploadUrl = (id: string, base = '/api') => `${base}/uploads/${encodeURIComponent(id)}`
+export function threadImages(messages: Message[], base = '/api'): Preview[] {
   return messages.flatMap((message) => [
     ...(message.attachments ?? [])
       .filter((item) => item.mimeType.startsWith('image/'))
-      .map((item) => ({ src: uploadUrl(item.id), alt: item.name, caption: item.name })),
+      .map((item) => ({ src: uploadUrl(item.id, base), alt: item.name, caption: item.name })),
     ...(message.blocks ?? []).flatMap((block) =>
       block.type === 'image'
         ? [
             {
-              src: uploadUrl(block.id),
+              src: uploadUrl(block.id, base),
               alt: block.caption || 'Image from the agent',
               ...(block.caption ? { caption: block.caption } : {}),
             },

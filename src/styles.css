@@ -2874,13 +2874,35 @@ body.resizing {
   /* Faint in light mode; dark mode uses the muted gray, since the faint one is too dim there. */
   color: var(--thread-project, var(--faint));
 }
-.thread-project > span:last-child {
+.thread-project > span:not(.project-avatar, .machine-tag) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .thread-project svg {
   flex-shrink: 0;
+}
+/* The hub: which machine a project or thread lives on, next to its name. Never squeezed out;
+   the name gets the ellipsis instead. */
+.machine-tag {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 9rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.project-toggle .machine-tag,
+.topbar-project .machine-tag {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Two-line rows (project, then title) grow to fit, and keep the time on the first line. */
 .thread-row:has(.thread-lines) {

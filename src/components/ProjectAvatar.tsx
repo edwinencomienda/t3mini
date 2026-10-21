@@ -1,4 +1,5 @@
 import { Avatar } from '@base-ui/react/avatar'
+import { apiBaseFor, parseRemote } from '../hub'
 import { MessageSquareDashed } from 'lucide-react'
 import { switchSetting } from '../switch-setting'
 import type { ProjectSummary } from '../types'
@@ -25,10 +26,13 @@ export function avatarSrc(
   path: string,
   project?: Pick<ProjectSummary, 'avatar' | 'image' | 'icon'>,
 ) {
+  // A machine's project (the hub): its image and icon come from that machine.
+  const remote = parseRemote(path)
+  const base = remote ? apiBaseFor(path) : '/api'
   if (project?.avatar === 'image' && project.image)
-    return `/api/uploads/${encodeURIComponent(project.image)}`
+    return `${base}/uploads/${encodeURIComponent(project.image)}`
   if (project?.avatar !== 'letter' && project?.icon)
-    return `/api/projects/icon?path=${encodeURIComponent(path)}`
+    return `${base}/projects/icon?path=${encodeURIComponent(remote ? remote.id : path)}`
   return undefined
 }
 

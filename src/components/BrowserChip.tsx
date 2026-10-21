@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { threadApi } from '../hub'
 import { Popover } from '@base-ui/react/popover'
 import { Globe, X } from 'lucide-react'
 import type { BrowserInfo } from '../types'
@@ -31,7 +32,7 @@ export function BrowserChip({ threadId, browser }: { threadId: string; browser?:
   if (!browser) return null
   async function close() {
     setError('')
-    const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/browser/close`, {
+    const response = await fetch(`/api/${threadApi(threadId, 'browser/close')}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -77,7 +78,7 @@ export function BrowserChip({ threadId, browser }: { threadId: string; browser?:
             ) : tick ? (
               <img
                 className="browser-preview"
-                src={`/api/threads/${encodeURIComponent(threadId)}/browser/preview?t=${tick}`}
+                src={`/api/${threadApi(threadId, 'browser/preview')}?t=${tick}`}
                 alt={`The agent’s browser showing ${browser.title || browser.url}`}
                 onError={() => setFailed(true)}
               />

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useApiBase } from '../hub'
 import { ExternalLink, Music } from 'lucide-react'
 import type { AudioBlock, Block, ImageBlock, VideoBlock } from '../blocks'
 import { Diagram } from './Diagram'
@@ -8,7 +9,7 @@ import { previewOnClick } from './ImagePreview'
 // Renders the rich content tools add to agent replies. Each block type gets one component;
 // add new types (charts, tables…) to the switch.
 function ImageView({ block }: { block: ImageBlock }) {
-  const src = `/api/uploads/${encodeURIComponent(block.id)}`
+  const src = `${useApiBase()}/uploads/${encodeURIComponent(block.id)}`
   return (
     <figure className="block-image">
       <a
@@ -34,7 +35,8 @@ function ImageView({ block }: { block: ImageBlock }) {
   )
 }
 
-const mediaUrl = (id: string) => `/api/media/${encodeURIComponent(id)}`
+// Media lives with the thread: here, or on its machine (the hub's ApiBase).
+const mediaUrl = (base: string, id: string) => `${base}/media/${encodeURIComponent(id)}`
 
 // When a turn finishes, its media moves into the final answer, so the player is replaced by a
 // new one. One you were playing carries on in the new player from where it was (this only
@@ -61,7 +63,7 @@ function useCarryOn(player: React.RefObject<HTMLMediaElement | null>, id: string
 function VideoView({ block }: { block: VideoBlock }) {
   const player = useRef<HTMLVideoElement>(null)
   const [failed, setFailed] = useState(false)
-  const src = mediaUrl(block.id)
+  const src = mediaUrl(useApiBase(), block.id)
   useCarryOn(player, block.id)
   return (
     <figure className="block-media">
@@ -99,7 +101,7 @@ try {
 function AudioView({ block }: { block: AudioBlock }) {
   const player = useRef<HTMLAudioElement>(null)
   const [failed, setFailed] = useState(false)
-  const src = mediaUrl(block.id)
+  const src = mediaUrl(useApiBase(), block.id)
   useCarryOn(player, block.id)
   return (
     <figure className="block-media block-audio">

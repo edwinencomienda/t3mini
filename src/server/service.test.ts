@@ -281,6 +281,28 @@ it('saves projects, lists them by recent activity, and only removes empty ones',
   await service.removeProject({ path: other })
   expect(service.projects().map((project) => project.path)).toEqual([created.cwd])
 })
+it('creates a missing project folder when asked, only inside the home folder', async () => {
+  const { realpath, stat } = await import('node:fs/promises')
+  // A stand-in home folder, so the test never touches the real one.
+  const home = await realpath(directory)
+  vi.stubEnv('HOME', home)
+  try {
+    // Not created without asking.
+    await expect(service.addProject({ path: '~/code/new-app' })).rejects.toThrow('does not exist')
+    const added = await service.addProject({ path: '~/code/new-app', create: true })
+    expect(added.path).toBe(join(home, 'code', 'new-app'))
+    expect((await stat(added.path)).isDirectory()).toBe(true)
+    // An existing folder is fine with create too.
+    await expect(service.addProject({ path: '~/code/new-app', create: true })).resolves.toBeTruthy()
+    // Never outside home, even through `..`.
+    for (const path of ['/tmp/t3-mini-outside-home', '~/../outside-home'])
+      await expect(service.addProject({ path, create: true })).rejects.toThrow(
+        'inside your home folder',
+      )
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})
 it('gives a short glance at a thread for the sidebar hover card', async () => {
   const created = await thread()
   expect(service.glance(created.id)).toMatchObject({ id: created.id, messageCount: 0 })

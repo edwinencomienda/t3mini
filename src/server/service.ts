@@ -1,6 +1,6 @@
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -96,6 +96,8 @@ const createSchema = z.object({
 })
 const projectSchema = z.object({ path: z.string().trim().min(1).max(4096) })
 const projectNameSchema = projectSchema.extend({ name: z.string().trim().max(80) })
+// Adding a project can create its folder first (Add project → Create it and add).
+const addProjectSchema = projectSchema.extend({ create: z.boolean().optional() })
 const projectAvatarSchema = projectSchema.extend({
   avatar: z.enum(['auto', 'letter', 'image']),
   image: z.string().max(100).optional(),
@@ -188,6 +190,24 @@ function projectProcesses(manager: ProcessManager, thread: Thread) {
     },
     stop: async (id: string) => manager.stop(own(id).id),
     restart: async (id: string) => manager.restart(own(id).id),
+  }
+}
+// A new project folder (with any missing parents), only inside the home folder, so a mistyped
+// path can't scatter folders across the system (from this Mac, a paired device, or another
+// t3 mini using this one as a machine).
+async function createFolder(input: string) {
+  const home = homedir()
+  const expanded =
+    input === '~' ? home : input.startsWith('~/') ? join(home, input.slice(2)) : input
+  if (!isAbsolute(expanded))
+    throw new HttpError(400, 'Use an absolute project folder path, or start with ~/ .')
+  const target = resolve(expanded)
+  if (target !== home && !target.startsWith(home + sep))
+    throw new HttpError(400, 'New folders can only be created inside your home folder (~/…).')
+  try {
+    await mkdir(target, { recursive: true, mode: 0o755 })
+  } catch {
+    throw new HttpError(400, 'Could not create that folder.')
   }
 }
 // Expands ~, requires an absolute path, and resolves symlinks to the real directory.
@@ -343,7 +363,9 @@ export class AgentService {
     return this.ui.settings
   }
   async addProject(input: unknown) {
-    const path = await resolveFolder(projectSchema.parse(input).path)
+    const { path: requested, create } = addProjectSchema.parse(input)
+    if (create) await createFolder(requested)
+    const path = await resolveFolder(requested)
     if (!this.projectStore.projects.has(path)) {
       this.projectStore.projects.set(path, { path, addedAt: new Date().toISOString() })
       try {

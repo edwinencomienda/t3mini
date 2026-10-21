@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { apiBaseFor, parseRemote } from '../hub'
 import { Menu } from '@base-ui/react/menu'
 import { Tabs } from '@base-ui/react/tabs'
 import { Check, ChevronDown, ChevronRight, Lock, LockOpen, RefreshCw } from 'lucide-react'
@@ -292,8 +293,15 @@ function useCatalog(provider: Provider, cwd: string) {
     const timer = setTimeout(() => {
       let request = reload ? undefined : inflight.get(cacheKey)
       if (!request) {
-        const params = new URLSearchParams({ provider, cwd, ...(reload ? { refresh: '1' } : {}) })
-        request = fetch(`/api/models?${params}`)
+        // A machine's thread (the hub): its models come from that machine's agents, for its
+        // own folder.
+        const remote = parseRemote(cwd)
+        const params = new URLSearchParams({
+          provider,
+          cwd: remote ? remote.id : cwd,
+          ...(reload ? { refresh: '1' } : {}),
+        })
+        request = fetch(`${apiBaseFor(cwd)}/models?${params}`)
           .then(async (response) => {
             if (!response.ok) throw new Error('Could not load models.')
             return (await response.json()) as ModelCatalog
