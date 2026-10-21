@@ -1,4 +1,5 @@
 import { Avatar } from '@base-ui/react/avatar'
+import { MessageSquareDashed } from 'lucide-react'
 import { switchSetting } from '../switch-setting'
 import type { ProjectSummary } from '../types'
 
@@ -39,10 +40,17 @@ export function ProjectAvatar({
 }: {
   path: string
   name: string
-  project?: Pick<ProjectSummary, 'avatar' | 'image' | 'icon'>
+  project?: Pick<ProjectSummary, 'avatar' | 'image' | 'icon' | 'chats'>
   // Larger, for Project settings.
   size?: 'large'
 }) {
+  // "No project" (chats): a chat bubble instead of a letter.
+  if (project?.chats)
+    return (
+      <span className={`project-avatar chats ${size ?? ''}`} aria-hidden>
+        <MessageSquareDashed size={size === 'large' ? 22 : 12} />
+      </span>
+    )
   const src = avatarSrc(path, project)
   return (
     <Avatar.Root

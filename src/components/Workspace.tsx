@@ -1687,8 +1687,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
       setBusy(false)
     }
   }
-  async function quickCreate(cwd: string) {
-    // One-click thread in an existing project, using the last provider and settings.
+  async function quickCreate(cwd: string | null) {
+    // One-click thread in an existing project (null: without a project, a chat), using the
+    // last provider and settings.
     if (busy) return
     const preferences = loadPreferences()
     const provider = bootstrap ? defaultAgent(bootstrap, preferences) : 'claude'
@@ -1697,7 +1698,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     try {
       const created = await api<Thread>('threads', 'POST', {
         provider,
-        cwd,
+        ...(cwd === null ? { noProject: true } : { cwd }),
         ...settingsFor(provider, preferences),
       })
       setThreads((current) => [
@@ -1841,12 +1842,18 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
   }
   async function remove(target: Pick<ThreadSummary, 'id' | 'title'> | null = thread) {
-    const branch = target && threads.find((item) => item.id === target.id)?.worktreeBranch
+    const summary = target && threads.find((item) => item.id === target.id)
+    const branch = summary?.worktreeBranch
     if (
       !target ||
       !(await confirm({
         title: 'Delete this thread?',
-        description: branch ? (
+        description: summary?.chat ? (
+          <>
+            <strong>{target.title}</strong> and its conversation will be removed from t3 mini. Its
+            folder is removed too if it’s empty; files the agent made there stay.
+          </>
+        ) : branch ? (
           <>
             <strong>{target.title}</strong> and its conversation will be removed from t3 mini. Its
             worktree folder is removed too, unless it has uncommitted changes; the branch{' '}
@@ -3560,26 +3567,32 @@ export function Workspace({ threadId }: { threadId?: string }) {
             } else {
               const path = menu.path
               const runningHere = threads.some((item) => item.cwd === path && isActive(item.status))
+              // "No project" isn't a real project: no renaming or avatar.
+              const chats = projects.some((project) => project.path === path && project.chats)
               items = [
                 {
                   label: 'New thread here',
                   icon: <SquarePen size={14} />,
                   onSelect: () => void quickCreate(path),
                 },
-                {
-                  label: 'Rename',
-                  icon: <Pencil size={14} />,
-                  onSelect: () => setRenamingProject({ path, name: projectName(path) }),
-                },
-                {
-                  label: 'Project settings…',
-                  icon: <Settings2 size={14} />,
-                  onSelect: () => setProjectSettings(path),
-                },
+                ...(chats
+                  ? []
+                  : [
+                      {
+                        label: 'Rename',
+                        icon: <Pencil size={14} />,
+                        onSelect: () => setRenamingProject({ path, name: projectName(path) }),
+                      },
+                      {
+                        label: 'Project settings…',
+                        icon: <Settings2 size={14} />,
+                        onSelect: () => setProjectSettings(path),
+                      },
+                    ]),
                 { label: 'Copy path', icon: <Copy size={14} />, onSelect: () => copyPath(path) },
                 'separator',
                 {
-                  label: 'Remove project',
+                  label: chats ? 'Delete all chats' : 'Remove project',
                   icon: <Trash2 size={14} />,
                   danger: true,
                   disabled: runningHere || busy,
@@ -3652,6 +3665,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
               shortcut: isMac ? '⇧⌘O' : 'Ctrl+Shift+O',
               run: () => openNewThread(),
             },
+            {
+              id: 'new-chat',
+              label: 'New thread without a project',
+              run: () => void quickCreate(null),
+            },
             { id: 'add-project', label: 'Add project', run: () => setAddProject(true) },
             {
               id: 'sidebar',
@@ -3706,6 +3724,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     </div>
   )
 }
+// The New thread dialog's "No project" choice (a chat, see server/chats.ts).
+const noProject = ':no-project'
 function NewThread({
   bootstrap,
   projects,
@@ -3740,7 +3760,11 @@ function NewThread({
       const preferences = loadPreferences()
       const provider = defaultAgent(bootstrap, preferences)
       const settings = settingsFor(provider, preferences)
-      const created = await api<Thread>('threads', 'POST', { provider, cwd, ...settings })
+      const created = await api<Thread>('threads', 'POST', {
+        provider,
+        ...(cwd === noProject ? { noProject: true } : { cwd }),
+        ...settings,
+      })
       rememberChoice(provider, settings, created.cwd)
       onCreated(created)
     } catch (error) {
@@ -3748,14 +3772,32 @@ function NewThread({
       setBusy(null)
     }
   }
-  // The project you're in first (Enter picks it, like before), then the rest by recent activity.
+  // No project (a chat in its own folder) first, always offered even before the first chat
+  // makes its folder; then the project you're in, then the rest by recent activity.
+  const chatsPath = projects.find((project) => project.chats)?.path
+  const current = chatsPath && initialProject === chatsPath ? noProject : initialProject
+  const noProjectItem: ProjectSummary = {
+    path: noProject,
+    name: 'No project',
+    chats: true,
+    lastActiveAt: projects.find((project) => project.chats)?.lastActiveAt ?? '',
+    addedAt: '',
+    threadCount: 0,
+  }
+  const others = projects.filter((project) => !project.chats)
   const ordered = [
-    ...projects.filter((project) => project.path === initialProject),
-    ...projects.filter((project) => project.path !== initialProject),
+    noProjectItem,
+    ...others.filter((project) => project.path === current),
+    ...others.filter((project) => project.path !== current),
   ]
+  const label = (project: ProjectSummary) =>
+    project.path === noProject ? 'No project' : projectName(project.path)
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   const shown = ordered.filter((project) => {
-    const text = `${projectName(project.path)} ${project.path}`.toLowerCase()
+    const text =
+      project.path === noProject
+        ? 'no project chat without'
+        : `${projectName(project.path)} ${project.path}`.toLowerCase()
     return words.every((word) => text.includes(word))
   })
   return (
@@ -3789,7 +3831,7 @@ function NewThread({
         onValueChange={(value, details) => {
           if (details.reason !== 'item-press') setQuery(value)
         }}
-        itemToStringValue={(project: ProjectSummary) => projectName(project.path)}
+        itemToStringValue={(project: ProjectSummary) => label(project)}
       >
         <label className="palette-search project-search">
           <Search size={15} aria-hidden />
@@ -3814,30 +3856,28 @@ function NewThread({
               disabled={Boolean(busy)}
             >
               <span className="project-item-icon">
-                {projectIcons ? (
-                  <ProjectAvatar
-                    path={project.path}
-                    name={projectName(project.path)}
-                    project={project}
-                  />
+                {projectIcons || project.chats ? (
+                  <ProjectAvatar path={project.path} name={label(project)} project={project} />
                 ) : (
                   <Folder size={15} />
                 )}
               </span>
               <span className="palette-text">
-                <span className="palette-label">{projectName(project.path)}</span>
+                <span className="palette-label">{label(project)}</span>
                 <span className="palette-detail" title={project.path}>
-                  {project.path}
+                  {project.path === noProject
+                    ? 'A chat with its own folder, outside your projects'
+                    : project.path}
                 </span>
               </span>
               <span className="palette-hint">
                 {busy === project.path ? (
                   <LoaderCircle size={13} className="status-spinner" aria-label="Creating" />
-                ) : project.path === initialProject ? (
+                ) : project.path === current ? (
                   'Current'
-                ) : (
+                ) : project.lastActiveAt ? (
                   relativeTime(project.lastActiveAt, now)
-                )}
+                ) : null}
               </span>
             </Autocomplete.Item>
           )}

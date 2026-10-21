@@ -1480,3 +1480,48 @@ describe('orchestration', () => {
     }
   })
 })
+
+describe('threads without a project', () => {
+  it('runs a chat in its own folder under "No project", and removes it only when empty', async () => {
+    const { readdir, stat, writeFile } = await import('node:fs/promises')
+    process.env.T3_MINI_CHATS_DIR = join(directory, 'chats')
+    try {
+      const created = await service.create({ provider: 'codex', noProject: true })
+      expect(created.chat).toBe(true)
+      expect(created.cwd.endsWith('/chats')).toBe(true)
+      // Not saved as a project, but shown as "No project" while it has chats.
+      expect(service.projectStore.projects.has(created.cwd)).toBe(false)
+      expect(service.projects().find((project) => project.path === created.cwd)).toMatchObject({
+        chats: true,
+        name: 'No project',
+      })
+      await service.send(created.id, { text: 'Fix my résumé, please!' })
+      await started
+      const today = new Date().toISOString().slice(0, 10)
+      expect(created.chatFolder).toBe(
+        join(created.cwd, `${today}-fix-my-r-sum-please-${created.id.slice(0, 8)}`),
+      )
+      expect(context.cwd).toBe(created.chatFolder)
+      expect(context.tools.cwd).toBe(created.chatFolder)
+      expect(service.list().find((item) => item.id === created.id)?.chat).toBe(true)
+      // A thread created in the chats folder (a chat's helper) is a chat too.
+      expect((await service.create({ provider: 'codex', cwd: created.cwd })).chat).toBe(true)
+      await settle(created.id, finish)
+      // A file the agent made keeps the folder; an empty one goes.
+      await writeFile(join(created.chatFolder!, 'notes.md'), 'hi\n')
+      await service.remove(created.id)
+      expect(await readdir(created.chatFolder!)).toEqual(['notes.md'])
+      const empty = await service.create({ provider: 'codex', noProject: true })
+      started = new Promise((resolve) => {
+        markStarted = resolve
+      })
+      await service.send(empty.id, { text: 'Hello' })
+      await started
+      await settle(empty.id, finish)
+      await service.remove(empty.id)
+      await expect(stat(empty.chatFolder!)).rejects.toThrow()
+    } finally {
+      delete process.env.T3_MINI_CHATS_DIR
+    }
+  })
+})

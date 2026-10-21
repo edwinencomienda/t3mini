@@ -4459,6 +4459,13 @@ body.resizing {
   overflow: hidden;
   border-radius: 4px;
 }
+/* "No project" (chats): a chat bubble on a neutral tint. */
+.project-avatar.chats {
+  display: inline-grid;
+  place-items: center;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
 .project-avatar-image {
   width: 100%;
   height: 100%;

@@ -122,6 +122,10 @@ export type Thread = {
   provider: Provider
   // The project folder: what the sidebar groups by. A worktree thread works in its worktree.
   cwd: string
+  // A thread without a project (server/chats.ts): cwd is the chats folder ("No project") and
+  // it works in chatFolder, its own folder made on the first message.
+  chat?: boolean
+  chatFolder?: string
   // Run in a worktree (chosen before the first message, created on the first send).
   useWorktree?: boolean
   // A helper thread: the lead thread that started it (start_thread), which it reports back to.
@@ -171,6 +175,8 @@ export type ThreadSummary = Pick<
   worktreeBranch?: string
   // A helper thread: its lead.
   parentId?: string
+  // A thread without a project (its own folder under "No project").
+  chat?: boolean
   // Finished or failed while nobody was looking (shared by every browser and device).
   unread?: boolean
 }
@@ -235,6 +241,8 @@ export type ProjectSummary = {
   // Chosen in Project settings (see Project).
   avatar?: ProjectAvatarKind
   image?: string
+  // "No project": the folder holding threads without a project (not a saved project).
+  chats?: boolean
 }
 export type ProviderHealth = { installed: boolean; version?: string }
 // View settings shared by every browser and window (kept on the server, sent with live

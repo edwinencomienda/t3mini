@@ -51,6 +51,7 @@ import { TabRegistry } from './tabs'
 import { uiChange } from './ui-settings'
 import { ProjectIcons } from './project-icons'
 import { ProcessManager } from './processes'
+import { chatsRoot, createChatFolder, ensureChatsRoot, removeChatFolder } from './chats'
 import {
   createWorktree,
   isWorktreeError,
@@ -85,7 +86,9 @@ export class HttpError extends Error {
 }
 const createSchema = z.object({
   provider: z.enum(['codex', 'claude']),
-  cwd: z.string().trim().min(1),
+  // The project folder, or noProject for a thread without one (a chat, see chats.ts).
+  cwd: z.string().trim().default(''),
+  noProject: z.boolean().default(false),
   model: settingsSchema.shape.model.default(''),
   effort: settingsSchema.shape.effort.default(''),
   serviceTier: settingsSchema.shape.serviceTier,
@@ -126,6 +129,7 @@ const summary = (thread: Thread): ThreadSummary => ({
   ...(thread.unread ? { unread: true } : {}),
   ...(thread.worktree ? { worktreeBranch: thread.worktree.branch } : {}),
   ...(thread.parentId ? { parentId: thread.parentId } : {}),
+  ...(thread.chat ? { chat: true } : {}),
   ...(thread.status === 'waiting'
     ? {
         waitingFor: thread.approvals.some((item) => item.questions?.length)
@@ -146,7 +150,7 @@ const helperBrief = (lead: Thread, task: string) =>
 const agentName = (provider: Provider) => (provider === 'claude' ? 'Claude' : 'Codex')
 // Where a thread works: its worktree when it has one, otherwise the project folder.
 export const workdir = (thread: Thread) =>
-  thread.worktree ? worktreeFolder(thread.worktree) : thread.cwd
+  thread.worktree ? worktreeFolder(thread.worktree) : (thread.chatFolder ?? thread.cwd)
 // What a thread's tools may do with processes: only its own project's, started inside the folder
 // it works in (its worktree, for a worktree thread).
 function projectProcesses(manager: ProcessManager, thread: Thread) {
@@ -294,6 +298,11 @@ export class AgentService {
       projects.set(thread.cwd, project)
     }
     for (const project of projects.values()) if (this.icons.known(project.path)) project.icon = true
+    // The chats folder shows as "No project".
+    for (const thread of this.store.threads.values()) {
+      const project = thread.chat ? projects.get(thread.cwd) : undefined
+      if (project) Object.assign(project, { chats: true, name: 'No project' })
+    }
     return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
   }
   // A saved project keeps its place in the sidebar after its threads are deleted: it remembers
@@ -568,7 +577,14 @@ export class AgentService {
   }
   async create(input: unknown) {
     const data = createSchema.parse(input)
-    const cwd = await resolveFolder(data.cwd)
+    // A chat lives in the chats folder ("No project"); so does a thread created there directly
+    // (a chat's helper). The folder is only made for a chat.
+    const cwd = data.noProject
+      ? await ensureChatsRoot().catch(() => {
+          throw new HttpError(500, 'Could not create the chats folder.')
+        })
+      : await resolveFolder(data.cwd)
+    const chat = data.noProject || cwd === (await realpath(chatsRoot()).catch(() => null))
     // Creating a thread shouldn't wait for an agent's CLI (~0.3 s to list its models): check
     // the effort against a list already in memory, or create now and check in the background.
     const tuned = Boolean(data.effort || data.serviceTier)
@@ -587,6 +603,7 @@ export class AgentService {
       title: 'New thread',
       provider: data.provider,
       cwd,
+      ...(chat ? { chat: true } : {}),
       model: data.model,
       effort: data.effort,
       ...(data.serviceTier ? { serviceTier: data.serviceTier } : {}),
@@ -605,7 +622,7 @@ export class AgentService {
       this.store.threads.delete(thread.id)
       throw new HttpError(500, 'Could not save the new thread.')
     }
-    if (!this.projectStore.projects.has(cwd)) {
+    if (!chat && !this.projectStore.projects.has(cwd)) {
       // Keep the folder in the sidebar even after its threads are deleted. Best effort:
       // the thread already exists, and the folder still appears while it has threads.
       this.projectStore.projects.set(cwd, { path: cwd, addedAt: now })
@@ -744,6 +761,8 @@ export class AgentService {
   private async cleanUpWorktrees(threads: Thread[]) {
     const kept: string[] = []
     for (const thread of threads) {
+      // A chat's folder goes only if it's empty: files the agent made there stay.
+      if (thread.chatFolder) await removeChatFolder(thread.chatFolder).catch(() => {})
       const worktree = thread.worktree
       if (!worktree) continue
       const changes = await worktreeChanges(worktree)
@@ -1116,6 +1135,18 @@ export class AgentService {
       },
     }
     try {
+      // A chat gets its own folder on its first turn, named from its first message.
+      if (thread.chat && !thread.chatFolder) {
+        const first = thread.messages.find((message) => message.role === 'user')
+        thread.chatFolder = await createChatFolder(
+          thread.cwd,
+          thread.id,
+          first?.text ?? thread.title,
+        )
+        await this.store.save().catch(() => {})
+        context.cwd = workdir(thread)
+        context.tools.cwd = context.cwd
+      }
       // A worktree thread gets its worktree on its first turn (and must still have it later).
       if (thread.useWorktree || thread.worktree) {
         await this.prepareWorktree(thread, touch)
