@@ -8,7 +8,7 @@ import type { Message, Thread } from '../types'
 // turns that fit are returned; `before` pages back to older ones.
 
 const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-// The thread id in a link (http://localhost:4310/threads/<id>, a phone's address too) or an id.
+// The thread id in a link (http://localhost:4011/threads/<id>, a phone's address too) or an id.
 export function threadIdFrom(reference: string) {
   return uuid.exec(reference)?.[0]?.toLowerCase()
 }

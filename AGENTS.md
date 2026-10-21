@@ -5,7 +5,9 @@ A small local web app for running Codex and Claude Code threads on project folde
 ## Commands
 
 ```sh
-bun run dev        # Vite dev server on http://127.0.0.1:4310
+bun run dev        # Vite dev server on http://127.0.0.1:4016 (data in .data)
+bun run compile    # the t3mini binary in dist/bin (--all: Linux and Intel Mac too)
+bun run install-cli  # compile + install to ~/.local/bin/t3mini (production: :4011, ~/.t3-mini/data)
 bun run test       # vitest (no paid provider calls; providers use fixtures/mocks)
 bun run typecheck  # tsc --noEmit
 bun run build
@@ -27,6 +29,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 
 ## Things to know
 
+- **Two copies: production and dev.** The user works in the installed `t3mini` binary (port 4011, data in `~/.t3-mini/data`) and changes t3 mini in the dev server (port 4016, `.data`). They never share data or ports; "restart" below means the dev server. The binary only changes when the user runs `t3mini update` / `bun run install-cli`. `app-server.mjs` is the production HTTP server for both `server.mjs` (Node) and the binary (`cli/t3mini.ts`, Bun, page files embedded by `cli/compile.ts`).
 - **Restart the dev server after server changes.** The service and the phone-access gateway live on `globalThis` so running agents survive hot reloads; new server code only takes effect after restarting `bun run dev`. Check that no thread is running first (`/api/bootstrap`, status `starting`/`working`/`waiting`), since a restart interrupts running turns.
 - **Keep the thread view fast.** Typing must not re-render the page: the composer textarea is uncontrolled (`draftText` ref + `hasDraft` flag in `Workspace.tsx`), so don't turn it back into `value={…}` state. Messages render through memoized `MessageView` / `MessageMarkdown` (Markdown parsing is the expensive part, ~100 ms for 80 replies; parsed replies are also cached across thread switches by `parseMarkdown()`), and `DiffPanel` is memoized with stable props (`closeDiff`). Keep new props to these stable, or they'll re-render on every live update. Long threads draw only their latest turns (`firstTurns`, `OlderTurns` adds more near the top, anchored to a turn key so new turns don't shift you) and remember each thread's place per tab (`places`, `savePlace`, `restorePlace`); keep scroll changes going through `pin()` and the settle window. Live updates (`/api/events`) send only the snapshot parts that changed for that tab (`changedParts()` in `api.ts`); a missing key means unchanged, so the client must only set state for keys that are present.
 - **Don't use `instanceof` on server error classes across modules.** After a hot reload the long-lived service throws errors from an older copy of `service.ts`, so `instanceof HttpError` fails and real 404s/409s turn into 500s. `api.ts` uses `isHttpError()` (checks by name and `status`); follow that pattern for new error types.
@@ -42,6 +45,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 
 - [docs/tools.md](docs/tools.md): the agent tool system (`show_image`, `show_diagram`, `show_html` and its sandbox, `show_video`, `play_audio`, and how to add tools such as charts).
 - [docs/browser.md](docs/browser.md): the agent browser (browser_* tools, which browser is used, the local-only and t3-mini-blocking rules, testing).
+- [docs/t3mini.md](docs/t3mini.md): the `t3mini` binary (commands, compile and install scripts, `app-server.mjs`) and planned commands (`t3mini pair` for machines, release updates, start at login).
 - [docs/orchestration.md](docs/orchestration.md): lead and helper threads (the start/message/list/stop/delete_thread tools, automatic reports, limits).
 - [docs/worktrees.md](docs/worktrees.md): worktree threads (choosing one, where and how worktrees are made, `.worktreeinclude`, cleanup, benchmarks, pitfalls).
 - [docs/phone-access.md](docs/phone-access.md): access from other devices (Settings → Devices: phones, tablets, other computers) over the local network (gateway, pairing, security model, pitfalls, testing, plus the planned Tailscale HTTPS follow-up).

@@ -5,9 +5,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4310",
+    "dev": "PORT=4016 T3_MINI_PHONE_PORT=4316 T3_MINI_TAILSCALE_PORT=8444 node --env-file-if-exists=.env node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4016",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server.mjs",
+    "compile": "bun cli/compile.ts",
+    "install-cli": "bun cli/install.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "format": "prettier --write ."

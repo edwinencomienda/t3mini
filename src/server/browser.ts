@@ -82,12 +82,13 @@ function playwrightShell() {
   return undefined
 }
 
-// t3 mini's own ports: the app, the phone-access gateway, and its Tailscale HTTPS port.
+// This t3 mini's own ports: the app, the phone-access gateway, and its Tailscale HTTPS port. The
+// dev server sets PORT=4016 (and its own phone ports); production defaults to 4011. Only this
+// copy's ports: agents may open the other copy (e.g. to check the dev UI from production).
 export function blockedPorts() {
   return new Set(
     [
-      Number(process.env.PORT) || 4310,
-      4310,
+      Number(process.env.PORT) || 4011,
       Number(process.env.T3_MINI_PHONE_PORT) || 4311,
       Number(process.env.T3_MINI_TAILSCALE_PORT) || 8443,
     ].filter((port) => Number.isInteger(port) && port > 0),

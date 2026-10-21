@@ -6,7 +6,7 @@ How t3 mini lets a phone use the app, over the local network or over Tailscale, 
 
 ## Summary
 
-- The app server stays **loopback-only** (`127.0.0.1:4310`). Phone access never changes that.
+- The app server stays **loopback-only** (`127.0.0.1:4011` for the installed `t3mini`, `4016` for the dev server). Phone access never changes that. The dev server uses its own gateway ports (4316, Tailscale 8444), so both copies can have phone access on at once.
 - When the user switches phone access on, a separate **gateway** (`src/server/remote.ts`) starts on port `4311`. It authenticates every request and forwards allowed ones to the app over loopback. Two modes:
   - **Local network** (`lan`, plain HTTP): the gateway listens on all interfaces.
   - **Tailscale** (`tailscale`, HTTPS): the gateway listens on **loopback only**, and `tailscale serve` (`src/server/tailscale.ts`) publishes it at `https://<MagicDNS name>:8443` to the tailnet. See [Tailscale (HTTPS)](#tailscale-https).
@@ -30,7 +30,7 @@ http://10.10.16.103:4311/…  ──►  Gateway (remote.ts, 0.0.0.0:4311, only 
                                         Host/Origin → 127.0.0.1:<app port>
                                         strip client x-t3-* headers, Referer, session cookie
                                         add x-t3-remote: 1
-                                 ──►  App (Vite dev or server.mjs, 127.0.0.1:4310)
+                                 ──►  App (t3mini 127.0.0.1:4011, or dev 127.0.0.1:4016)
                                         checkRequest(): loopback + same-origin  ✓ (rewritten)
                                         handleApi(): remote = x-t3-remote === '1'
 ```
@@ -125,7 +125,7 @@ Automated (`bun run test`):
 Manual end-to-end on the Mac (no phone needed). Run with the dev server up and no agents running; it pairs a fake device over the real LAN address, then cleans up:
 
 ```sh
-L=http://127.0.0.1:4310; H='Content-Type: application/json'
+L=http://127.0.0.1:4016; H='Content-Type: application/json'
 curl -s -X POST -H "$H" -d '{"enabled":true}' $L/api/remote
 URL=$(curl -s -X POST -H "$H" -d '{}' $L/api/remote/pair | node -pe 'JSON.parse(require("fs").readFileSync(0)).links[0].url')
 HOST=$(echo "$URL" | sed -E 's#http://([^/]+)/.*#\1#')
@@ -189,7 +189,7 @@ https://mac.tail1234.ts.net:8443/…  ──WireGuard──►  tailscaled (`tai
                                                          3. Origin, if present, https://<that host>
                                                          4. pairing / __Host-t3m_session cookie
                                                          5. same header rewrite as local network
-                                                  ──►  App (127.0.0.1:4310)
+                                                  ──►  App (127.0.0.1:4011 / 4016)
 ```
 
 - **`src/server/tailscale.ts`**: `tailscaleStatus()` (`tailscale status --json`: `BackendState === 'Running'` and `Self.DNSName`, trailing dot stripped; `status` exits non-zero when stopped but still prints JSON), `serveGateway()` (`tailscale serve --bg --https=<port> http://127.0.0.1:<gateway>`; when the tailnet hasn't enabled HTTPS/Serve, the CLI prints a `login.tailscale.com` link, which is shown to the user), `stopServingGateway()` (reads `serve status --json` and runs `serve --https=<port> off` only if that port proxies to our gateway), and `stopServingGatewayNow()` for process exit. All through `execFile` with timeouts, no shell.
