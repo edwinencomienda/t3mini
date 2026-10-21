@@ -39,27 +39,54 @@ writeFileSync(
   ].join('\n'),
 )
 
+// Playwright reads its own package.json and browsers.json from "the folder this file is in" when it
+// loads. In a binary that's the folder it was built in, which doesn't exist on any other machine
+// (it only worked where the repo's node_modules happened to be). Bundle both files instead.
+const playwrightOwnFiles: import('bun').BunPlugin = {
+  name: 'playwright-own-files',
+  setup(build) {
+    build.onLoad({ filter: /playwright-core[\\/]lib[\\/]coreBundle\.js$/ }, async (args) => {
+      let found = 0
+      const contents = (await Bun.file(args.path).text()).replace(
+        /require\(import_path\d+\.default\.join\(packageRoot, "(package|browsers)\.json"\)\)/g,
+        (_, name: string) => {
+          found++
+          return `require("../${name}.json")`
+        },
+      )
+      if (found !== 2)
+        throw new Error(
+          `playwright-core changed (${found} of 2 file lookups found): update cli/compile.ts.`,
+        )
+      return { contents, loader: 'js' }
+    })
+  },
+}
+
 const targets = process.argv.includes('--all')
-  ? ['bun-darwin-arm64', 'bun-darwin-x64', 'bun-linux-x64', 'bun-linux-arm64']
+  ? (['bun-darwin-arm64', 'bun-darwin-x64', 'bun-linux-x64', 'bun-linux-arm64'] as const)
   : [undefined]
 mkdirSync(join(root, 'dist', 'bin'), { recursive: true })
 for (const target of targets) {
   const outfile = join(root, 'dist', 'bin', target ? `t3mini-${target.slice(4)}` : 't3mini')
-  run('bun', [
-    'build',
-    '--compile',
-    '--minify',
-    // Settings come from ~/.t3-mini/.env (see cli/t3mini.ts), never a stray .env or bunfig.toml
-    // in whatever folder the binary is started from.
-    '--no-compile-autoload-dotenv',
-    '--no-compile-autoload-bunfig',
+  const result = await Bun.build({
+    entrypoints: [join(root, 'cli', 't3mini.ts')],
+    compile: {
+      outfile,
+      ...(target ? { target } : {}),
+      // Settings come from ~/.t3-mini/.env (see cli/t3mini.ts), never a stray .env or
+      // bunfig.toml in whatever folder the binary is started from.
+      autoloadDotenv: false,
+      autoloadBunfig: false,
+    },
+    minify: true,
     // Playwright's optional Firefox (BiDi) support; t3 mini drives Chromium browsers over CDP.
-    '--external',
-    'chromium-bidi/*',
-    ...(target ? [`--target=${target}`] : []),
-    'cli/t3mini.ts',
-    '--outfile',
-    outfile,
-  ])
+    external: ['chromium-bidi/*'],
+    plugins: [playwrightOwnFiles],
+  })
+  if (!result.success) {
+    for (const log of result.logs) console.error(String(log))
+    process.exit(1)
+  }
   console.log(`→ ${relative(root, outfile)}`)
 }

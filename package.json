@@ -2,7 +2,7 @@
   "name": "t3-mini",
   "private": true,
   "packageManager": "bun@1.4.3",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "PORT=4016 T3_MINI_PHONE_PORT=4316 T3_MINI_TAILSCALE_PORT=8444 node --env-file-if-exists=.env node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4016",
