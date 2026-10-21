@@ -1871,9 +1871,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     )
       return
     setBusy(true)
+    const next = nextAfterDelete([target.id])
     try {
       keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
-      forget(target.id)
+      forget(target.id, next)
     } catch (error) {
       setError((error as Error).message)
     } finally {
@@ -1888,17 +1889,30 @@ export function Workspace({ threadId }: { threadId?: string }) {
         `Kept ${kept.length === 1 ? 'a worktree' : `${kept.length} worktrees`} with uncommitted changes: ${kept.join(', ')}`,
       )
   }
-  // Browser-side cleanup after a thread is deleted (the list itself updates live).
-  function forget(id: string) {
+  // Browser-side cleanup after a thread is deleted (the list itself updates live). If it was
+  // the open one, next (see nextAfterDelete) opens instead of the empty screen.
+  function forget(id: string, next: string | null = null) {
     drafts.current.delete(id)
     markRead(id)
     setToasts((current) => current.filter((item) => item.thread.id !== id))
     if (id === activeId) {
-      void navigate({ to: '/' })
       threadCache.current.delete(id)
+      if (next) return select(next)
+      void navigate({ to: '/' })
       setThread(null)
       setDraft('')
     }
+  }
+  // The thread to open after deleting these ones when the open thread is among them: the most
+  // recent left in its project, else the most recent of the rest, within the sidebar's project
+  // filter. Null: nothing left, so the empty screen.
+  function nextAfterDelete(gone: string[]) {
+    if (!activeId || !gone.includes(activeId)) return null
+    const project = threads.find((item) => item.id === activeId)?.cwd ?? thread?.cwd
+    const left = threads
+      .filter((item) => !gone.includes(item.id) && (!filterPath || item.cwd === filterPath))
+      .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+    return (left.find((item) => item.cwd === project) ?? left[0])?.id ?? null
   }
   // Deletes the picked threads after one confirmation. Running threads are kept (stop them
   // first, as with a single delete) and you're told how many.
@@ -1930,10 +1944,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     let failed = 0
+    const next = nextAfterDelete(deletable.map((item) => item.id))
     for (const target of deletable)
       try {
         keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
-        forget(target.id)
+        forget(target.id, next)
       } catch {
         failed++
       }
@@ -1977,11 +1992,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (!confirmed) return
     setBusy(true)
     setError('')
+    const next = nextAfterDelete(owned.map((item) => item.id))
     try {
       keptWorktrees(
         await api<DeleteResult>('projects', 'DELETE', { path, threads: owned.length > 0 }),
       )
-      for (const item of owned) forget(item.id)
+      for (const item of owned) forget(item.id, next)
       setPicked(
         (current) => new Set([...current].filter((id) => !owned.some((item) => item.id === id))),
       )
