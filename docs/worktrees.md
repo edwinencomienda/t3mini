@@ -23,12 +23,12 @@ A thread can work in its own **git worktree**: a second checkout of the project 
 
 Measured on an M-series Mac (APFS SSD) with local clones of real projects, median of 5 runs, timing each function in `worktrees.ts`: `createWorktree`, `copyIncluded`, `worktreeChanges`, `removeWorktree`. Each clone had a real-size `node_modules` where the project has one, a `.env`, and a `.worktreeinclude` listing `.env`.
 
-| Repository                | Tracked files | Create (total) | `.worktreeinclude` copy | Changes check | Remove |
-| ------------------------- | ------------- | -------------- | ----------------------- | ------------- | ------ |
-| worktree-demo             | 6             | 34 ms          | 7 ms                    | 7 ms          | 7 ms   |
-| t3-mini (+ 33k-file deps) | 159           | 115 ms         | 58 ms                   | 13 ms         | 12 ms  |
-| myapp (+ 70k-file deps) | 1,749         | 241 ms         | 79 ms                   | 87 ms         | 86 ms  |
-| t3code                    | 28,110        | 2.3 s          | 117 ms                  | 0.9 s         | 1.3 s  |
+| Repository                     | Tracked files | Create (total) | `.worktreeinclude` copy | Changes check | Remove |
+| ------------------------------ | ------------- | -------------- | ----------------------- | ------------- | ------ |
+| worktree-demo                  | 6             | 34 ms          | 7 ms                    | 7 ms          | 7 ms   |
+| t3-mini (+ 33k-file deps)      | 159           | 115 ms         | 58 ms                   | 13 ms         | 12 ms  |
+| a larger app (+ 70k-file deps) | 1,749         | 241 ms         | 79 ms                   | 87 ms         | 86 ms  |
+| t3code                         | 28,110        | 2.3 s          | 117 ms                  | 0.9 s         | 1.3 s  |
 
 - Creating is mostly `git worktree add` writing out the files, so it grows with the size of the checkout: well under a second for typical apps, a couple of seconds for very large repositories.
 - In t3 mini itself, the demo project's first worktree took **53 ms** to create (shown on the step), and a whole Claude turn that checked the folder, branch, and `.env` took about 6 s. Deleting the thread, including removing its worktree, took 24 ms.
