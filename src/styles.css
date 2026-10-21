@@ -12,6 +12,9 @@
   --muted: #f4f4f5;
   --muted-foreground: #71717a;
   --faint: #a1a1aa;
+  /* Letter avatars (projects without an icon): a soft tint of the project's color. */
+  --avatar-tint: 0.16;
+  --avatar-letter: 0.5 0.14;
   --accent: #f0f0f2;
   --border: #e4e4e7;
   --input: #d4d4d8;
@@ -43,6 +46,8 @@
     --muted-foreground: #8e8e8e;
     --faint: #5c5c5c;
     --thread-project: var(--muted-foreground);
+    --avatar-tint: 0.22;
+    --avatar-letter: 0.82 0.11;
     --accent: rgb(255 255 255 / 5%);
     --border: rgb(255 255 255 / 7%);
     --input: rgb(255 255 255 / 10%);
@@ -68,6 +73,8 @@
   --muted-foreground: #8e8e8e;
   --faint: #5c5c5c;
   --thread-project: var(--muted-foreground);
+  --avatar-tint: 0.22;
+  --avatar-letter: 0.82 0.11;
   --accent: rgb(255 255 255 / 5%);
   --border: rgb(255 255 255 / 7%);
   --input: rgb(255 255 255 / 10%);
@@ -4341,7 +4348,8 @@ body.resizing {
 }
 
 /* Project avatars in the sidebar (Base UI Avatar): the project's own icon, or its first
-   letter on a color while it loads or when there's none. */
+   letter on a soft tint of its color (the letter in that color) while it loads or when there's
+   none. The tint and letter tones are theme tokens (--avatar-tint, --avatar-letter). */
 .project-avatar {
   display: inline-flex;
   flex-shrink: 0;
@@ -4373,8 +4381,8 @@ body.resizing {
   justify-content: center;
   width: 100%;
   height: 100%;
-  background: oklch(0.62 0.12 var(--avatar-hue));
-  color: #fff;
+  background: oklch(0.62 0.12 var(--avatar-hue) / var(--avatar-tint));
+  color: oklch(var(--avatar-letter) var(--avatar-hue));
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
