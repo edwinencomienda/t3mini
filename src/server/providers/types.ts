@@ -15,6 +15,8 @@ export type PromptImage = { path: string; mimeType: string }
 export type Steer = (input: { prompt: string; images: PromptImage[] }) => Promise<boolean>
 export type ProviderContext = {
   thread: Thread
+  // The folder the agent works in: the project, or the thread's worktree.
+  cwd: string
   prompt: string
   images: PromptImage[]
   signal: AbortSignal

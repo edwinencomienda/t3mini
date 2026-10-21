@@ -40,6 +40,7 @@ it.each(['', 'low'] as const)(
       >
     })
     const ctx: ProviderContext = {
+      cwd: process.cwd(),
       thread: {
         id: 'thread',
         title: 'Test',
@@ -63,6 +64,7 @@ it.each(['', 'low'] as const)(
         attach: vi.fn(),
         saveImage: vi.fn(),
         processes: {} as never,
+        threads: {} as never,
         browser: {} as never,
         saveHtml: async () => ({ id: 'x.html' }),
         saveMedia: async () => ({ id: 'x.mp4' }),
@@ -123,6 +125,7 @@ it('steers messages into the running turn until its result, then stops accepting
   })
   let steer!: Parameters<NonNullable<ProviderContext['onSteer']>>[0]
   const ctx: ProviderContext = {
+    cwd: process.cwd(),
     thread: {
       id: 'thread',
       title: 'Test',
@@ -145,6 +148,7 @@ it('steers messages into the running turn until its result, then stops accepting
       attach: vi.fn(),
       saveImage: vi.fn(),
       processes: {} as never,
+      threads: {} as never,
       browser: {} as never,
       saveHtml: async () => ({ id: 'x.html' }),
       saveMedia: async () => ({ id: 'x.mp4' }),
@@ -183,6 +187,7 @@ it('gives Claude the t3 mini tools and runs display-only ones without asking', a
   })
   const approve = vi.fn(async () => false)
   const ctx = {
+    cwd: process.cwd(),
     thread: {
       id: 't',
       title: 'Test',
@@ -205,6 +210,7 @@ it('gives Claude the t3 mini tools and runs display-only ones without asking', a
       attach: vi.fn(),
       saveImage: vi.fn(),
       processes: {} as never,
+      threads: {} as never,
       browser: {} as never,
       saveHtml: async () => ({ id: 'x.html' }),
       saveMedia: async () => ({ id: 'x.mp4' }),
@@ -316,6 +322,7 @@ it('asks questions, labels subagent steps, and reports background tasks', async 
     .mockResolvedValueOnce({ 'How should v2 login handle 2FA users?': 'Block 2FA users' })
     .mockResolvedValueOnce(null)
   const ctx: ProviderContext = {
+    cwd: process.cwd(),
     thread: {
       id: 'thread',
       title: 'Test',
@@ -338,6 +345,7 @@ it('asks questions, labels subagent steps, and reports background tasks', async 
       attach: vi.fn(),
       saveImage: vi.fn(),
       processes: {} as never,
+      threads: {} as never,
       browser: {} as never,
       saveHtml: async () => ({ id: 'x.html' }),
       saveMedia: async () => ({ id: 'x.mp4' }),
@@ -431,6 +439,7 @@ it('reports compacting the conversation as a step, with how much it shrank', asy
   })
   const activity = vi.fn()
   await runClaude({
+    cwd: process.cwd(),
     thread: {
       id: 'thread',
       title: 'Test',

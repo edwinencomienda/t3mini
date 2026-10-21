@@ -165,6 +165,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     processes: {} as never,
+    threads: {} as never,
     rename: vi.fn(),
     browser: {
       page: () => browsers.page(thread),

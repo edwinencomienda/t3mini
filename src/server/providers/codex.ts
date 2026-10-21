@@ -25,7 +25,7 @@ export const runCodex: Runner = async (ctx) => {
   })
   void done.catch(() => {})
   const client = openCodexClient({
-    cwd: ctx.thread.cwd,
+    cwd: ctx.cwd,
     onError: (error) => {
       if (!finished) fail(error)
     },
@@ -98,7 +98,7 @@ export const runCodex: Runner = async (ctx) => {
         ) {
           ctx.activity({
             id,
-            ...describeCodexItem(item, ctx.thread.cwd, {
+            ...describeCodexItem(item, ctx.cwd, {
               refName: (ref) => ctx.tools.browser?.refName(ref),
             }),
             status:
@@ -233,7 +233,7 @@ export const runCodex: Runner = async (ctx) => {
             }),
         // What t3 mini's tools are for; sent on resume too, so older threads get it.
         developerInstructions: toolInstructions,
-        cwd: ctx.thread.cwd,
+        cwd: ctx.cwd,
         approvalPolicy: policy.approvalPolicy,
         approvalsReviewer: policy.approvalsReviewer,
         sandbox: policy.sandbox,

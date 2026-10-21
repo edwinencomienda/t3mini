@@ -47,6 +47,7 @@ const setup = async () => {
     saveMedia: (file, kind) => uploads.saveMedia(file, kind),
     readThread: async () => '',
     processes: {} as never,
+    threads: {} as never,
     browser: {} as never,
     rename: vi.fn(),
   }

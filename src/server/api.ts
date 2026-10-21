@@ -525,6 +525,8 @@ export async function handleApi(request: Request) {
       if (id && request.method === 'POST') {
         if (parts[2] === 'settings')
           return Response.json(await service.updateSettings(id, await request.json()))
+        if (parts[2] === 'worktree')
+          return Response.json(await service.setWorktree(id, await request.json()))
         if (parts[2] === 'send')
           return Response.json(await service.send(id, await request.json()), { status: 202 })
         if (parts[2] === 'edit')

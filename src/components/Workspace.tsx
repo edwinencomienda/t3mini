@@ -20,6 +20,8 @@ import {
   ExternalLink,
   Folder,
   FolderPlus,
+  FolderGit2,
+  Workflow,
   FileUp,
   FileDiff,
   FileText,
@@ -148,6 +150,7 @@ import {
   type UiSettings,
   type GitInfo,
   type PullRequest,
+  type HelperReport,
   type Message,
   type ProjectSummary,
   type Provider,
@@ -290,6 +293,42 @@ function LinkedText({ text }: { text: string }) {
     </>
   )
 }
+// A helper's report in its lead thread (orchestration): who, how it went, its branch, and its
+// answer. The full text (with the header the agent reads) stays in the message for copying.
+const reportLabels: Record<HelperReport['status'], string> = {
+  completed: 'Finished',
+  failed: 'Failed',
+  waiting: 'Waiting for you',
+}
+function ReportCard({ message, report }: { message: Message; report: HelperReport }) {
+  return (
+    <div className={`report-card ${report.status}`}>
+      <div className="report-head">
+        <Workflow size={13} aria-hidden />
+        <Link to="/threads/$threadId" params={{ threadId: report.threadId }}>
+          {report.title}
+        </Link>
+        <span className="report-status">{reportLabels[report.status]}</span>
+        {report.branch ? (
+          <span className="report-branch">
+            <GitBranch size={11} aria-hidden />
+            {report.branch}
+          </span>
+        ) : null}
+      </div>
+      <div className="markdown report-answer">
+        <MessageMarkdown text={report.answer} />
+      </div>
+      {message.unsent ? (
+        <span className="message-note">
+          Not sent to the agent · it reacted to 10 reports in a row; write to continue
+        </span>
+      ) : message.queued ? (
+        <span className="message-note">Queued · goes to the agent when its turn ends</span>
+      ) : null}
+    </div>
+  )
+}
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
@@ -307,6 +346,13 @@ const MessageView = memo(
     blocks?: Block[]
     leading?: Block[]
   }) {
+    // A helper thread's report to this (lead) thread: a card with a link to the helper.
+    if (message.report)
+      return (
+        <article className="message report">
+          <ReportCard message={message} report={message.report} />
+        </article>
+      )
     return (
       <article className={`message ${message.role}`}>
         {message.role === 'user' ? (
@@ -399,6 +445,8 @@ const MessageView = memo(
       (after.blocks ?? after.message.blocks)?.length &&
     before.leading?.length === after.leading?.length,
 )
+// What deleting threads reports: worktrees kept because they had uncommitted changes.
+type DeleteResult = { keptWorktrees?: string[] }
 // "1 thread", "3 threads".
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 // The composer grows with its text (or a live dictation preview) up to this height, then scrolls.
@@ -1021,20 +1069,22 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const turnActive = thread ? isActive(thread.status) : false
   // The open thread's project, known from the sidebar list even before the thread loads.
   const activeCwd = thread?.cwd ?? threads.find((item) => item.id === activeId)?.cwd
+  // Where it works, which is what git reports on: a worktree thread has its own branch.
+  const gitFolder = thread?.worktree?.path ?? activeCwd
   useEffect(() => {
-    setGit(activeCwd ? (gitCache.current.get(activeCwd) ?? null) : null)
-    if (!activeId || !activeCwd) return
+    setGit(gitFolder ? (gitCache.current.get(gitFolder) ?? null) : null)
+    if (!activeId || !gitFolder) return
     const controller = new AbortController()
     const load = () =>
       api<GitInfo>(`threads/${activeId}/git`, 'GET', undefined, controller.signal)
         .then((info) => {
           // Keep the last known pull request on screen while it's looked up again.
-          const known = gitCache.current.get(activeCwd)
+          const known = gitCache.current.get(gitFolder)
           const shown =
             known?.branch === info.branch && known.pullRequest
               ? { ...info, pullRequest: known.pullRequest }
               : info
-          gitCache.current.set(activeCwd, shown)
+          gitCache.current.set(gitFolder, shown)
           setGit(shown)
           // The pull request is a network lookup, so it follows the (instant) branch.
           if (!info.branch || info.detached || !info.url) return
@@ -1045,7 +1095,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             controller.signal,
           ).then(({ pullRequest }) => {
             const next = { ...info, pullRequest }
-            gitCache.current.set(activeCwd, next)
+            gitCache.current.set(gitFolder, next)
             setGit((current) => (current?.branch === info.branch ? next : current))
           })
         })
@@ -1056,7 +1106,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       controller.abort()
       window.removeEventListener('focus', load)
     }
-  }, [activeId, activeCwd, turnActive])
+  }, [activeId, gitFolder, turnActive])
   useLayoutEffect(() => {
     // Keep the chat pinned to the bottom while it grows (streamed text, work log, status
     // lines) or while the chat area shrinks (a taller composer), unless the user scrolled up.
@@ -1606,6 +1656,20 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setDraft(activeId ? drafts.current.get(activeId) || '' : '')
     stickToBottom.current = true
   }, [activeId])
+  // Local or a new worktree, before the first message (the worktree is made on the first send).
+  async function chooseWorktree(enabled: boolean) {
+    if (!activeId || !thread || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await api<Thread>(`threads/${activeId}/worktree`, 'POST', { enabled })
+      if (selectedId.current === activeId) setThread(updated)
+    } catch (error) {
+      setError((error as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
   async function updateSettings(settings: AgentSettings, provider = thread?.provider) {
     if (!activeId || !thread || busy) return
     setBusy(true)
@@ -1662,7 +1726,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const fresh = !element.value && !pending[thread.id]?.length
     if (current ? element.value !== current.text : !fresh || step > 0) return false
     const sent = thread.messages.filter(
-      (message) => message.role === 'user' && (message.text || message.attachments?.length),
+      (message) =>
+        message.role === 'user' && !message.report && (message.text || message.attachments?.length),
     )
     const index = (current?.index ?? sent.length) + step
     if (index < 0) return true
@@ -1776,11 +1841,18 @@ export function Workspace({ threadId }: { threadId?: string }) {
     }
   }
   async function remove(target: Pick<ThreadSummary, 'id' | 'title'> | null = thread) {
+    const branch = target && threads.find((item) => item.id === target.id)?.worktreeBranch
     if (
       !target ||
       !(await confirm({
         title: 'Delete this thread?',
-        description: (
+        description: branch ? (
+          <>
+            <strong>{target.title}</strong> and its conversation will be removed from t3 mini. Its
+            worktree folder is removed too, unless it has uncommitted changes; the branch{' '}
+            <strong>{branch}</strong> is kept.
+          </>
+        ) : (
           <>
             <strong>{target.title}</strong> and its conversation will be removed from t3 mini. Files
             in the project aren’t affected.
@@ -1793,13 +1865,21 @@ export function Workspace({ threadId }: { threadId?: string }) {
       return
     setBusy(true)
     try {
-      await api(`threads/${target.id}`, 'DELETE', {})
+      keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
       forget(target.id)
     } catch (error) {
       setError((error as Error).message)
     } finally {
       setBusy(false)
     }
+  }
+  // Worktrees with uncommitted changes stay on disk when their thread is deleted: say where.
+  function keptWorktrees(result: DeleteResult) {
+    const kept = result.keptWorktrees ?? []
+    if (kept.length)
+      setError(
+        `Kept ${kept.length === 1 ? 'a worktree' : `${kept.length} worktrees`} with uncommitted changes: ${kept.join(', ')}`,
+      )
   }
   // Browser-side cleanup after a thread is deleted (the list itself updates live).
   function forget(id: string) {
@@ -1845,7 +1925,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     let failed = 0
     for (const target of deletable)
       try {
-        await api(`threads/${target.id}`, 'DELETE', {})
+        keptWorktrees(await api<DeleteResult>(`threads/${target.id}`, 'DELETE', {}))
         forget(target.id)
       } catch {
         failed++
@@ -1891,7 +1971,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setBusy(true)
     setError('')
     try {
-      await api('projects', 'DELETE', { path, threads: owned.length > 0 })
+      keptWorktrees(
+        await api<DeleteResult>('projects', 'DELETE', { path, threads: owned.length > 0 }),
+      )
       for (const item of owned) forget(item.id)
       setPicked(
         (current) => new Set([...current].filter((id) => !owned.some((item) => item.id === id))),
@@ -2761,6 +2843,26 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <span className="topbar-separator" aria-hidden>
                     /
                   </span>
+                  {/* A helper thread: its lead, one step up the breadcrumb. */}
+                  {thread.parentId ? (
+                    <>
+                      <Link
+                        className="topbar-lead"
+                        to="/threads/$threadId"
+                        params={{ threadId: thread.parentId }}
+                        title="The lead thread that started this helper"
+                      >
+                        <Workflow size={13} aria-hidden />
+                        <span>
+                          {threads.find((item) => item.id === thread.parentId)?.title ??
+                            'Lead thread'}
+                        </span>
+                      </Link>
+                      <span className="topbar-separator" aria-hidden>
+                        /
+                      </span>
+                    </>
+                  ) : null}
                 </>
               ) : null}
               <strong>{thread?.title || (activeId ? 'Loading…' : 't3 mini')}</strong>
@@ -3255,6 +3357,41 @@ export function Workspace({ threadId }: { threadId?: string }) {
                   <div className="composer-meta">
                     {/* Branch and its pull request stay together on the left. */}
                     <span className="git-info">
+                      {/* Where the thread works: chosen before the first message, then a
+                          Worktree badge for the rest of the thread. */}
+                      {git?.branch && !thread.worktree && !thread.messages.length ? (
+                        <Picker
+                          label="Work in"
+                          icon={
+                            thread.useWorktree ? <FolderGit2 size={12} /> : <Folder size={12} />
+                          }
+                          text={thread.useWorktree ? 'New worktree' : 'Local'}
+                          value={thread.useWorktree ? 'worktree' : 'local'}
+                          options={[
+                            {
+                              value: 'local',
+                              label: 'Local',
+                              description: 'Work in the project folder',
+                            },
+                            {
+                              value: 'worktree',
+                              label: 'New worktree',
+                              description: `Its own checkout on a new branch, from ${git.branch}`,
+                            },
+                          ]}
+                          onSelect={(value) => void chooseWorktree(value === 'worktree')}
+                          disabled={busy || !connected}
+                          placement="up"
+                        />
+                      ) : thread.worktree ? (
+                        <span
+                          className="worktree-badge"
+                          title={`Worktree: ${thread.worktree.path}`}
+                        >
+                          <FolderGit2 size={12} />
+                          <span>Worktree</span>
+                        </span>
+                      ) : null}
                       {git?.branch ? (
                         // Opens the branch on GitHub in a new tab when the remote is there.
                         <a

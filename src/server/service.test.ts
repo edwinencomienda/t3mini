@@ -1334,3 +1334,149 @@ it('reads a thread the user shared, from any project, as reference only', async 
   expect(() => read('00000000-0000-0000-0000-000000000000')).toThrow('doesn’t exist')
   expect(() => read('the other one')).toThrow('link or id')
 })
+
+describe('worktrees', () => {
+  it('runs a worktree thread in its own checkout, then removes a clean one on delete', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { mkdir, stat, writeFile } = await import('node:fs/promises')
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim()
+    process.env.T3_MINI_WORKTREES_DIR = join(directory, 'worktrees')
+    try {
+      const repo = join(directory, 'app')
+      await mkdir(repo)
+      git(directory, 'init', '-q', '-b', 'main', repo)
+      git(repo, 'config', 'user.email', 'test@example.com')
+      git(repo, 'config', 'user.name', 'Test')
+      await writeFile(join(repo, 'README.md'), '# app\n')
+      git(repo, 'add', '.')
+      git(repo, 'commit', '-q', '-m', 'first')
+      const created = await service.create({ provider: 'claude', cwd: repo })
+      // Not a repository: refused. Then chosen before the first message.
+      const plain = await service.create({ provider: 'claude', cwd: directory })
+      await expect(service.setWorktree(plain.id, { enabled: true })).rejects.toThrow(/git/)
+      await service.setWorktree(created.id, { enabled: true })
+      await service.send(created.id, { text: 'Work over there' })
+      await started
+      const worktree = created.worktree!
+      expect(worktree.branch).toMatch(/^t3m\/[0-9a-f]{8}$/)
+      // The agent and its tools run in the worktree; the thread stays in its project.
+      expect(context.cwd).toBe(worktree.path)
+      expect(context.tools.cwd).toBe(worktree.path)
+      expect(created.cwd).toBe(worktree.repo)
+      expect(created.activities[0]).toMatchObject({ label: 'Worktree', status: 'completed' })
+      expect(service.list().find((item) => item.id === created.id)?.worktreeBranch).toBe(
+        worktree.branch,
+      )
+      await settle(created.id, finish)
+      // Too late to change where it works.
+      await expect(service.setWorktree(created.id, { enabled: false })).rejects.toThrow(
+        /new thread/,
+      )
+      expect(await service.remove(created.id)).toEqual({ ok: true })
+      await expect(stat(worktree.path)).rejects.toThrow()
+      expect(git(repo, 'branch', '--list', worktree.branch)).toContain(worktree.branch)
+    } finally {
+      delete process.env.T3_MINI_WORKTREES_DIR
+    }
+  })
+})
+
+describe('orchestration', () => {
+  it('lets a lead start, list, message, and delete helpers that report back', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { mkdir, stat, writeFile } = await import('node:fs/promises')
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim()
+    process.env.T3_MINI_WORKTREES_DIR = join(directory, 'worktrees')
+    // A runner per thread: each turn waits until the test ends it with a reply.
+    const turns = new Map<string, { ctx: ProviderContext; end: (reply: string) => void }[]>()
+    const turnStarted = new Map<string, () => void>()
+    const nextTurn = (id: string) =>
+      new Promise<void>((resolve) => turnStarted.set(id, resolve)).then(() =>
+        turns.get(id)!.at(-1)!,
+      )
+    const orchestrated = new AgentService(new ThreadStore(join(directory, 'orch.json')), {
+      codex: async () => {},
+      claude: async (ctx) => {
+        await new Promise<void>((resolve) => {
+          const list = turns.get(ctx.thread.id) ?? []
+          list.push({
+            ctx,
+            end: (reply) => {
+              ctx.text(crypto.randomUUID(), reply)
+              resolve()
+            },
+          })
+          turns.set(ctx.thread.id, list)
+          ctx.signal.addEventListener('abort', () => resolve(), { once: true })
+          turnStarted.get(ctx.thread.id)?.()
+        })
+      },
+    })
+    try {
+      const repo = join(directory, 'app')
+      await mkdir(repo)
+      git(directory, 'init', '-q', '-b', 'main', repo)
+      git(repo, 'config', 'user.email', 'test@example.com')
+      git(repo, 'config', 'user.name', 'Test')
+      await writeFile(join(repo, 'README.md'), '# app\n')
+      git(repo, 'add', '.')
+      git(repo, 'commit', '-q', '-m', 'first')
+      const lead = await orchestrated.create({ provider: 'claude', cwd: repo })
+      let leadTurn = nextTurn(lead.id)
+      await orchestrated.send(lead.id, { text: 'Split the work' })
+      const first = await leadTurn
+      const control = first.ctx.tools.threads
+      const started = await control.start({ task: 'Add a footer', title: 'Footer' })
+      const helper = orchestrated.get(started.id)
+      expect(helper).toMatchObject({ parentId: lead.id, title: 'Footer', useWorktree: true })
+      expect(control.list()).toContain('"Footer"')
+      // Only its own helpers.
+      await expect(control.stop(lead.id)).rejects.toThrow(/isn’t one of your helper/)
+      // The helper runs in its worktree, knows who it works for, and can't start helpers.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const helperTurn = turns.get(helper.id)!.at(-1)!
+      expect(helperTurn.ctx.cwd).toBe(helper.worktree!.path)
+      expect(helperTurn.ctx.prompt).toContain('Task from the lead thread')
+      await expect(helperTurn.ctx.tools.threads.start({ task: 'More' })).rejects.toThrow(
+        /can’t start helpers/,
+      )
+      // The lead ends its turn; the helper finishing wakes it with a report.
+      first.end('Started a helper.')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      leadTurn = nextTurn(lead.id)
+      helperTurn.end('Added the footer.')
+      const woken = await leadTurn
+      expect(woken.ctx.prompt).toContain('Report from helper thread "Footer"')
+      expect(woken.ctx.prompt).toContain('Added the footer.')
+      expect(lead.messages.find((message) => message.report)?.report).toMatchObject({
+        threadId: helper.id,
+        status: 'completed',
+        branch: helper.worktree!.branch,
+      })
+      // The helper is readable from the lead without sharing its link.
+      expect(orchestrated.readSharedThread(lead, helper.id)).toContain('Footer')
+      woken.end('The footer is done.')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // Too many automatic turns in a row: the next report waits for the user.
+      lead.autoTurns = 10
+      const again = nextTurn(helper.id)
+      expect(await woken.ctx.tools.threads.message(helper.id, 'Also a copyright line')).toContain(
+        'Sent',
+      )
+      ;(await again).end('Added it.')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(lead.messages.at(-1)).toMatchObject({ unsent: true, report: { title: 'Footer' } })
+      expect(lead.status).toBe('completed')
+      // Deleting removes the helper and its clean worktree.
+      const path = helper.worktree!.path
+      expect(await control.remove(helper.id)).toContain('Deleted "Footer"')
+      await expect(stat(path)).rejects.toThrow()
+      expect(() => orchestrated.get(helper.id)).toThrow()
+    } finally {
+      delete process.env.T3_MINI_WORKTREES_DIR
+      await orchestrated.close()
+    }
+  })
+})

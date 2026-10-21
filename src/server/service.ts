@@ -8,6 +8,7 @@ import { z } from 'zod'
 import {
   isActive,
   editableMessage,
+  type Activity,
   type Bootstrap,
   type GitInfo,
   type MessageMatch,
@@ -31,7 +32,7 @@ import {
 import { UploadError, Uploads, attachmentSchema, isImageId } from './uploads'
 import { BrowserStats } from './browser-stats'
 import { describeThread, projectLabel, threadIdFrom } from './shared-thread'
-import { ToolError } from './tools/types'
+import { ToolError, type ThreadControl } from './tools/types'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
 import { githubBranchUrl, githubPullUrl, githubRepoUrl, pullRequestFor } from './github'
@@ -50,6 +51,15 @@ import { TabRegistry } from './tabs'
 import { uiChange } from './ui-settings'
 import { ProjectIcons } from './project-icons'
 import { ProcessManager } from './processes'
+import {
+  createWorktree,
+  isWorktreeError,
+  removeWorktree,
+  repoRoot,
+  worktreeChanges,
+  worktreeFolder,
+  worktreeProgress,
+} from './worktrees'
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import { providerExecutable } from './cli-updates'
@@ -114,6 +124,8 @@ const summary = (thread: Thread): ThreadSummary => ({
   updatedAt: thread.updatedAt,
   lastMessageAt: lastMessageAt(thread),
   ...(thread.unread ? { unread: true } : {}),
+  ...(thread.worktree ? { worktreeBranch: thread.worktree.branch } : {}),
+  ...(thread.parentId ? { parentId: thread.parentId } : {}),
   ...(thread.status === 'waiting'
     ? {
         waitingFor: thread.approvals.some((item) => item.questions?.length)
@@ -122,7 +134,21 @@ const summary = (thread: Thread): ThreadSummary => ({
       }
     : {}),
 })
-// What a thread's tools may do with processes: only its own project's, started inside it.
+// Orchestration limits: helpers running at once per lead, and turns a lead may start on its own
+// from helper reports before you write again (so reports and replies can't loop forever).
+const maxRunningHelpers = 5
+const maxAutoTurns = 10
+// The first message a helper gets: who it works for and that its answer goes back there.
+const helperBrief = (lead: Thread, task: string) =>
+  `[Task from the lead thread "${lead.title}". Your final answer is sent back to it automatically, ` +
+  'so end with a short summary: what you did, what changed (branch, files), and anything left.]' +
+  `\n\n${task}`
+const agentName = (provider: Provider) => (provider === 'claude' ? 'Claude' : 'Codex')
+// Where a thread works: its worktree when it has one, otherwise the project folder.
+export const workdir = (thread: Thread) =>
+  thread.worktree ? worktreeFolder(thread.worktree) : thread.cwd
+// What a thread's tools may do with processes: only its own project's, started inside the folder
+// it works in (its worktree, for a worktree thread).
 function projectProcesses(manager: ProcessManager, thread: Thread) {
   const own = (id: string) => {
     const info = manager.get(id)
@@ -132,8 +158,9 @@ function projectProcesses(manager: ProcessManager, thread: Thread) {
   return {
     list: () => manager.list(thread.cwd),
     start: async (input: { name: string; command: string; cwd?: string }) => {
-      const folder = input.cwd ? resolve(thread.cwd, input.cwd) : thread.cwd
-      const inside = relative(thread.cwd, folder)
+      const home = workdir(thread)
+      const folder = input.cwd ? resolve(home, input.cwd) : home
+      const inside = relative(home, folder)
       if (inside.startsWith('..') || isAbsolute(inside))
         throw new ToolError('Processes can only start inside the project folder.')
       // Said plainly: a missing folder otherwise surfaces as "spawn /bin/zsh ENOENT".
@@ -142,7 +169,7 @@ function projectProcesses(manager: ProcessManager, thread: Thread) {
         .catch(() => false)
       if (!isFolder)
         throw new ToolError(
-          `Folder not found: ${input.cwd} (cwd is relative to the project folder, ${thread.cwd}). ` +
+          `Folder not found: ${input.cwd} (cwd is relative to the project folder, ${home}). ` +
             'Leave cwd out to run in the project folder.',
         )
       try {
@@ -468,7 +495,12 @@ export class AgentService {
       }
     }
     this.notify()
-    return { ok: true, deletedThreads: owned.length }
+    const kept = await this.cleanUpWorktrees(owned)
+    return {
+      ok: true,
+      deletedThreads: owned.length,
+      ...(kept.length ? { keptWorktrees: kept } : {}),
+    }
   }
   get(id: string) {
     const thread = this.store.threads.get(id)
@@ -650,9 +682,84 @@ export class AgentService {
       this.settingsUpdates.delete(id)
     }
   }
+  // Local or worktree, chosen before the first message (the worktree is made on the first send).
+  async setWorktree(id: string, input: unknown) {
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(input)
+    const thread = this.get(id)
+    if (thread.messages.length || thread.sessionId || thread.worktree || this.runs.has(id))
+      throw new HttpError(409, 'Start a new thread to change where it works.')
+    if (enabled && !(await repoRoot(thread.cwd)))
+      throw new HttpError(400, 'Worktrees need a git repository; this project isn’t one.')
+    const previous = thread.useWorktree
+    if (enabled) thread.useWorktree = true
+    else delete thread.useWorktree
+    try {
+      await this.store.save()
+    } catch {
+      thread.useWorktree = previous
+      throw new HttpError(500, 'Could not save the thread.')
+    }
+    this.notify()
+    return thread
+  }
+  // Makes the thread's worktree on its first turn (shown as a step), or checks it's still there.
+  private async prepareWorktree(thread: Thread, touch: () => void) {
+    if (thread.worktree) {
+      if (!(await stat(thread.worktree.path).catch(() => null)))
+        throw new Error(
+          `This thread’s worktree is gone (${thread.worktree.path}). Start a new thread to keep working.`,
+        )
+      return
+    }
+    const step: Activity = {
+      id: `worktree:${thread.id}`,
+      label: 'Worktree',
+      title: 'Create a worktree for this thread',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+    }
+    thread.activities.push(step)
+    touch()
+    try {
+      thread.worktree = await createWorktree(thread.cwd, thread.id)
+    } catch (error) {
+      step.status = 'failed'
+      step.output = error instanceof Error ? error.message : String(error)
+      throw isWorktreeError(error) ? error : new Error('Could not create the worktree.')
+    }
+    delete thread.useWorktree
+    const { branch, path, setupMs, copied } = thread.worktree
+    step.status = 'completed'
+    step.title = `Create worktree ${branch} (${(setupMs / 1000).toFixed(2)}s)`
+    step.detail = path
+    step.output = copied
+      ? `Copied ${copied} file${copied === 1 ? '' : 's'} from .worktreeinclude.`
+      : undefined
+    // Saved right away: the worktree exists now, whatever happens to the turn.
+    await this.store.save().catch(() => {})
+    touch()
+  }
+  // After deleting threads: remove their worktrees when nothing in them would be lost. One with
+  // uncommitted changes is kept (its path is returned). Branches always stay.
+  private async cleanUpWorktrees(threads: Thread[]) {
+    const kept: string[] = []
+    for (const thread of threads) {
+      const worktree = thread.worktree
+      if (!worktree) continue
+      const changes = await worktreeChanges(worktree)
+      if (changes) {
+        kept.push(worktree.path)
+        continue
+      }
+      await removeWorktree(worktree).catch(() => kept.push(worktree.path))
+    }
+    return kept
+  }
   async send(id: string, input: unknown) {
     const { text, attachments: requested } = promptSchema.parse(input)
     const thread = this.get(id)
+    // You wrote: a lead may again react to its helpers' reports on its own.
+    delete thread.autoTurns
     let attachments
     try {
       attachments = await this.uploads.resolve(requested)
@@ -864,6 +971,7 @@ export class AgentService {
               : undefined
     const context: ProviderContext = {
       thread,
+      cwd: workdir(thread),
       prompt,
       images,
       promptId,
@@ -920,7 +1028,7 @@ export class AgentService {
         lookForTitle()
       },
       tools: {
-        cwd: thread.cwd,
+        cwd: workdir(thread),
         processes: projectProcesses(this.processes, thread),
         browser: {
           page: () => this.browsers.page(thread.id),
@@ -939,6 +1047,7 @@ export class AgentService {
         saveMedia: (file, kind) => this.uploads.saveMedia(file, kind),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
+        threads: this.threadControl(thread),
         // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
         // written anything since the user's message, it gets a reply of its own.
         attach: (block) => {
@@ -968,6 +1077,7 @@ export class AgentService {
           thread.status = 'waiting'
           run.approvals.set(approval.id, (answer) => resolve(answer !== false))
           touch()
+          if (thread.parentId) void this.reportToLead(thread, 'waiting')
         }),
       // A question waits like an approval, but resolves with your answers (null if skipped).
       ask: ({ id, title, questions }) =>
@@ -980,6 +1090,7 @@ export class AgentService {
           thread.status = 'waiting'
           run.approvals.set(id, (answer) => resolve(typeof answer === 'object' ? answer : null))
           touch()
+          if (thread.parentId) void this.reportToLead(thread, 'waiting')
         }),
       todos: (todos) => {
         thread.todos = todos.length ? todos : undefined
@@ -1005,6 +1116,12 @@ export class AgentService {
       },
     }
     try {
+      // A worktree thread gets its worktree on its first turn (and must still have it later).
+      if (thread.useWorktree || thread.worktree) {
+        await this.prepareWorktree(thread, touch)
+        context.cwd = workdir(thread)
+        context.tools.cwd = context.cwd
+      }
       try {
         await this.runners[thread.provider](context)
       } catch (error) {
@@ -1070,6 +1187,14 @@ export class AgentService {
           thread.error = error instanceof Error ? error.message : 'Could not send queued messages.'
           this.notify()
         })
+      // A helper's work is done (no follow-up started): its lead hears about it. A stop isn't
+      // reported (you or the lead did it).
+      if (
+        thread.parentId &&
+        !this.runs.has(thread.id) &&
+        (thread.status === 'completed' || thread.status === 'failed')
+      )
+        void this.reportToLead(thread, thread.status)
       // Tell every tab first, then save: the save doesn't change what they show.
       this.notify()
       try {
@@ -1096,7 +1221,7 @@ export class AgentService {
       const title =
         thread.provider === 'claude'
           ? thread.sessionId
-            ? await this.titles.claudeSession(thread.sessionId, thread.cwd)
+            ? await this.titles.claudeSession(thread.sessionId, workdir(thread))
             : undefined
           : await this.titles.codex(this.conversation(thread))
       // Renamed meanwhile (or deleted)? Then keep that.
@@ -1157,6 +1282,163 @@ export class AgentService {
     this.changed()
     return { ok: true }
   }
+  // Orchestration tools (tools/threads.ts): what a lead thread may do with its helper threads.
+  // Only its own helpers, and a helper can't start helpers of its own.
+  private threadControl(lead: Thread): ThreadControl {
+    const helpers = () =>
+      [...this.store.threads.values()].filter((item) => item.parentId === lead.id)
+    const helper = (reference: string) => {
+      const id = threadIdFrom(reference)
+      const found = id ? this.store.threads.get(id) : undefined
+      if (!found || found.parentId !== lead.id)
+        throw new ToolError('That isn’t one of your helper threads (see list_threads for ids).')
+      return found
+    }
+    const refuse = (error: unknown): never => {
+      throw new ToolError(error instanceof Error ? error.message : 'That didn’t work.')
+    }
+    return {
+      // Helpers always get a worktree in a git project, so they can't collide.
+      start: async ({ task, title, agent }) => {
+        if (lead.parentId) throw new ToolError('Helper threads can’t start helpers of their own.')
+        const running = helpers().filter((item) => isActive(item.status) || this.runs.has(item.id))
+        if (running.length >= maxRunningHelpers)
+          throw new ToolError(
+            `${maxRunningHelpers} helpers are already running. Wait for one to report back, or stop one.`,
+          )
+        const provider = agent ?? lead.provider
+        const worktree = Boolean(await repoRoot(lead.cwd))
+        // The same agent keeps this thread's model and effort; the other agent uses its default.
+        const created = await this.create({
+          provider,
+          cwd: lead.cwd,
+          ...(provider === lead.provider
+            ? { model: lead.model, effort: lead.effort, serviceTier: lead.serviceTier }
+            : {}),
+          permissionMode: lead.permissionMode,
+        }).catch(refuse)
+        created.parentId = lead.id
+        created.title = title || task.replace(/\s+/g, ' ').slice(0, 60)
+        created.titleSource = title ? 'custom' : 'message'
+        try {
+          if (worktree) await this.setWorktree(created.id, { enabled: true })
+          await this.send(created.id, { text: helperBrief(lead, task) })
+        } catch (error) {
+          await this.remove(created.id).catch(() => {})
+          refuse(error)
+        }
+        return { id: created.id, title: created.title, agent: agentName(provider), worktree }
+      },
+      message: async (reference, text) => {
+        const target = helper(reference)
+        await this.send(target.id, { text }).catch(refuse)
+        return `Sent to "${target.title}". It reports back here when it finishes.`
+      },
+      list: () => {
+        const all = helpers()
+        if (!all.length) return 'No helper threads yet (start_thread starts one).'
+        return all
+          .map((item) => {
+            const reply = [...item.messages]
+              .reverse()
+              .find((message) => message.role === 'assistant' && message.text.trim())
+            const status =
+              item.status === 'waiting'
+                ? 'waiting for the user'
+                : item.status === 'interrupted'
+                  ? 'stopped'
+                  : item.status
+            return [
+              `- "${item.title}" (id ${item.id}) · ${agentName(item.provider)} · ${status}`,
+              item.worktree ? ` · branch ${item.worktree.branch}` : '',
+              reply ? `\n  Latest reply: ${reply.text.replace(/\s+/g, ' ').slice(0, 300)}` : '',
+            ].join('')
+          })
+          .join('\n')
+      },
+      stop: async (reference) => {
+        const target = helper(reference)
+        if (!isActive(target.status) && !this.runs.has(target.id))
+          return `"${target.title}" isn’t running.`
+        await this.stop(target.id).catch(refuse)
+        return `Stopped "${target.title}".`
+      },
+      remove: async (reference) => {
+        const target = helper(reference)
+        if (isActive(target.status) || this.runs.has(target.id)) {
+          await this.stop(target.id).catch(refuse)
+          await this.windDown(target.id)
+        }
+        const result = await this.remove(target.id).catch(refuse)
+        return result.keptWorktrees
+          ? `Deleted "${target.title}". Its worktree has uncommitted changes, so it was kept at ${result.keptWorktrees[0]}.`
+          : `Deleted "${target.title}"${target.worktree ? ` and its worktree (branch ${target.worktree.branch} stays)` : ''}.`
+      },
+    }
+  }
+  // A helper finished (or needs the user): tell its lead with a message, which starts the
+  // lead's next turn (or joins its current one). After maxAutoTurns of these in a row, reports
+  // still arrive but wait for you.
+  private async reportToLead(helper: Thread, status: 'completed' | 'failed' | 'waiting') {
+    const lead = helper.parentId ? this.store.threads.get(helper.parentId) : undefined
+    if (!lead) return
+    const reply = [...helper.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.text.trim())
+    const answer =
+      status === 'waiting'
+        ? `It’s waiting for the user: ${helper.approvals[0]?.title ?? 'an approval'}. They can answer in that thread.`
+        : status === 'failed'
+          ? `It failed: ${helper.error ?? 'unknown error'}${reply ? `\n\nLast reply:\n${reply.text}` : ''}`
+          : (reply?.text ?? '(It finished without a reply.)')
+    const clipped = answer.length > 6_000 ? `${answer.slice(0, 6_000)}\n… (cut)` : answer
+    const progress = helper.worktree ? await worktreeProgress(helper.worktree) : null
+    const branch = helper.worktree
+      ? `Branch ${helper.worktree.branch}` +
+        (progress
+          ? ` (${progress.commits} commit${progress.commits === 1 ? '' : 's'}, ${progress.changes} uncommitted file${progress.changes === 1 ? '' : 's'})`
+          : '')
+      : 'Works in the project folder'
+    const headline = {
+      completed: 'finished',
+      failed: 'failed',
+      waiting: 'is waiting for the user',
+    }[status]
+    const message: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text:
+        `[Report from helper thread "${helper.title}" (id ${helper.id}, ${agentName(helper.provider)}): ${headline}. ${branch}.]` +
+        `\n\n${clipped}`,
+      createdAt: new Date().toISOString(),
+      report: {
+        threadId: helper.id,
+        title: helper.title,
+        status,
+        ...(helper.worktree ? { branch: helper.worktree.branch } : {}),
+        answer: clipped,
+      },
+    }
+    const running = await this.windDown(lead.id)
+    if (running) {
+      await this.steer(lead, running, message, []).catch(() => {})
+      return
+    }
+    lead.autoTurns = (lead.autoTurns ?? 0) + 1
+    if (lead.autoTurns > maxAutoTurns) {
+      // Held for you: it shows in the thread, and you decide what happens next.
+      message.unsent = true
+      lead.messages.push(message)
+      lead.updatedAt = message.createdAt
+      this.changed()
+      return
+    }
+    lead.messages.push(message)
+    await this.startTurn(lead, message.text, [], message.id).catch(() => {
+      message.unsent = true
+      this.changed()
+    })
+  }
   // read_thread: another thread, for an agent to pick up from. Only a thread whose link or id
   // appears in the user's own messages in this thread, so an agent can't browse conversations
   // on its own (or be steered into it by a page or file it read). Any project.
@@ -1165,9 +1447,13 @@ export class AgentService {
     if (!id)
       throw new ToolError('Pass the thread’s link or id (from its right-click menu → Copy link).')
     if (id === current.id) throw new ToolError('That’s this thread.')
-    const shared = current.messages.some(
-      (message) => message.role === 'user' && message.text.toLowerCase().includes(id),
-    )
+    // A lead may read its helpers, and a helper its lead, without the link being shared.
+    const family = this.store.threads.get(id)?.parentId === current.id || current.parentId === id
+    const shared =
+      family ||
+      current.messages.some(
+        (message) => message.role === 'user' && message.text.toLowerCase().includes(id),
+      )
     if (!shared)
       throw new ToolError(
         'Only threads the user shared in this conversation can be read: ask them to paste its link.',
@@ -1255,7 +1541,7 @@ export class AgentService {
     return replies.length ? extractKeyterms(replies, await commonWords()) : []
   }
   async gitInfo(id: string): Promise<GitInfo> {
-    const { cwd } = this.get(id)
+    const cwd = workdir(this.get(id))
     const git = async (args: string[]) =>
       (await exec('git', ['-C', cwd, ...args], { timeout: 3_000 })).stdout.trim()
     const optional = (args: string[]) => git(args).catch(() => '')
@@ -1295,7 +1581,7 @@ export class AgentService {
   // call; the ref list is fetched at most once a minute per repository.
   private pullRefs = new Map<string, { at: number; refs: Promise<string> }>()
   async pullRequest(id: string): Promise<PullRequest | null> {
-    const { cwd } = this.get(id)
+    const cwd = workdir(this.get(id))
     const git = async (args: string[], timeout = 3_000) =>
       (
         await exec('git', ['-C', cwd, ...args], {
@@ -1341,7 +1627,7 @@ export class AgentService {
   // Uncommitted changes in a thread's project: tracked files against HEAD plus new untracked
   // files. git runs without a shell, in the thread's own folder, with output caps.
   async diff(id: string): Promise<DiffResult> {
-    const { cwd } = this.get(id)
+    const cwd = workdir(this.get(id))
     const git = (args: string[], maxBuffer = 8 * 1024 * 1024) =>
       exec('git', args, { cwd, timeout: 10_000, maxBuffer })
     try {
@@ -1444,7 +1730,7 @@ export class AgentService {
   // fetch the full diff only when something changed. Covers edits to already-modified files
   // (mtime/size), new or deleted files (status), and commits (HEAD).
   async diffVersion(id: string): Promise<{ version: string | null }> {
-    const { cwd } = this.get(id)
+    const cwd = workdir(this.get(id))
     const git = (args: string[]) =>
       exec('git', args, { cwd, timeout: 5_000, maxBuffer: 4 * 1024 * 1024 })
     try {
@@ -1478,7 +1764,7 @@ export class AgentService {
   }
   // Opens the thread's own project folder in VS Code (never a client-supplied path).
   async openInEditor(id: string) {
-    const { cwd } = this.get(id)
+    const cwd = workdir(this.get(id))
     try {
       if (!(await stat(cwd)).isDirectory()) throw new Error()
     } catch {
@@ -1522,7 +1808,8 @@ export class AgentService {
     await this.keepProjectPlace(thread)
     void this.browsers.close(id)
     this.notify()
-    return { ok: true }
+    const kept = await this.cleanUpWorktrees([thread])
+    return { ok: true, ...(kept.length ? { keptWorktrees: kept } : {}) }
   }
 }
 const globals = globalThis as typeof globalThis & { t3MiniService?: Promise<AgentService> }

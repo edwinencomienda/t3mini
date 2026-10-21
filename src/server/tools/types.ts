@@ -22,6 +22,18 @@ export type ThreadBrowser = {
   // "button 'Save'" for a ref from the latest snapshot.
   refName: (ref: string) => string | undefined
 }
+// What a lead thread may do with helper threads (only its own). Each refuses with a ToolError.
+export type ThreadControl = {
+  start: (input: {
+    task: string
+    title?: string
+    agent?: 'claude' | 'codex'
+  }) => Promise<{ id: string; title: string; agent: string; worktree: boolean }>
+  message: (reference: string, text: string) => Promise<string>
+  list: () => string
+  stop: (reference: string) => Promise<string>
+  remove: (reference: string) => Promise<string>
+}
 // What step summaries may look up while the call is still in progress.
 export type StepHints = { refName?: (ref: string) => string | undefined }
 
@@ -57,6 +69,8 @@ export type ToolContext = {
   readThread: (reference: string, before?: number) => Promise<string>
   // Renames this thread (never another one) and returns the saved title.
   rename: (title: string) => Promise<string>
+  // Helper threads this thread started (orchestration tools in threads.ts).
+  threads: ThreadControl
   // This thread's browser (browser_* tools).
   browser: ThreadBrowser
 }

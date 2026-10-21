@@ -15,6 +15,7 @@ const context = (uploads: Uploads) => {
     attach,
     saveImage: vi.fn(),
     processes: {} as never,
+    threads: {} as never,
     browser: {} as never,
     saveHtml: (html) => uploads.saveHtml(html),
     saveMedia: async () => ({ id: 'x.mp4' }),

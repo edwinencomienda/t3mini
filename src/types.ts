@@ -25,10 +25,21 @@ export type Message = {
   rewindFailed?: boolean
   // Sent while the agent was waiting on its question, so it answered that question.
   answered?: boolean
+  // A report from a helper thread to its lead (see server/orchestration): sent as a message so
+  // the lead's agent reads it, shown as a card. The text holds the full report for the agent.
+  report?: HelperReport
   // The agent's reply when it finished responding (Claude's result). A turn can have more than
   // one: Claude answers, then wakes up again when background work it left running finishes and
   // adds a follow-up. Every such reply stays in view when the turn folds, not just the last.
   endsReply?: boolean
+}
+export type HelperReport = {
+  threadId: string
+  title: string
+  status: 'completed' | 'failed' | 'waiting'
+  branch?: string
+  // The helper's final answer (or what it's waiting on), shortened.
+  answer: string
 }
 export type TurnCheckpoint = {
   // Claude: the turn was the session's first (an edit starts a new session), or the last
@@ -89,11 +100,36 @@ export type Question = {
 export type Approval = { id: string; title: string; detail: string; questions?: Question[] }
 // A task the agent left running in the background (e.g. a subagent), while the turn is open.
 export type BackgroundTask = { id: string; description: string }
+// A thread's own git worktree (see server/worktrees.ts): a second checkout of the project on
+// its own branch, created on the first message.
+export type ThreadWorktree = {
+  // The worktree's top folder (under ~/.t3-mini/worktrees).
+  path: string
+  branch: string
+  // The commit it started from.
+  base: string
+  // The project's repository (the main checkout).
+  repo: string
+  // Where the project folder is inside the repository, when it isn't the top.
+  subdir?: string
+  // How long creating it took, and how many .worktreeinclude files were copied.
+  setupMs: number
+  copied?: number
+}
 export type Thread = {
   id: string
   title: string
   provider: Provider
+  // The project folder: what the sidebar groups by. A worktree thread works in its worktree.
   cwd: string
+  // Run in a worktree (chosen before the first message, created on the first send).
+  useWorktree?: boolean
+  // A helper thread: the lead thread that started it (start_thread), which it reports back to.
+  parentId?: string
+  // Lead threads: turns started by helper reports since your last message (capped, so reports
+  // and replies can't loop forever).
+  autoTurns?: number
+  worktree?: ThreadWorktree
   model: string
   effort: string
   permissionMode: PermissionMode
@@ -131,6 +167,10 @@ export type ThreadSummary = Pick<
   lastMessageAt: string
   // While waiting: on a yes/no approval, or on answers to the agent's question.
   waitingFor?: 'approval' | 'question'
+  // A worktree thread: its branch.
+  worktreeBranch?: string
+  // A helper thread: its lead.
+  parentId?: string
   // Finished or failed while nobody was looking (shared by every browser and device).
   unread?: boolean
 }
@@ -247,7 +287,8 @@ export function editableMessage(thread: Pick<Thread, 'status' | 'provider' | 'me
   if (thread.status !== 'interrupted' && thread.status !== 'failed') return undefined
   const last = [...thread.messages].reverse().find((message) => message.role === 'user')
   const turn = last?.turn
-  if (!turn) return undefined
+  // A helper's report isn't yours to edit.
+  if (!turn || last.report) return undefined
   const undoable =
     thread.provider === 'claude'
       ? turn.fresh || Boolean(turn.claudeResumeAt)

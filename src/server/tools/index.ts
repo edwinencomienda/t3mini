@@ -7,6 +7,7 @@ import { playAudio } from './play-audio'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
 import { readThread } from './read-thread'
+import { threadTools } from './threads'
 import { browserTools } from './browser'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
 
@@ -19,6 +20,7 @@ export const tools: ToolDefinition<any>[] = [
   playAudio,
   renameThread,
   readThread,
+  ...threadTools,
   ...processTools,
   ...browserTools,
 ]
@@ -35,6 +37,9 @@ export const toolInstructions = [
     'a flow. Use your judgment: small or non-visual changes may not need it.',
   '- read_thread reads another t3 mini conversation when the user shares its link or id, so ' +
     'you can pick up from that work.',
+  '- start_thread starts helper threads (other agents, Claude or Codex, each in its own git ' +
+    'worktree) when the user wants work split up or run in parallel; they report back here when ' +
+    'they finish. message_thread, list_threads, stop_thread, and delete_thread manage them.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +
