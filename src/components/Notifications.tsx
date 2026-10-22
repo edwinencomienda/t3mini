@@ -30,6 +30,7 @@ import type { Bootstrap } from '../types'
 import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
 import { Machines } from './Machines'
+import { saveBrowserPublic, useBrowserPublic } from '../browser-public'
 import { Modal, ModalTitle } from './Modal'
 import { Segmented, Toggle } from './ui'
 import { Tabs } from '@base-ui/react/tabs'
@@ -215,6 +216,7 @@ export function SettingsDialog({
   const mascotsOn = useMascotSetting()
   const projectIconsOn = useProjectIcons()
   const music = useMusicSettings()
+  const browserPublic = useBrowserPublic()
   // The link as typed, saved once it's a YouTube link (or cleared).
   const [musicUrl, setMusicUrl] = useState('')
   useEffect(() => setMusicUrl(music.url), [music.url])
@@ -516,6 +518,21 @@ export function SettingsDialog({
                     </div>
                   )
                 })}
+                <div className="setting-row">
+                  <div>
+                    <strong>Open public websites</strong>
+                    <small>
+                      Let the agents’ browser open any website, not just local ones (localhost,
+                      app.test). Public sites are read-only for the agent: it can look, click, and
+                      take screenshots, but not type there. Never your local network.
+                    </small>
+                  </div>
+                  <Toggle
+                    label="Open public websites"
+                    checked={browserPublic}
+                    onChange={(on) => saveBrowserPublic(on)}
+                  />
+                </div>
                 {browserStats ? (
                   <div className="setting-row">
                     <div>

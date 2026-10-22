@@ -125,13 +125,73 @@ export const resolvesToThisMachine: Resolver = (hostname) => {
   return local
 }
 
+// Public websites (Settings → Agents → Open public websites): a public site must resolve only to
+// public internet addresses, so "public" can never mean this Mac, the local network, or the
+// tailnet (100.64.0.0/10). IPv4 and IPv6 ranges that aren't the public internet:
+export function isPublicAddress(address: string) {
+  const ip = address.toLowerCase().replace(/^::ffff:(?=\d+\.)/, '')
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return !(
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    )
+  }
+  if (!ip.includes(':')) return false
+  return !(
+    ip === '::' ||
+    ip === '::1' ||
+    /^f[cd]/.test(ip) ||
+    /^fe[89ab]/.test(ip) ||
+    ip.startsWith('ff') ||
+    ip.startsWith('64:ff9b:') ||
+    ip.startsWith('::ffff:')
+  )
+}
+const publicResolved = new Map<string, { at: number; public: Promise<boolean> }>()
+export const resolvesToPublic: Resolver = (hostname) => {
+  const bare = hostname.replace(/^\[|\]$/g, '')
+  if (/^[\d.]+$/.test(bare) || bare.includes(':')) return Promise.resolve(isPublicAddress(bare))
+  const cached = publicResolved.get(hostname)
+  if (cached && Date.now() - cached.at < 60_000) return cached.public
+  const result = lookup(hostname, { all: true })
+    .then(
+      (addresses) =>
+        addresses.length > 0 && addresses.every(({ address }) => isPublicAddress(address)),
+    )
+    .catch(() => false)
+  publicResolved.set(hostname, { at: Date.now(), public: result })
+  if (publicResolved.size > 200) publicResolved.delete(publicResolved.keys().next().value!)
+  return result
+}
+// A page on this machine (localhost or a local development domain): typing is allowed there;
+// on public websites it's refused (see browser_type).
+export function isLocalPage(raw: string) {
+  try {
+    const hostname = new URL(raw).hostname.toLowerCase()
+    return isLocalHost(hostname) || isDevHost(hostname)
+  } catch {
+    return false
+  }
+}
+
 // Whether a page may be opened: an http(s) URL on this machine (localhost, or a local
-// development domain that resolves here), and not t3 mini itself. Returns the reason when it
-// isn't.
+// development domain that resolves here), or, when public websites are on, a site that resolves
+// to the public internet; never t3 mini itself. Returns the reason when it isn't.
 export async function checkPageUrl(
   raw: string,
   ports = blockedPorts(),
   resolve: Resolver = resolvesToThisMachine,
+  publicSites: { allowed: boolean; resolve?: Resolver } = { allowed: false },
 ): Promise<string | undefined> {
   let url: URL
   try {
@@ -146,8 +206,13 @@ export async function checkPageUrl(
     )
   const hostname = url.hostname.toLowerCase()
   if (!isLocalHost(hostname)) {
-    if (!isDevHost(hostname))
-      return `Only local sites can be opened (localhost, 127.0.0.1, *.localhost, or a local development domain like app.test), not ${url.hostname}.`
+    if (!isDevHost(hostname)) {
+      if (!publicSites.allowed)
+        return `Only local sites can be opened (localhost, 127.0.0.1, *.localhost, or a local development domain like app.test), not ${url.hostname}. The user can allow public websites in Settings → Agents.`
+      if (!(await (publicSites.resolve ?? resolvesToPublic)(hostname)))
+        return `${url.hostname} isn’t a public website (it points to this Mac, the local network, or a private address), so it can’t be opened.`
+      return undefined
+    }
     if (!(await resolve(hostname)))
       return `${url.hostname} doesn’t point to this Mac, so it can’t be opened.`
   }
@@ -155,12 +220,22 @@ export async function checkPageUrl(
   return undefined
 }
 // Requests the page itself may make (any request to t3 mini is refused, including through a
-// local development domain).
-export function allowRequest(raw: string, ports = blockedPorts()) {
+// local development domain). While public websites are allowed, requests to private network
+// addresses written as IPs (a router's 192.168.1.1, the tailnet's 100.x) are refused too, so a
+// public page can't reach into your network through the agent's browser.
+export function allowRequest(raw: string, ports = blockedPorts(), publicSites = false) {
   try {
     const url = new URL(raw)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return true
     const hostname = url.hostname.toLowerCase()
+    const bare = hostname.replace(/^\[|\]$/g, '')
+    if (
+      publicSites &&
+      !isLocalHost(hostname) &&
+      (/^[\d.]+$/.test(bare) || bare.includes(':')) &&
+      !isPublicAddress(bare)
+    )
+      return false
     return !((isLocalHost(hostname) || isDevHost(hostname)) && ports.has(portOf(url)))
   } catch {
     return true
@@ -226,11 +301,23 @@ export class BrowserManager {
   private info = new Map<string, BrowserInfo>()
   private refs = new Map<string, Map<string, string>>()
   private listeners = new Set<() => void>()
+  // Whether public websites are allowed right now (Settings → Agents; set by the service).
+  allowPublic: () => boolean = () => false
   constructor(
     private readonly ports = blockedPorts(),
     private readonly executable: () => string | undefined = findBrowser,
     private readonly resolve: Resolver = resolvesToThisMachine,
+    private readonly resolvePublic: Resolver = resolvesToPublic,
   ) {}
+  checkUrl(url: string) {
+    return this.pageCheck(url)
+  }
+  private pageCheck(url: string) {
+    return checkPageUrl(url, this.ports, this.resolve, {
+      allowed: this.allowPublic(),
+      resolve: this.resolvePublic,
+    })
+  }
 
   subscribe(listener: () => void) {
     this.listeners.add(listener)
@@ -409,10 +496,14 @@ export class BrowserManager {
         // frameless requests, from workers, only get the t3 mini check.)
         mainFrame = request.isNavigationRequest()
       }
-      const refusal = !allowRequest(url, this.ports)
-        ? 't3 mini itself'
-        : mainFrame && (await checkPageUrl(url, this.ports, this.resolve))
-          ? 'not a local site'
+      const refusal = !allowRequest(url, this.ports, this.allowPublic())
+        ? this.allowPublic() && !isLocalPage(url)
+          ? 'a private network address'
+          : 't3 mini itself'
+        : mainFrame && (await this.pageCheck(url))
+          ? this.allowPublic()
+            ? 'not a local or public site'
+            : 'not a local site'
           : undefined
       if (refusal) {
         session.note({ kind: 'blocked', text: `${url} (${refusal})` })
@@ -474,7 +565,7 @@ export class BrowserManager {
       // Backstop: a popup already showing somewhere it can't be is closed right away.
       const url = page.url()
       if (url !== 'about:blank')
-        void checkPageUrl(url, this.ports, this.resolve).then((refusal) => {
+        void this.pageCheck(url).then((refusal) => {
           if (!refusal) return
           session.note({ kind: 'blocked', text: `${url} (not a local site)` })
           void page.close().catch(() => {})
@@ -525,7 +616,7 @@ export class BrowserManager {
       if (frame === page.mainFrame()) update()
       if (frame !== page.mainFrame() || frame.url() === 'about:blank') return
       const url = frame.url()
-      void checkPageUrl(url, this.ports, this.resolve).then((refusal) => {
+      void this.pageCheck(url).then((refusal) => {
         if (!refusal || page.isClosed() || page.url() !== url) return
         session.note({ kind: 'blocked', text: `${url} (not a local site)` })
         if (tab.popup) void page.close().catch(() => {})

@@ -264,6 +264,8 @@ export class AgentService {
     readonly browsers = new BrowserManager(),
   ) {
     this.ui = new UiStore(uiStorePath(store.path))
+    // Settings → Agents → Open public websites.
+    this.browsers.allowPublic = () => this.ui.settings.browserPublic === true
     this.browserStats = new BrowserStats(join(dirname(store.path), 'browser-stats.json'))
     // Project icons for the sidebar avatars, looked up in the background.
     this.icons = new ProjectIcons(() => this.notify())
@@ -1079,6 +1081,7 @@ export class AgentService {
           switchTab: (id) => this.browsers.switchTab(thread.id, id),
           closeTab: (id) => this.browsers.closeTab(thread.id, id),
           takeLog: () => this.browsers.takeLog(thread.id),
+          checkUrl: (url) => this.browsers.checkUrl(url),
           close: () => this.browsers.close(thread.id),
           recordSnapshot: (snapshot) => this.browsers.recordSnapshot(thread.id, snapshot),
           refName: (ref) => this.browsers.refName(thread.id, ref),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTurns, finishLabel, foldLabel } from './timeline'
+import { buildTurns, finishLabel, foldLabel, noteLine } from './timeline'
 import type { Activity, Message } from './types'
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16, 9, 0, seconds)).toISOString()
@@ -224,4 +224,17 @@ describe('finishLabel', () => {
   it('needs both times', () => {
     expect(finishLabel({ endedAt: undefined } as never, 'completed')).toBeUndefined()
   })
+})
+
+it('turns the agent’s latest note into one plain line for the working line', () => {
+  expect(
+    noteLine(
+      'Court cards look normal.\n\nThe browser clicks keep landing on the **wrong buttons**, so I’ll use the `local API`:',
+    ),
+  ).toBe('The browser clicks keep landing on the wrong buttons, so I’ll use the local API:')
+  expect(noteLine('Next:\n\n- check the [standings](http://localhost:3000)\n- report back')).toBe(
+    'check the standings report back',
+  )
+  expect(noteLine('Here it is:\n\n```ts\nconst x = 1\n```')).toBe('Here it is:')
+  expect(noteLine('   ')).toBe('')
 })

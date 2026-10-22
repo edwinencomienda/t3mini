@@ -1,6 +1,6 @@
 import type { Page } from 'playwright-core'
 import { z } from 'zod'
-import { checkPageUrl } from '../browser'
+import { checkPageUrl, isLocalPage } from '../browser'
 import { ToolError, defineTool, type StepHints, type ToolContext } from './types'
 
 // Browser tools: the agent opens its local app (a dev server on localhost) in its own private,
@@ -47,7 +47,7 @@ function pageAddress(context: ToolContext, url: string | undefined) {
   )
 }
 async function openPage(context: ToolContext, url: string, newTab?: boolean) {
-  const refusal = await checkPageUrl(url)
+  const refusal = await context.browser.checkUrl(url)
   if (refusal) throw new ToolError(refusal)
   const page = newTab
     ? await guarded('Opening a tab', () => context.browser.newTab())
@@ -98,15 +98,62 @@ async function after(context: ToolContext, before: string[]) {
   if (!page) return `${note}No tab is open any more. Open a page with browser_open.`
   return note + (await snapshot(context, page)) + (await health(context))
 }
+// Public websites are read-only for the agent: it can look, click, and take screenshots, but not
+// type or press keys there, so a page can't talk it into submitting your data.
+function readOnlyOnPublic(page: Page) {
+  if (!isLocalPage(page.url()))
+    throw new ToolError(
+      'Typing and key presses only work on local sites; public websites are read-only for the agent.',
+    )
+}
 // The thread's page, or a clear message when nothing is open yet.
 async function current(context: ToolContext) {
   const page = await context.browser.openPage()
   if (!page) throw new ToolError('No page is open. Open one with browser_open first.')
   return page
 }
-// How a step names its element: "button 'Save'" for a snapshot ref, else the selector.
+// How a step names its element: "button 'Save'" for a snapshot ref, else the selector in words.
 const targetName = (target: string | undefined, hints?: StepHints) =>
-  target ? (hints?.refName?.(target) ?? target) : undefined
+  target ? (hints?.refName?.(target) ?? selectorName(target)) : undefined
+// A Playwright selector as a step shows it: `role=button[name="Finish game"] >> nth=1` →
+// "Finish game", `role=dialog >> role=button[name="Save"]` → "Save" in the dialog,
+// `section[aria-labelledby="standings-heading"] li` → the standings. Anything it doesn't
+// recognize stays as written.
+const quotedName = /\[\s*name\s*=\s*(?:"([^"]*)"|'([^']*)')/
+export function selectorName(selector: string) {
+  const parts = selector
+    .split('>>')
+    .map((part) => part.trim())
+    .filter((part) => part && !/^(nth|visible)\s*=/.test(part))
+  const name = (part: string): { text: string; place?: boolean } | null => {
+    const role = /^role\s*=\s*([\w-]+)/.exec(part)
+    if (role) {
+      const named = quotedName.exec(part)
+      return named ? { text: `“${named[1] ?? named[2]}”` } : { text: role[1]!, place: true }
+    }
+    const text = /^(?:text|internal:text)\s*=\s*(?:"([^"]*)"|'([^']*)'|(.+))$/.exec(part)
+    if (text) return { text: `“${(text[1] ?? text[2] ?? text[3]!).replace(/"[is]$/, '')}”` }
+    const label = /\[aria-label\s*=\s*(?:"([^"]*)"|'([^']*)')\]/.exec(part)
+    if (label) return { text: `“${label[1] ?? label[2]}”` }
+    const labelledBy = /\[aria-labelledby\s*=\s*(?:"([^"]*)"|'([^']*)')\]/.exec(part)
+    if (labelledBy) {
+      const words = (labelledBy[1] ?? labelledBy[2]!)
+        .replace(/[-_](heading|title|label)$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .trim()
+      return words ? { text: `the ${words}` } : null
+    }
+    return null
+  }
+  const named = parts.map(name)
+  const target = named.at(-1)
+  if (!target || named.some((item) => !item)) return selector
+  // Containers before the target read as where it is: "Save" in the dialog.
+  const places = named.slice(0, -1).filter((item) => item!.place)
+  return places.length
+    ? `${target.text} in the ${places.map((item) => item!.text).join(' ')}`
+    : target.text
+}
 // An element from the latest snapshot ("e12") or a Playwright selector.
 function element(page: Page, target: string) {
   const ref = /^\[?(?:ref=)?(e\d+)\]?$/i.exec(target.trim())
@@ -144,8 +191,9 @@ export const browserOpen = defineTool({
   label: 'Open page',
   description:
     'Open a page of the app you are working on in your own headless browser, to check how it ' +
-    'looks and works. Local sites only (localhost, 127.0.0.1, *.localhost, and local dev domains ' +
-    'like app.test). Without url it opens the dev server this project is running (start it with ' +
+    'looks and works. Local sites (localhost, 127.0.0.1, *.localhost, and local dev domains like ' +
+    'app.test); public websites too only if the user allowed them in Settings, and those are ' +
+    'read-only (no typing or key presses). Without url it opens the dev server this project is running (start it with ' +
     "start_process first). Returns the page's content as an accessibility snapshot with element " +
     'refs (e1, e2…) for browser_click and browser_type, plus any console errors and failed ' +
     'requests. For a quick look with a screenshot, use browser_check. The browser is private to ' +
@@ -190,7 +238,8 @@ export const browserCheck = defineTool({
     'Check a page of the app you are working on in one step: opens it in your headless browser ' +
     '(without url: the dev server this project is running, or the page already open), waits for ' +
     'it to settle, and returns a screenshot you can see, the page content, and any console ' +
-    'errors or failed requests. Handy after changing something visible. Local sites only. Use ' +
+    'errors or failed requests. Handy after changing something visible. Local sites (public ones ' +
+    'only if the user allowed them). Use ' +
     'size to check a phone or tablet layout. To click or type afterwards, use browser_click and ' +
     'browser_type with the refs it returns.',
   input: {
@@ -284,6 +333,7 @@ export const browserType = defineTool({
   summarize: (input, hints) => targetName(input.target, hints),
   async run(context, input) {
     const page = await current(context)
+    readOnlyOnPublic(page)
     const before = await tabIds(context)
     const field = element(page, input.target)
     await guarded('Typing', () => field.fill(input.text))
@@ -303,6 +353,7 @@ export const browserPress = defineTool({
   summarize: (input) => input.key,
   async run(context, input) {
     const page = await current(context)
+    readOnlyOnPublic(page)
     const before = await tabIds(context)
     await guarded('Pressing the key', () => page.keyboard.press(input.key))
     return after(context, before)

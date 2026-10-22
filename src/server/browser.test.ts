@@ -1,7 +1,14 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { BrowserManager, allowRequest, checkPageUrl, snapshotRefs } from './browser'
+import {
+  BrowserManager,
+  allowRequest,
+  checkPageUrl,
+  isLocalPage,
+  isPublicAddress,
+  snapshotRefs,
+} from './browser'
 import {
   browserCheck,
   browserClick,
@@ -171,6 +178,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       page: () => browsers.page(thread),
       openPage: () => browsers.openPage(thread),
       takeLog: () => browsers.takeLog(thread),
+      checkUrl: (url) => browsers.checkUrl(url),
       close: () => browsers.close(thread),
       newTab: () => browsers.newTab(thread),
       tabs: () => browsers.tabs(thread),
@@ -391,4 +399,56 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     expect(browsers.list().some((item) => item.threadId === 'private-1')).toBe(false)
     expect(await browsers.openPage('private-1')).toBeUndefined()
   }, 30_000)
+})
+
+describe('public websites (Settings → Agents)', () => {
+  const t3 = new Set([4011])
+  const yes = async () => true
+  const no = async () => false
+  it('opens public sites only when allowed, and only if they resolve to the public internet', async () => {
+    expect(await checkPageUrl('https://example.com', t3)).toMatch(/Settings → Agents/)
+    const allowed = { allowed: true, resolve: yes }
+    expect(await checkPageUrl('https://example.com/a', t3, no, allowed)).toBeUndefined()
+    expect(
+      await checkPageUrl('https://intranet.example.com', t3, no, { allowed: true, resolve: no }),
+    ).toMatch(/isn’t a public website/)
+    // Still never files, and still never t3 mini through a local name.
+    expect(await checkPageUrl('file:///etc/passwd', t3, no, allowed)).toMatch(/http/)
+    expect(await checkPageUrl('http://localhost:4011/', t3, no, allowed)).toMatch(/t3 mini itself/)
+  })
+  it('knows which addresses are the public internet', () => {
+    for (const address of ['93.184.216.34', '8.8.8.8', '2606:4700::1111', '::ffff:93.184.216.34'])
+      expect(isPublicAddress(address), address).toBe(true)
+    for (const address of [
+      '127.0.0.1',
+      '10.0.0.5',
+      '172.20.1.1',
+      '192.168.1.1',
+      '169.254.169.254',
+      '100.101.102.103',
+      '0.0.0.0',
+      '224.0.0.1',
+      '::1',
+      'fd7a:115c:a1e0::1',
+      'fe80::1',
+      '::ffff:192.168.1.1',
+    ])
+      expect(isPublicAddress(address), address).toBe(false)
+  })
+  it('keeps public pages away from private network addresses and t3 mini', () => {
+    expect(allowRequest('http://192.168.1.1/admin', t3, true)).toBe(false)
+    expect(allowRequest('http://100.100.1.1:8080/', t3, true)).toBe(false)
+    expect(allowRequest('http://[fd7a:115c:a1e0::1]/', t3, true)).toBe(false)
+    expect(allowRequest('https://cdn.example.com/app.js', t3, true)).toBe(true)
+    expect(allowRequest('http://localhost:5173/', t3, true)).toBe(true)
+    expect(allowRequest('http://localhost:4011/api/threads', t3, true)).toBe(false)
+    // Off: as before (only t3 mini is refused).
+    expect(allowRequest('http://192.168.1.1/admin', t3)).toBe(true)
+  })
+  it('tells local pages (typing allowed) from public ones (read-only)', () => {
+    expect(isLocalPage('http://localhost:5173/login')).toBe(true)
+    expect(isLocalPage('http://myapp.test/')).toBe(true)
+    expect(isLocalPage('https://example.com/login')).toBe(false)
+    expect(isLocalPage('about:blank')).toBe(false)
+  })
 })

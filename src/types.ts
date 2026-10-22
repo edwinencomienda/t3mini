@@ -268,6 +268,8 @@ export type UiSettings = {
     settings: Partial<Record<Provider, import('./agent-settings').AgentSettings>>
   }
   collapsed?: Record<string, boolean>
+  // The agents' browser may open public websites (read-only there). Off by default.
+  browserPublic?: boolean
   music?: { enabled: boolean; url: string; volume: number }
   musicPosition?: { source: string; time: number; index?: number }
 }

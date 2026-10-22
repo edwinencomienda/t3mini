@@ -23,6 +23,9 @@ export const uiFields = {
     cwd: text(4096).optional(),
     settings: z.object({ claude: agentSettings.optional(), codex: agentSettings.optional() }),
   }),
+  // The agents' browser may open public websites too (read-only there; see browser.ts). Off
+  // unless turned on in Settings → Agents.
+  browserPublic: z.boolean(),
   // Projects collapsed in the sidebar.
   collapsed: z
     .record(text(4096), z.boolean())

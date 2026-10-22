@@ -130,7 +130,7 @@ import {
 import type { MachineSummary } from '../server/machines'
 // A machine's part of the sidebar (the hub, src/hub.ts).
 type HubState = { threads: ThreadSummary[]; projects: ProjectSummary[] }
-import { buildTurns, finishLabel, foldLabel, type WorkItem } from '../timeline'
+import { buildTurns, finishLabel, foldLabel, noteLine, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -2484,6 +2484,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
     ? thread?.todos?.find((todo) => todo.status === 'in_progress')
     : undefined
   const lastTodoAt = [...(thread?.activities ?? [])].reverse().find((item) => item.todo)?.startedAt
+  // While a turn runs, its work stays folded behind the working line (like Claude Desktop): the
+  // line shows the agent's latest note, and "N steps ›" opens everything so far (remembered for
+  // that turn, like a finished turn's fold).
+  const runningTurn = active ? turns.find((turn) => !turn.done) : undefined
+  const runningOpen = runningTurn ? openTurns.has(runningTurn.key) : false
+  const latestNote = runningTurn
+    ? [...runningTurn.work]
+        .reverse()
+        .map((item) => (item.kind === 'note' ? noteLine(item.message.text) : ''))
+        .find(Boolean)
+    : undefined
+  const workToggle =
+    runningTurn && runningTurn.work.some((item) => item.kind !== 'todos')
+      ? {
+          steps: runningTurn.steps,
+          open: runningOpen,
+          onToggle: () => toggleTurn(runningTurn.key),
+        }
+      : {}
   // In a finished turn the notes' images live with the answer, so notes show just their text.
   // While the turn runs, consecutive steps collapse into one line (StepGroup); the folded
   // view of a finished turn lists every step.
@@ -3241,7 +3260,15 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               {openTurns.has(turn.key) ? workList(turn.work, true) : null}
                             </div>
                           ) : !turn.done && turn.work.length ? (
-                            workList(turn.work)
+                            openTurns.has(turn.key) ? (
+                              workList(turn.work)
+                            ) : turn.work.some((item) => item.kind === 'todos') &&
+                              thread.todos?.length ? (
+                              // Folded: only the to-do checklist stays, a summary in itself.
+                              <div className="work">
+                                <TodoCard todos={thread.todos} />
+                              </div>
+                            ) : null
                           ) : null}
                           {/* Replies the agent ended a response with before its last one (e.g. a
                             summary, then a follow-up once background work finished): kept in
@@ -3324,13 +3351,24 @@ export function Workspace({ threadId }: { threadId?: string }) {
                       ) : null}
                       {/* What the agent is doing right now, and for how long. */}
                       {active && !thread.approvals.length ? (
-                        liveStep ? (
+                        latestNote && !runningOpen ? (
+                          // Folded: the agent's latest note, and how long the turn has run.
+                          <LiveLine
+                            text={latestNote}
+                            note
+                            since={thread.startedAt}
+                            provider={thread.provider}
+                            mood={liveStep ? 'working' : 'thinking'}
+                            {...workToggle}
+                          />
+                        ) : liveStep ? (
                           <LiveLine
                             text={stepTitle(liveStep)}
                             since={liveStep.startedAt}
                             provider={thread.provider}
                             mood={liveStep.compact ? 'thinking' : 'working'}
                             compacting={Boolean(liveStep.compact)}
+                            {...workToggle}
                             // A browser step names the site it's on (opening one already does).
                             {...(liveStep.browser
                               ? {
@@ -3350,6 +3388,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             since={lastTodoAt ?? thread.startedAt}
                             provider={thread.provider}
                             mood="working"
+                            {...workToggle}
                           />
                         ) : (
                           <LiveLine
@@ -3357,6 +3396,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             since={thread.startedAt}
                             provider={thread.provider}
                             mood="thinking"
+                            {...workToggle}
                           />
                         )
                       ) : thread.status === 'completed' && thread.completedAt ? (

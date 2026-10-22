@@ -188,3 +188,21 @@ export function finishLabel(turn: Turn, status?: Status, now = new Date()) {
   const done = status === 'interrupted' || status === 'failed' ? '' : 'done '
   return `${verb} ${joiner} ${time} · ${done}${day}${clock}`
 }
+
+// The working line's text from the agent's latest note: its last paragraph, as plain words
+// (Markdown marks, links, and list bullets dropped), on one line.
+export function noteLine(text: string) {
+  const paragraph =
+    text
+      .split(/\n\s*\n/)
+      .map((part) => part.trim())
+      .filter((part) => part && !part.startsWith('```'))
+      .at(-1) ?? ''
+  return paragraph
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*(?:[-*+>]|\d+[.)]|#{1,6})\s+/gm, '')
+    .replace(/(\*\*|__|`|~~)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300)
+}

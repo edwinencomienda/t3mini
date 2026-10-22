@@ -187,7 +187,13 @@ export function StepGroup({ steps }: { steps: Activity[] }) {
         <span className="step-title">{stepTitle(latest)}</span>
         <span className="step-count">
           {steps.length} steps
-          {failed ? <span className="step-failed"> · {failed} failed</span> : null}
+          {/* Steps the agent retried and got past are normal: gray. Red only when the run of
+              steps ended on a failure. */}
+          {latest.status === 'failed' ? (
+            <span className="step-failed"> · {failed > 1 ? `${failed} failed` : 'failed'}</span>
+          ) : failed ? (
+            <span className="step-retried"> · {failed} retried</span>
+          ) : null}
         </span>
         <ChevronRight size={13} className="chevron" aria-hidden />
       </summary>
@@ -216,6 +222,10 @@ export function LiveLine({
   mood = 'working',
   site,
   compacting = false,
+  note = false,
+  steps,
+  open = false,
+  onToggle,
 }: {
   text: string
   since?: string
@@ -225,6 +235,12 @@ export function LiveLine({
   site?: string
   // While the agent compacts the conversation: the squeezing lines before the text.
   compacting?: boolean
+  // The agent's latest note (text is then that note, shown as its words, not a step).
+  note?: boolean
+  // The turn's work so far, folded behind this line: its step count, and the toggle.
+  steps?: number
+  open?: boolean
+  onToggle?: () => void
 }) {
   const [now, setNow] = useState(() => Date.now())
   const mascots = useMascots()
@@ -253,9 +269,21 @@ export function LiveLine({
       )}
       {site !== undefined ? <Globe size={13} className="live-globe" aria-label="Browser" /> : null}
       {compacting ? <CompactGlyph /> : null}
-      <span className="live-text">{text}</span>
+      <span className={`live-text ${note ? 'live-note' : ''}`}>{text}</span>
       {site ? <span className="live-site">{site}</span> : null}
       {since ? <span className="live-time">{elapsed(since, now)}</span> : null}
+      {onToggle ? (
+        <button
+          type="button"
+          className={`live-toggle ${open ? 'open' : ''}`}
+          aria-expanded={open}
+          title={open ? 'Hide the steps so far' : 'Show the steps so far'}
+          onClick={onToggle}
+        >
+          {steps ? `${steps} step${steps === 1 ? '' : 's'}` : 'Details'}
+          <ChevronRight size={13} className="chevron" aria-hidden />
+        </button>
+      ) : null}
     </div>
   )
 }

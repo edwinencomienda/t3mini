@@ -7,6 +7,8 @@ import type { ProcessInfo } from '../processes'
 export type ThreadBrowser = {
   // The page, opening the browser if needed.
   page: () => Promise<Page>
+  // Why a page can't be opened (local sites, or public ones when allowed), or undefined.
+  checkUrl: (url: string) => Promise<string | undefined>
   // The page if it's already open (the active tab).
   openPage: () => Promise<Page | undefined>
   // Tabs: open another (made active), list, switch to, or close one.
