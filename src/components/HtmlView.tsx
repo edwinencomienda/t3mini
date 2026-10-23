@@ -43,6 +43,10 @@ const tokens = [
 const sizer = `(function(){var last=0;function post(){var h=Math.ceil(document.documentElement.scrollHeight);if(h!==last){last=h;parent.postMessage({t3html:'size',h:h},'*')}}addEventListener('load',post);new ResizeObserver(post).observe(document.documentElement);setTimeout(post,50)})()`
 
 const pages = new Map<string, Promise<string>>()
+// Pages already fetched, and each frame's last height, so coming back to a thread draws the card
+// straight away at its size instead of going Loading… → 160px → real height every time.
+const loaded = new Map<string, string>()
+const heights = new Map<string, number>()
 // `base`: where the thread lives, here or on a machine (the hub's ApiBase).
 const loadPage = (base: string, id: string) => {
   const key = `${base}/${id}`
@@ -52,6 +56,7 @@ const loadPage = (base: string, id: string) => {
       if (!response.ok) throw new Error('missing')
       return response.text()
     })
+    page.then((text) => loaded.set(key, text)).catch(() => {})
     page.catch(() => pages.delete(key))
     pages.set(key, page)
   }
@@ -59,6 +64,7 @@ const loadPage = (base: string, id: string) => {
 }
 
 function themeStyle() {
+  if (typeof document === 'undefined') return ''
   const style = getComputedStyle(document.documentElement)
   const dark =
     document.documentElement.dataset.theme === 'dark' ||
@@ -72,7 +78,8 @@ const document_ = (html: string, theme: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${theme}</style><script>${sizer}</script></head><body>${html}</body></html>`
 
 function useTheme() {
-  const [theme, setTheme] = useState('')
+  // Read right away (not after mounting), so the frame isn't held back a render.
+  const [theme, setTheme] = useState(themeStyle)
   useEffect(() => {
     const update = () => setTheme(themeStyle())
     update()
@@ -96,27 +103,33 @@ function Frame({
   html,
   title,
   maxHeight,
+  sizeKey,
   onEscaped,
 }: {
   html: string
   title: string
   maxHeight: number
+  // Where this frame's height is remembered (one per page, card or full screen).
+  sizeKey: string
   onEscaped: () => void
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const loads = useRef(0)
-  const [height, setHeight] = useState(160)
+  const [height, setHeight] = useState(() => Math.min(maxHeight, heights.get(sizeKey) ?? 160))
   const theme = useTheme()
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return
       const data = event.data as { t3html?: string; h?: unknown }
-      if (data?.t3html === 'size' && typeof data.h === 'number' && Number.isFinite(data.h))
-        setHeight(Math.max(40, Math.min(maxHeight, Math.ceil(data.h))))
+      if (data?.t3html === 'size' && typeof data.h === 'number' && Number.isFinite(data.h)) {
+        const next = Math.max(40, Math.min(maxHeight, Math.ceil(data.h)))
+        heights.set(sizeKey, next)
+        setHeight(next)
+      }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [maxHeight])
+  }, [maxHeight, sizeKey])
   if (!theme) return null
   return (
     <iframe
@@ -137,14 +150,15 @@ function Frame({
 }
 
 export function HtmlView({ id, title }: { id: string; title?: string }) {
-  const [html, setHtml] = useState<string | null>(null)
+  const base = useApiBase()
+  const key = `${base}/${id}`
+  const [html, setHtml] = useState<string | null>(() => loaded.get(key) ?? null)
   const [failed, setFailed] = useState(false)
   const [source, setSource] = useState(false)
   const [expanded, setExpanded] = useState(false)
   // Bumped to rebuild the frame (after it tried to navigate away, or on Reload).
   const [run, setRun] = useState(0)
   const [escaped, setEscaped] = useState(false)
-  const base = useApiBase()
   useEffect(() => {
     let current = true
     loadPage(base, id).then(
@@ -220,7 +234,14 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
           </button>
         </p>
       ) : (
-        <Frame key={run} html={html} title={label} maxHeight={720} onEscaped={escape} />
+        <Frame
+          key={run}
+          html={html}
+          title={label}
+          maxHeight={720}
+          sizeKey={key}
+          onEscaped={escape}
+        />
       )}
       {expanded && html && !escaped ? (
         <Modal className="new-dialog html-dialog" label={label} onClose={() => setExpanded(false)}>
@@ -229,6 +250,7 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
             html={html}
             title={label}
             maxHeight={Math.round(window.innerHeight * 0.85)}
+            sizeKey={`${key}#full`}
             onEscaped={escape}
           />
         </Modal>
