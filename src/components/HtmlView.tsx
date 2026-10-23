@@ -71,11 +71,24 @@ function themeStyle() {
     (!document.documentElement.dataset.theme &&
       window.matchMedia('(prefers-color-scheme: dark)').matches)
   const vars = tokens.map((name) => `${name}:${style.getPropertyValue(name).trim()}`).join(';')
-  return `:root{${vars};color-scheme:${dark ? 'dark' : 'light'}}html,body{margin:0;background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans)}body{padding:12px}`
+  return `:root{${vars};color-scheme:${dark ? 'dark' : 'light'}}html,body{margin:0;background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans)}body{padding:2px}`
 }
 // The agent's HTML can't break out of this: its tags all land inside <body>.
-const document_ = (html: string, theme: string) =>
-  `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${theme}</style><script>${sizer}</script></head><body>${html}</body></html>`
+// In the reply the frame is as tall as its page, so it never scrolls inside (inline); full
+// screen it may.
+// In the reply it also lines up with the text: no outer margin or padding, whatever the page
+// sets. Shown again (back in a thread you've seen), it opens finished: for its first 3 seconds
+// CSS animations and transitions take no time and requestAnimationFrame runs as if they'd long
+// since ended, so a chart doesn't draw itself again on every visit; after that it behaves
+// normally (hover effects, toggles). Reload plays it from the start.
+const settled = `<style id="t3-settled">*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important}</style><script>(function(){var raf=requestAnimationFrame.bind(window),until=performance.now()+3000;window.requestAnimationFrame=function(cb){return raf(function(t){cb(performance.now()<until?t+1e7:t)})};setTimeout(function(){var s=document.getElementById('t3-settled');if(s)s.remove()},3000)})()</script>`
+const document_ = (html: string, theme: string, inline: boolean, still: boolean) =>
+  `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${theme}${inline ? 'html,body{overflow:hidden}body{margin:0!important;padding:0!important}' : ''}</style><script>${sizer}</script>${still ? settled : ''}</head><body>${html}</body></html>`
+// Pages already shown in this tab (see settled).
+const shown = new Set<string>()
+// A page sized to its window (100vh) grows each time its frame does: after this many growths
+// in quick succession its height is kept where it is.
+const runaway = 10
 
 function useTheme() {
   // Read right away (not after mounting), so the frame isn't held back a render.
@@ -103,12 +116,18 @@ function Frame({
   html,
   title,
   maxHeight,
+  inline = false,
+  still = false,
   sizeKey,
   onEscaped,
 }: {
   html: string
   title: string
   maxHeight: number
+  // In the reply: no scrolling inside, the frame takes the page's whole height.
+  inline?: boolean
+  // Shown before: opens finished instead of playing its entrance animations again.
+  still?: boolean
   // Where this frame's height is remembered (one per page, card or full screen).
   sizeKey: string
   onEscaped: () => void
@@ -117,12 +136,22 @@ function Frame({
   const loads = useRef(0)
   const [height, setHeight] = useState(() => Math.min(maxHeight, heights.get(sizeKey) ?? 160))
   const theme = useTheme()
+  const growth = useRef({ height: 0, streak: 0, at: 0, stuck: false })
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return
       const data = event.data as { t3html?: string; h?: unknown }
       if (data?.t3html === 'size' && typeof data.h === 'number' && Number.isFinite(data.h)) {
         const next = Math.max(40, Math.min(maxHeight, Math.ceil(data.h)))
+        const grew = growth.current
+        if (next > grew.height) {
+          const now = Date.now()
+          grew.streak = now - grew.at < 200 ? grew.streak + 1 : 0
+          grew.at = now
+          if (grew.streak >= runaway) grew.stuck = true
+          if (grew.stuck) return
+        }
+        grew.height = next
         heights.set(sizeKey, next)
         setHeight(next)
       }
@@ -138,7 +167,7 @@ function Frame({
       title={title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
-      srcDoc={document_(html, theme)}
+      srcDoc={document_(html, theme, inline, still)}
       style={{ height }}
       onLoad={() => {
         // The first load is ours; another one means the page navigated itself elsewhere.
@@ -159,6 +188,11 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
   // Bumped to rebuild the frame (after it tried to navigate away, or on Reload).
   const [run, setRun] = useState(0)
   const [escaped, setEscaped] = useState(false)
+  // Seen before in this tab: opens finished (see settled). Reload plays it again.
+  const [still, setStill] = useState(() => shown.has(key))
+  useEffect(() => {
+    shown.add(key)
+  }, [key])
   useEffect(() => {
     let current = true
     loadPage(base, id).then(
@@ -178,47 +212,52 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
   }
   const runAgain = () => {
     setEscaped(false)
+    setStill(false)
     restart()
   }
+  // No frame: the page sits in the reply like the rest of it. Its title and buttons are a quiet
+  // row under it (shown on hover or focus, always on touch screens), so they never cover it.
+  const actions = (
+    <figcaption className="inline-tool-bar">
+      <AppWindow size={13} aria-hidden />
+      <span className="inline-tool-title">{label}</span>
+      {html ? (
+        <span className="inline-tool-actions">
+          <button
+            type="button"
+            className="icon-button"
+            title="Reload"
+            aria-label="Reload"
+            onClick={runAgain}
+          >
+            <RotateCcw size={13} />
+          </button>
+          <button
+            type="button"
+            className={`icon-button ${source ? 'active' : ''}`}
+            title={source ? 'Show page' : 'View source'}
+            aria-label={source ? 'Show page' : 'View source'}
+            aria-pressed={source}
+            onClick={() => setSource((value) => !value)}
+          >
+            <Code2 size={14} />
+          </button>
+          <CopyButton className="html-copy" label="Copy HTML" text={() => html} />
+          <button
+            type="button"
+            className="icon-button"
+            title="Expand"
+            aria-label="Expand"
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 size={13} />
+          </button>
+        </span>
+      ) : null}
+    </figcaption>
+  )
   return (
-    <figure className="html-card">
-      <header className="html-card-head">
-        <AppWindow size={14} aria-hidden />
-        <span className="html-card-title">{label}</span>
-        {html ? (
-          <span className="html-card-actions">
-            <button
-              type="button"
-              className="icon-button"
-              title="Reload"
-              aria-label="Reload"
-              onClick={runAgain}
-            >
-              <RotateCcw size={13} />
-            </button>
-            <button
-              type="button"
-              className={`icon-button ${source ? 'active' : ''}`}
-              title={source ? 'Show page' : 'View source'}
-              aria-label={source ? 'Show page' : 'View source'}
-              aria-pressed={source}
-              onClick={() => setSource((value) => !value)}
-            >
-              <Code2 size={14} />
-            </button>
-            <CopyButton className="html-copy" label="Copy HTML" text={() => html} />
-            <button
-              type="button"
-              className="icon-button"
-              title="Expand"
-              aria-label="Expand"
-              onClick={() => setExpanded(true)}
-            >
-              <Maximize2 size={13} />
-            </button>
-          </span>
-        ) : null}
-      </header>
+    <figure className="inline-tool html-card" aria-label={label}>
       {failed ? (
         <p className="html-card-note">This page couldn’t be loaded.</p>
       ) : !html ? (
@@ -238,7 +277,10 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
           key={run}
           html={html}
           title={label}
-          maxHeight={720}
+          // Tall enough for any real page; a cap only against one that keeps growing.
+          maxHeight={4000}
+          inline
+          still={still}
           sizeKey={key}
           onEscaped={escape}
         />
@@ -255,6 +297,7 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
           />
         </Modal>
       ) : null}
+      {actions}
     </figure>
   )
 }

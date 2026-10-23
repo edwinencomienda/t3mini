@@ -50,3 +50,10 @@ export function diagramKind(source: string): string | undefined {
   }
   return undefined
 }
+
+// A left-to-right (or right-to-left) flowchart laid out top to bottom instead: the same
+// diagram, for when it's too wide to read at the reply's width. Null for anything else.
+export function verticalFlowchart(source: string): string | null {
+  const declaration = /^(\s*(?:flowchart|graph))[ \t]+(?:LR|RL)\b/m
+  return declaration.test(source) ? source.replace(declaration, '$1 TB') : null
+}

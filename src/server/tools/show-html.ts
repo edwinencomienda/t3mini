@@ -16,7 +16,11 @@ export const showHtml = defineTool({
     'stylesheets, fonts, or images (use inline SVG, CSS, or data: URLs), and no popups, ' +
     'forms, or navigation. Theme colors are available as CSS variables (--background, ' +
     '--foreground, --muted, --muted-foreground, --border, --primary, --card) and the page ' +
-    `follows light/dark mode, so prefer them over fixed colors. Up to ${maxHtmlBytes / 1024} KB.`,
+    'follows light/dark mode, so prefer them over fixed colors. It is shown at the full width ' +
+    'of the reply with no frame, on the chat’s own background, like part of the message: ' +
+    'don’t wrap the page in an outer card, border, background, shadow, padding, or max-width, ' +
+    'and don’t size anything to the window height (100vh); let the content fill the width ' +
+    `and be as tall as it needs. Up to ${maxHtmlBytes / 1024} KB.`,
   input: {
     html: z
       .string()

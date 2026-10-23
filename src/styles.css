@@ -3757,8 +3757,8 @@ body.resizing {
   max-width: 100%;
   border-radius: 0.6rem;
   overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--muted);
+  /* No frame, just a hairline so a white screenshot keeps its edge on the light theme. */
+  box-shadow: 0 0 0 1px rgb(127 127 127 / 14%);
 }
 .block-image img {
   display: block;
@@ -3772,21 +3772,76 @@ body.resizing {
   color: var(--muted-foreground);
 }
 
-/* Mermaid diagrams (show_diagram, ```mermaid blocks): a card with a small toolbar. */
-.diagram {
-  /* A wide diagram scrolls inside the card; the card never widens the chat. */
+/* Things tools draw in a reply (show_html pages, diagrams): no frame, so they read as part of
+   the reply. Their title and buttons are a quiet row under them, shown on hover or focus
+   (always on touch screens), so they never cover what's drawn. */
+.inline-tool {
+  position: relative;
   min-width: 0;
   max-width: 100%;
-  margin: 0.75rem 0;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--card);
+  margin: 0;
+}
+.inline-tool-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.9rem;
+  margin-top: 0.15rem;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.inline-tool:hover > .inline-tool-bar,
+.inline-tool:focus-within > .inline-tool-bar {
+  opacity: 1;
+}
+@media (hover: none) {
+  .inline-tool-bar {
+    opacity: 1;
+  }
+}
+.inline-tool-bar > svg {
+  flex-shrink: 0;
+}
+.inline-tool-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.inline-tool-title svg {
+  flex-shrink: 0;
+}
+.inline-tool-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  margin-left: auto;
+}
+.inline-tool-actions .icon-button,
+.inline-tool-actions .html-copy,
+.inline-tool-actions .diagram-copy {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+.inline-tool-actions .icon-button.active {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+/* Mermaid diagrams (show_diagram, ```mermaid blocks), drawn on the chat's own background. */
+.diagram {
+  /* A wide diagram scrolls sideways; it never widens the chat. */
+  margin: 0.75rem 0;
 }
 .blocks > .diagram {
   margin: 0;
 }
-.diagram-bar,
 .diagram-preview-bar {
   display: flex;
   align-items: center;
@@ -3828,7 +3883,7 @@ body.resizing {
   height: 1.6rem;
 }
 .diagram-canvas {
-  padding: 1.25rem 1rem;
+  padding: 0.5rem 0;
   /* Full height: capping it would shrink tall diagrams to unreadable text. */
   overflow-x: auto;
   cursor: zoom-in;
@@ -3870,7 +3925,7 @@ body.resizing {
   max-height: 34rem;
   overflow: auto;
   border: 0;
-  border-radius: 0;
+  border-radius: 0.6rem;
   background: var(--code-surface);
   font-size: 12.5px;
   line-height: 1.55;
@@ -3902,6 +3957,7 @@ body.resizing {
 .diagram-error {
   display: flex;
   gap: 0.5rem;
+  border-radius: 0.6rem;
   padding: 0.75rem 0.9rem;
   font-size: 12.5px;
   color: var(--danger);
@@ -3955,6 +4011,8 @@ body.resizing {
 }
 .diagram-preview-stage {
   flex: 1;
+  /* The diagram's own background color (Diagram.tsx palettes). */
+  background: var(--background);
   min-height: 0;
   overflow: auto;
   padding: 2rem;
@@ -4805,46 +4863,7 @@ body.resizing {
 
 /* The project's avatar in the chat header's project chip (a little smaller). */
 
-/* An agent's HTML page (show_html), sandboxed in a card. */
-.html-card {
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--card);
-  overflow: hidden;
-}
-.html-card-head {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.4rem 0.4rem 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
-  color: var(--muted-foreground);
-}
-.html-card-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  color: var(--foreground);
-}
-.html-card-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1rem;
-}
-.html-card-actions .icon-button,
-.html-card-actions .html-copy {
-  width: 1.7rem;
-  height: 1.7rem;
-}
-.html-card-actions .icon-button.active {
-  background: var(--accent);
-  color: var(--foreground);
-}
+/* An agent's HTML page (show_html), sandboxed, in the reply without a frame (.inline-tool). */
 .html-frame {
   display: block;
   width: 100%;
@@ -4854,6 +4873,7 @@ body.resizing {
 }
 .html-source {
   margin: 0;
+  border-radius: 0.6rem;
   max-height: 28rem;
   overflow: auto;
   padding: 0.75rem 0.9rem;
@@ -4868,12 +4888,11 @@ body.resizing {
   align-items: center;
   gap: 0.35rem;
   margin: 0;
-  padding: 0.6rem 0.75rem;
+  padding: 0.4rem 0;
   font-size: 12.5px;
   color: var(--muted-foreground);
 }
 .html-card-note.warning {
-  border-top: 1px solid var(--border);
   color: var(--warning);
 }
 .new-dialog.html-dialog {

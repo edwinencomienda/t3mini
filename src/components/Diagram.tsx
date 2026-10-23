@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Download, Maximize2, Minus, Plus, Workflow, X } from 'lucide-react'
-import { diagramKind } from '../diagrams'
+import { diagramKind, verticalFlowchart } from '../diagrams'
 import { CopyButton } from './CopyButton'
 import { Modal } from './Modal'
 
@@ -30,7 +30,7 @@ const load = () =>
 // Colors follow the app's palette (styles.css), so diagrams sit quietly in the chat.
 const palettes = {
   light: {
-    background: '#ffffff',
+    background: '#fbfbfc',
     node: '#f4f4f5',
     nodeBorder: '#d4d4d8',
     text: '#27272a',
@@ -43,10 +43,10 @@ const palettes = {
     note: '#fffbeb',
     noteBorder: '#fcd34d',
   },
-  // The diagram sits on a card (--card, #1c1c1c in dark): boxes a step lighter, labels on the
-  // card's own color.
+  // The diagram sits right on the chat (--background, #131313 in dark): boxes a step lighter,
+  // labels on the chat's own color.
   dark: {
-    background: '#1c1c1c',
+    background: '#131313',
     node: '#252528',
     nodeBorder: '#45454c',
     text: '#f4f4f5',
@@ -360,6 +360,10 @@ function DiagramPreview({
   )
 }
 
+// Sideways flowcharts too wide to read at the reply's width, drawn top to bottom instead
+// (remembered, so coming back draws them that way at once).
+const turned = new Set<string>()
+
 export const Diagram = memo(function Diagram({
   source,
   title,
@@ -371,54 +375,28 @@ export const Diagram = memo(function Diagram({
   // streaming, or isn't valid): the plain code block.
   fallback?: ReactNode
 }) {
-  const state = useDiagram(source)
+  const [vertical, setVertical] = useState(() => turned.has(source))
+  const state = useDiagram(vertical ? (verticalFlowchart(source) ?? source) : source)
   const [view, setView] = useState<'diagram' | 'code'>('diagram')
   const [expanded, setExpanded] = useState(false)
   const name = title || diagramKind(source) || 'Diagram'
-  // Wide diagrams shrink to fit, but not below 65% (text stays readable); past that the card
-  // scrolls sideways.
+  // Diagrams never scroll inside the reply: wide ones shrink to fit (click for full screen),
+  // and a sideways flowchart that would shrink below 70% is drawn top to bottom instead.
   const canvas = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
-    const svg = canvas.current?.querySelector('svg')
-    const width = svg?.viewBox.baseVal?.width
-    if (svg && width) svg.style.minWidth = `${Math.round(width * 0.65)}px`
+    if (vertical || state.status !== 'ready' || view !== 'diagram') return
+    const width = canvas.current?.querySelector('svg')?.viewBox.baseVal?.width
+    const room = canvas.current?.clientWidth
+    if (width && room && width * 0.7 > room && verticalFlowchart(source)) {
+      turned.add(source)
+      setVertical(true)
+    }
   })
   if (fallback && state.status !== 'ready') return fallback
   return (
-    <figure className="diagram">
-      <div className="diagram-bar">
-        <span className="diagram-title">
-          <Workflow size={13} />
-          {name}
-        </span>
-        <div className="diagram-actions">
-          <div className="segmented" role="group" aria-label="View">
-            {(['diagram', 'code'] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                className="segmented-option"
-                aria-pressed={view === option}
-                data-checked={view === option ? '' : undefined}
-                onClick={() => setView(option)}
-              >
-                {option === 'diagram' ? 'Diagram' : 'Code'}
-              </button>
-            ))}
-          </div>
-          <CopyButton className="diagram-copy" label="Copy Mermaid source" text={() => source} />
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Expand diagram"
-            title="Expand"
-            disabled={state.status !== 'ready'}
-            onClick={() => setExpanded(true)}
-          >
-            <Maximize2 size={13} />
-          </button>
-        </div>
-      </div>
+    // No frame: the diagram sits in the reply like the rest of it, with its title and buttons in
+    // a quiet row under it (shown on hover or focus, always on touch screens).
+    <figure className="inline-tool diagram" aria-label={name}>
       {view === 'code' ? (
         <pre className="diagram-code">
           <code>{source}</code>
@@ -460,6 +438,39 @@ export const Diagram = memo(function Diagram({
       {expanded && state.status === 'ready' ? (
         <DiagramPreview svg={state.svg} title={name} onClose={() => setExpanded(false)} />
       ) : null}
+      <figcaption className="inline-tool-bar">
+        <span className="inline-tool-title">
+          <Workflow size={13} />
+          {name}
+        </span>
+        <div className="inline-tool-actions diagram-actions">
+          <div className="segmented" role="group" aria-label="View">
+            {(['diagram', 'code'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className="segmented-option"
+                aria-pressed={view === option}
+                data-checked={view === option ? '' : undefined}
+                onClick={() => setView(option)}
+              >
+                {option === 'diagram' ? 'Diagram' : 'Code'}
+              </button>
+            ))}
+          </div>
+          <CopyButton className="diagram-copy" label="Copy Mermaid source" text={() => source} />
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Expand diagram"
+            title="Expand"
+            disabled={state.status !== 'ready'}
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 size={13} />
+          </button>
+        </div>
+      </figcaption>
     </figure>
   )
 })
