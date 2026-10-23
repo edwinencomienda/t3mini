@@ -390,7 +390,11 @@ export class AgentService {
       return value.length > length ? `${value.slice(0, length - 1).trimEnd()}…` : value
     }
     const sent = thread.messages.filter((message) => !message.queued && !message.unsent)
-    const firstMessage = shorten(sent.find((message) => message.role === 'user')?.text, 160)
+    // Your latest message (not a helper's report, which also arrives as a user message).
+    const lastMessage = shorten(
+      [...sent].reverse().find((message) => message.role === 'user' && !message.report)?.text,
+      160,
+    )
     const lastReply = shorten(
       [...sent].reverse().find((message) => message.role === 'assistant')?.text,
       220,
@@ -410,7 +414,7 @@ export class AgentService {
       updatedAt: thread.updatedAt,
       ...(thread.error ? { error: shorten(thread.error, 160) } : {}),
       messageCount: sent.length,
-      ...(firstMessage ? { firstMessage } : {}),
+      ...(lastMessage ? { lastMessage } : {}),
       ...(lastReply ? { lastReply } : {}),
       ...(waitingOn ? { waitingOn: shorten(waitingOn, 120) } : {}),
     }

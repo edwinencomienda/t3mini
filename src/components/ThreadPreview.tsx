@@ -106,10 +106,10 @@ function Glance({
       {glance.error && glance.status === 'failed' ? (
         <p className="glance-error">{glance.error}</p>
       ) : null}
-      {glance.firstMessage ? (
+      {glance.lastMessage ? (
         <div className="glance-excerpt">
-          <span>You asked</span>
-          <p>{glance.firstMessage}</p>
+          <span>Latest message</span>
+          <p>{glance.lastMessage}</p>
         </div>
       ) : null}
       {glance.lastReply ? (

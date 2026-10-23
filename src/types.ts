@@ -202,7 +202,7 @@ export type ThreadGlance = Pick<
   | 'error'
 > & {
   messageCount: number
-  firstMessage?: string
+  lastMessage?: string
   lastReply?: string
   // What it waits for, e.g. the approval's title.
   waitingOn?: string
