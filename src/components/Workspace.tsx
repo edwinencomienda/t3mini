@@ -140,6 +140,7 @@ import {
   unfinished,
   type WorkItem,
 } from '../timeline'
+import { reuseItems, reuseThread } from '../reuse'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -357,6 +358,140 @@ function ReportCard({ message, report }: { message: Message; report: HelperRepor
     </div>
   )
 }
+// What a sidebar row does when clicked, right-clicked, double-clicked, or its ⋮ opened.
+type RowActions = {
+  click: (event: React.MouseEvent<HTMLAnchorElement>, id: string) => void
+  contextMenu: (event: React.MouseEvent<HTMLAnchorElement>, id: string) => void
+  rename: (id: string, title: string) => void
+  more: (event: React.MouseEvent<HTMLButtonElement>, id: string) => void
+}
+// One thread in the sidebar. Memoized with plain props (live updates keep unchanged threads'
+// objects, see reuse.ts), so a live update or a keystroke only re-renders the rows that changed
+// instead of every row and its avatar, hover card, and menu button.
+const ThreadRow = memo(function ThreadRow({
+  item,
+  actions,
+  showProject,
+  projectName,
+  icons,
+  project,
+  selected,
+  unread,
+  picked,
+  picking,
+  busy,
+  retitling,
+  time,
+  menuOpen,
+}: {
+  item: ThreadSummary
+  actions: React.RefObject<RowActions>
+  // Not grouped: the project's name (and avatar) above the title.
+  showProject: boolean
+  projectName: string
+  // Project icons on (Settings): the project's avatar, else a folder.
+  icons: boolean
+  project: ProjectSummary | undefined
+  selected: boolean
+  unread: boolean
+  picked: boolean
+  picking: boolean
+  busy: boolean
+  retitling: boolean
+  // The time or status word ("Done", "Question"…) shown when it isn't working.
+  time: string
+  menuOpen: boolean
+}) {
+  // The time doubles as the status: the working dots while the agent works, a spinner while a
+  // new title is being written, Question or Approval while it waits for you, Done (green) or
+  // Failed (red) when a turn ended and you haven't opened it yet, and a red time after a
+  // failure.
+  const status =
+    item.status === 'starting' || item.status === 'working' ? (
+      <span className="thread-time working">
+        <StatusDot status={item.status} />
+      </span>
+    ) : retitling ? (
+      <span className="thread-time working">
+        <LoaderCircle size={12} className="status-spinner" aria-label="Writing a new title" />
+      </span>
+    ) : (
+      <span
+        className={`thread-time ${item.status} ${unread ? 'unread' : ''}`}
+        title={item.status === 'failed' ? labels.failed : undefined}
+      >
+        {time}
+      </span>
+    )
+  return (
+    // The ⋮ button sits beside the link (a button can't live inside a link).
+    <div className="thread-row-wrap">
+      {/* Resting on a row for a moment shows its hover card (ThreadPreview). */}
+      <ThreadPreviewTrigger
+        handle={threadPreview}
+        payload={item.id}
+        delay={700}
+        closeDelay={150}
+        render={
+          <Link
+            to="/threads/$threadId"
+            params={{ threadId: item.id }}
+            data-thread-id={item.id}
+            className={`thread-row ${selected ? 'selected' : ''} ${unread ? 'unread' : ''} ${picked ? 'picked' : ''}`}
+            aria-selected={picking ? picked : undefined}
+            onClick={(event) => actions.current.click(event, item.id)}
+            onContextMenu={(event) => actions.current.contextMenu(event, item.id)}
+            onDoubleClick={(event) => {
+              event.preventDefault()
+              actions.current.rename(item.id, item.title)
+            }}
+            aria-disabled={busy}
+            aria-current={selected ? 'page' : undefined}
+          />
+        }
+      >
+        {/* A picked thread shows a check before its title. */}
+        {picked ? (
+          <span className="thread-pick" aria-hidden>
+            <Check size={9} strokeWidth={3.5} />
+          </span>
+        ) : null}
+        {showProject ? (
+          // Not grouped: the project, and the thread's title under it.
+          <span className="thread-lines">
+            <span className="thread-project">
+              {icons ? (
+                <ProjectAvatar path={item.cwd} name={projectName} project={project} />
+              ) : (
+                <Folder size={14} />
+              )}
+              <span>{projectName}</span>
+              {item.machine ? <MachineTag name={item.machine} /> : null}
+            </span>
+            <span className="thread-title">{item.title}</span>
+          </span>
+        ) : (
+          <span className="thread-title">{item.title}</span>
+        )}
+        {status}
+      </ThreadPreviewTrigger>
+      <button
+        type="button"
+        className="thread-more"
+        aria-label={`More actions for ${item.title}`}
+        title="More"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={(event) => actions.current.more(event, item.id)}
+      >
+        <EllipsisVertical size={14} />
+      </button>
+    </div>
+  )
+})
+
+// Shared empty block list: a new [] on each render would defeat MessageView's memo.
+const noBlocks: Block[] = []
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
@@ -1124,7 +1259,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
         }
         if (data.projects) {
           latest.projects = data.projects
-          setProjects(data.projects)
+          // Unchanged projects keep their objects (sidebar rows take them as props).
+          const nextProjects = data.projects
+          setProjects((current) => reuseItems(current, nextProjects, (project) => project.path))
         }
         if (data.processes) setProcesses(data.processes)
         if (data.browsers) setBrowsers(data.browsers)
@@ -1139,7 +1276,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
           latest.threads = data.threads
           announce(threadEvents(statuses.current, data.threads), latest.projects)
           statuses.current = new Map(data.threads.map((item) => [item.id, item.status]))
-          setThreads(data.threads)
+          // Unchanged threads keep their objects, so their sidebar rows don't re-render.
+          const next = data.threads
+          setThreads((current) => reuseItems(current, next))
         }
         // A machine's open thread is followed by that machine's stream (the hub effect).
         if (remoteActive) {
@@ -1157,8 +1296,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
           return
         }
         if (data.thread !== undefined) {
-          if (data.thread) threadCache.current.set(data.thread.id, data.thread)
-          setThread(data.thread)
+          // Unchanged messages and steps keep their objects, so only what changed re-renders.
+          const next = data.thread
+            ? reuseThread(threadCache.current.get(data.thread.id), data.thread)
+            : null
+          if (next) threadCache.current.set(next.id, next)
+          setThread(next)
         }
         if (data.persistenceError) setError(data.persistenceError)
       }
@@ -1256,14 +1399,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
               return {
                 ...current,
                 [machine.id]: {
-                  threads: threadsHere ?? previous.threads,
+                  threads: threadsHere
+                    ? reuseItems(previous.threads, threadsHere)
+                    : previous.threads,
                   projects: projectsHere ?? previous.projects,
                 },
               }
             })
           if (followed && data.thread !== undefined) {
             if (data.thread) {
-              const loaded = hubThread(machine, data.thread)
+              const loaded = reuseThread(
+                threadCache.current.get(hubThread(machine, data.thread).id),
+                hubThread(machine, data.thread),
+              )
               threadCache.current.set(loaded.id, loaded)
               setThread(loaded)
             } else if (
@@ -2515,7 +2663,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     'claude'
   // The conversation one turn at a time (see timeline.ts). While the agent works, the step
   // it's on shows in the live line at the bottom instead of in the list.
-  const turns = thread ? buildTurns(thread) : []
+  // Rebuilt only when the thread changes (not on every render), so the turn pieces handed to
+  // memoized views keep their identity.
+  const turns = useMemo(() => (thread ? buildTurns(thread) : []), [thread])
   // "Worked for 24s · done 2:00 PM" under the thread once its latest turn has ended.
   const lastTurn = turns.at(-1)
   const finished =
@@ -2607,7 +2757,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               key={item.message.id}
               message={item.message}
               meta={false}
-              {...(folded ? { blocks: [] } : {})}
+              {...(folded ? { blocks: noBlocks } : {})}
             />
           )
         ) : item.kind === 'todos' ? (
@@ -2623,10 +2773,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     </div>
   )
 
-  // A thread's time, which doubles as its status (sidebar and ⌘K palette): the working dots
-  // while the agent works, a spinner while a new title is being written, Question or Approval
-  // while it waits for you, Done (green) or Failed (red) when a turn ended and you haven't
-  // opened it yet, and a red time after a failure.
+  // A thread's time, which doubles as its status, for the ⌘K palette (sidebar rows draw their
+  // own, see ThreadRow).
   const threadStatus = (item: ThreadSummary) =>
     item.status === 'starting' || item.status === 'working' ? (
       <span className="thread-time working">
@@ -2669,105 +2817,56 @@ export function Workspace({ threadId }: { threadId?: string }) {
         />
       </div>
     ) : (
-      // The ⋮ button sits beside the link (a button can't live inside a link).
-      <div className="thread-row-wrap" key={item.id}>
-        {/* Resting on a row for a moment shows its hover card (ThreadPreview). */}
-        <ThreadPreviewTrigger
-          handle={threadPreview}
-          payload={item.id}
-          delay={700}
-          closeDelay={150}
-          render={
-            <Link
-              to="/threads/$threadId"
-              params={{ threadId: item.id }}
-              data-thread-id={item.id}
-              className={`thread-row ${activeId === item.id ? 'selected' : ''} ${unread.has(item.id) ? 'unread' : ''} ${picked.has(item.id) ? 'picked' : ''}`}
-              aria-selected={picked.size ? picked.has(item.id) : undefined}
-              onClick={(event) => {
-                if (busy) {
-                  event.preventDefault()
-                  return
-                }
-                // Picking threads instead of opening one (middle-click still opens
-                // a new tab).
-                if (
-                  event.button === 0 &&
-                  (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)
-                ) {
-                  event.preventDefault()
-                  if (event.shiftKey) pickRange(item.id)
-                  else togglePick(item.id)
-                  return
-                }
-                if (!event.altKey && event.button === 0) prepareSelection(item.id)
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                setMenu({
-                  kind: 'thread',
-                  id: item.id,
-                  position: menuPosition(event),
-                })
-              }}
-              onDoubleClick={(event) => {
-                event.preventDefault()
-                setRenaming({ id: item.id, title: item.title })
-              }}
-              aria-disabled={busy}
-              aria-current={activeId === item.id ? 'page' : undefined}
-            />
-          }
-        >
-          {/* A picked thread shows a check before its title. */}
-          {picked.has(item.id) ? (
-            <span className="thread-pick" aria-hidden>
-              <Check size={9} strokeWidth={3.5} />
-            </span>
-          ) : null}
-          {showProject ? (
-            // Not grouped: the project, and the thread's title under it.
-            <span className="thread-lines">
-              <span className="thread-project">
-                {projectIcons ? (
-                  <ProjectAvatar
-                    path={item.cwd}
-                    name={projectName(item.cwd)}
-                    project={projects.find((project) => project.path === item.cwd)}
-                  />
-                ) : (
-                  <Folder size={14} />
-                )}
-                <span>{projectName(item.cwd)}</span>
-                {item.machine ? <MachineTag name={item.machine} /> : null}
-              </span>
-              <span className="thread-title">{item.title}</span>
-            </span>
-          ) : (
-            <span className="thread-title">{item.title}</span>
-          )}
-          {threadStatus(item)}
-        </ThreadPreviewTrigger>
-        <button
-          type="button"
-          className="thread-more"
-          aria-label={`More actions for ${item.title}`}
-          title="More"
-          aria-haspopup="menu"
-          aria-expanded={menu?.kind === 'thread' && menu.id === item.id}
-          onClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect()
-            setMenu({
-              kind: 'thread',
-              id: item.id,
-              position: { x: rect.left, y: rect.bottom + 4 },
-            })
-          }}
-        >
-          <EllipsisVertical size={14} />
-        </button>
-      </div>
+      <ThreadRow
+        key={item.id}
+        item={item}
+        actions={rowActions}
+        showProject={showProject}
+        projectName={showProject ? projectName(item.cwd) : ''}
+        icons={projectIcons}
+        project={
+          showProject && projectIcons
+            ? projects.find((project) => project.path === item.cwd)
+            : undefined
+        }
+        selected={activeId === item.id}
+        unread={unread.has(item.id)}
+        picked={picked.has(item.id)}
+        picking={picked.size > 0}
+        busy={busy}
+        retitling={retitling.has(item.id)}
+        time={threadTime(item, now, unread.has(item.id))}
+        menuOpen={menu?.kind === 'thread' && menu.id === item.id}
+      />
     )
+  // What a sidebar row does when used. Read through a ref, so the memoized rows never need new
+  // props for it: they always call the latest version.
+  const rowActions = useRef<RowActions>(null!)
+  rowActions.current = {
+    click: (event, id) => {
+      if (busy) {
+        event.preventDefault()
+        return
+      }
+      // Picking threads instead of opening one (middle-click still opens a new tab).
+      if (event.button === 0 && (event.metaKey || event.ctrlKey || event.shiftKey || picked.size)) {
+        event.preventDefault()
+        if (event.shiftKey) pickRange(id)
+        else togglePick(id)
+        return
+      }
+      if (!event.altKey && event.button === 0) prepareSelection(id)
+    },
+    contextMenu: (event, id) => {
+      event.preventDefault()
+      setMenu({ kind: 'thread', id, position: menuPosition(event) })
+    },
+    rename: (id, title) => setRenaming({ id, title }),
+    more: (event, id) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      setMenu({ kind: 'thread', id, position: { x: rect.left, y: rect.bottom + 4 } })
+    },
+  }
   return (
     // Images, media, and pages in the open thread load from where it lives (the hub).
     <ApiBase.Provider value={apiBaseFor(activeId)}>

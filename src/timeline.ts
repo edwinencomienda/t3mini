@@ -51,6 +51,8 @@ type ThreadState = {
 const running = (status: Status) =>
   status === 'starting' || status === 'working' || status === 'waiting'
 
+const noBlocks: Block[] = []
+
 export function buildTurns(thread: ThreadState): Turn[] {
   const turns: Turn[] = []
   for (const message of thread.messages) {
@@ -135,9 +137,11 @@ export function buildTurns(thread: ThreadState): Turn[] {
       turn.work = turn.work.filter(
         (item) => item.kind !== 'note' || !turn.replies.includes(item.message),
       )
-      turn.blocks = turn.work.flatMap((item) =>
+      const blocks = turn.work.flatMap((item) =>
         item.kind === 'note' ? (item.message.blocks ?? []) : [],
       )
+      // Shared when empty, so memoized messages handed it don't re-render for a new [].
+      turn.blocks = blocks.length ? blocks : noBlocks
     }
     const notes = turn.work.filter((item) => item.kind === 'note')
     turn.endedAt =
