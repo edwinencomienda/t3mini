@@ -15,6 +15,7 @@ const context = (showStatusCard: ToolContext['showStatus']): ToolContext => ({
   readThread: async () => '',
   rename: vi.fn(),
   setTodos: vi.fn(),
+  ask: vi.fn(),
   showStatus: showStatusCard,
 })
 const base = { id: 'push', kind: 'push', status: 'running', title: 'Pushing to GitHub' }

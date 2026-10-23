@@ -22,6 +22,7 @@ const context = (uploads: Uploads) => {
     readThread: async () => '',
     setTodos: vi.fn(),
     showStatus: vi.fn(),
+    ask: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, value }

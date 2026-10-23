@@ -16,6 +16,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   readThread: async () => '',
   setTodos: vi.fn(),
   showStatus: vi.fn(),
+  ask: vi.fn(),
   rename,
 })
 

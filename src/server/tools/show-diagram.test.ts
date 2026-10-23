@@ -19,6 +19,7 @@ const context = () => {
     readThread: async () => '',
     setTodos: vi.fn(),
     showStatus: vi.fn(),
+    ask: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, value }

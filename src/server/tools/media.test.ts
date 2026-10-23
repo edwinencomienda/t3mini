@@ -48,6 +48,7 @@ const setup = async () => {
     readThread: async () => '',
     setTodos: vi.fn(),
     showStatus: vi.fn(),
+    ask: vi.fn(),
     processes: {} as never,
     threads: {} as never,
     browser: {} as never,

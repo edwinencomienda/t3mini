@@ -173,6 +173,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     readThread: async () => '',
     setTodos: vi.fn(),
     showStatus: vi.fn(),
+    ask: vi.fn(),
     processes: {} as never,
     threads: {} as never,
     rename: vi.fn(),

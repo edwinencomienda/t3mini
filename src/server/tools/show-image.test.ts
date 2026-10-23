@@ -35,6 +35,7 @@ beforeEach(async () => {
     readThread: async () => '',
     setTodos: vi.fn(),
     showStatus: vi.fn(),
+    ask: vi.fn(),
     rename: vi.fn(),
   }
 })

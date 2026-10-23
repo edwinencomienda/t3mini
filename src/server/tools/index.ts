@@ -8,10 +8,12 @@ import { processTools } from './processes'
 import { renameThread } from './rename-thread'
 import { updateChecklist } from './update-checklist'
 import { showStatus } from './show-status'
+import { askUser } from './ask-user'
 import { readThread } from './read-thread'
 import { threadTools } from './threads'
 import { browserTools } from './browser'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
+import type { Provider } from '../../types'
 
 // Every tool agents can use. Add new tools here (one file each in this folder).
 export const tools: ToolDefinition<any>[] = [
@@ -22,6 +24,7 @@ export const tools: ToolDefinition<any>[] = [
   playAudio,
   updateChecklist,
   showStatus,
+  askUser,
   renameThread,
   readThread,
   ...threadTools,
@@ -57,6 +60,21 @@ export const toolInstructions = [
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +
     'small interactive page, or a video in the chat for the user; play_audio plays a sound.',
 ].join('\n')
+
+// The tools one agent gets: all of them, minus those meant for the other agent only.
+export const toolsFor = (provider: Provider) =>
+  tools.filter((definition) => !definition.providers || definition.providers.includes(provider))
+// The note for one agent: the shared one, plus lines about tools only it has.
+export function instructionsFor(provider: Provider) {
+  if (provider !== 'codex') return toolInstructions
+  return (
+    toolInstructions +
+    '\n- ask_user asks the user multiple-choice questions on a card and waits for the answers. ' +
+    'Whenever you need the user to choose (between approaches, options, or what they meant), ' +
+    'ask with ask_user instead of listing the options in your reply and ending your turn: ' +
+    'the card lets them answer with one click and you keep working in the same turn.'
+  )
+}
 
 // Tools reach Claude through an in-process MCP server named "t3mini", so Claude sees them as
 // mcp__t3mini__<name>.

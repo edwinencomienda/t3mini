@@ -10,10 +10,11 @@ import {
   findClaudeTool,
   maskInput,
   mcpServerName,
+  instructionsFor,
   runTool,
-  toolInstructions,
-  tools,
+  toolsFor,
 } from '../tools'
+import { questionsSchema } from '../tools/ask-user'
 import type { PromptImage, Runner } from './types'
 import type { Activity } from '../../types'
 import { describeClaudeTool, toolOutput } from './activity'
@@ -22,28 +23,8 @@ import { claudeSettings, threadSettings } from '../provider-settings'
 import { claudeExecutable } from '../cli-updates'
 import { z } from 'zod'
 
-// AskUserQuestion's input, checked before it's shown: 1–4 questions with a few options each.
-const questionInput = z.object({
-  questions: z
-    .array(
-      z.object({
-        question: z.string().min(1).max(1000),
-        header: z.string().max(100).optional(),
-        multiSelect: z.boolean().optional(),
-        options: z
-          .array(
-            z.object({
-              label: z.string().min(1).max(200),
-              description: z.string().max(1000).optional(),
-            }),
-          )
-          .min(1)
-          .max(8),
-      }),
-    )
-    .min(1)
-    .max(4),
-})
+// AskUserQuestion's input, checked before it's shown (the same rules as ask_user's).
+const questionInput = z.object({ questions: questionsSchema })
 
 // Run the installed Claude Code CLI, so updating it updates t3 mini too. Without one, the copy
 // bundled with the Agent SDK runs.
@@ -146,8 +127,8 @@ export const runClaude: Runner = async (ctx) => {
   const t3Tools = createSdkMcpServer({
     name: mcpServerName,
     version: '1.0.0',
-    instructions: toolInstructions,
-    tools: tools.map((definition) =>
+    instructions: instructionsFor('claude'),
+    tools: toolsFor('claude').map((definition) =>
       tool(
         definition.name,
         definition.description,
@@ -191,7 +172,7 @@ export const runClaude: Runner = async (ctx) => {
     }
   }
   // Display-only tools never need the user's approval.
-  const safeTools = tools
+  const safeTools = toolsFor('claude')
     .filter((definition) => definition.safety === 'safe')
     .map((definition) => claudeToolName(definition.name))
   // Subagents by their Agent tool call, for labelling their steps in the work log.
