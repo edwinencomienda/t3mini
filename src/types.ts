@@ -115,9 +115,11 @@ export type ThreadWorktree = {
   repo: string
   // Where the project folder is inside the repository, when it isn't the top.
   subdir?: string
-  // How long creating it took, and how many .worktreeinclude files were copied.
+  // How long creating it took, how many .worktreeinclude files were copied, and which listed
+  // folders were cloned whole (e.g. "node_modules/").
   setupMs: number
   copied?: number
+  cloned?: string[]
 }
 export type Thread = {
   id: string

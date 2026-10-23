@@ -776,13 +776,15 @@ export class AgentService {
       throw isWorktreeError(error) ? error : new Error('Could not create the worktree.')
     }
     delete thread.useWorktree
-    const { branch, path, setupMs, copied } = thread.worktree
+    const { branch, path, setupMs, copied, cloned } = thread.worktree
     step.status = 'completed'
     step.title = `Create worktree ${branch} (${(setupMs / 1000).toFixed(2)}s)`
     step.detail = path
-    step.output = copied
-      ? `Copied ${copied} file${copied === 1 ? '' : 's'} from .worktreeinclude.`
-      : undefined
+    const notes = [
+      ...(cloned?.length ? [`Cloned ${cloned.join(', ')} from .worktreeinclude.`] : []),
+      ...(copied ? [`Copied ${copied} file${copied === 1 ? '' : 's'} from .worktreeinclude.`] : []),
+    ]
+    step.output = notes.length ? notes.join(' ') : undefined
     // Saved right away: the worktree exists now, whatever happens to the turn.
     await this.store.save().catch(() => {})
     touch()
@@ -790,14 +792,19 @@ export class AgentService {
   // After deleting threads: remove their worktrees when nothing in them would be lost. One with
   // uncommitted changes is kept (its path is returned). Branches always stay.
   private async cleanUpWorktrees(threads: Thread[]) {
+    // A chat's folder goes only if it's empty: files the agent made there stay.
+    await Promise.all(
+      threads.map((thread) =>
+        thread.chatFolder ? removeChatFolder(thread.chatFolder).catch(() => {}) : undefined,
+      ),
+    )
+    // Every worktree's changes check at once (each is a `git status`), then the removals, one at
+    // a time (they share their repository's worktree list, and each is only a move now).
+    const worktrees = threads.flatMap((thread) => (thread.worktree ? [thread.worktree] : []))
+    const changes = await Promise.all(worktrees.map((worktree) => worktreeChanges(worktree)))
     const kept: string[] = []
-    for (const thread of threads) {
-      // A chat's folder goes only if it's empty: files the agent made there stay.
-      if (thread.chatFolder) await removeChatFolder(thread.chatFolder).catch(() => {})
-      const worktree = thread.worktree
-      if (!worktree) continue
-      const changes = await worktreeChanges(worktree)
-      if (changes) {
+    for (const [index, worktree] of worktrees.entries()) {
+      if (changes[index]) {
         kept.push(worktree.path)
         continue
       }

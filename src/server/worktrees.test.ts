@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import {
   createWorktree,
+  emptyTrash,
   removeWorktree,
   repoRoot,
   worktreeChanges,
@@ -96,4 +97,60 @@ it('refuses folders outside its worktrees folder and repositories without commit
   git(base, 'init', '-q', empty)
   await expect(createWorktree(empty, 'aaaaaaaa-0000')).rejects.toThrow(/first commit/)
   await expect(createWorktree(base, 'bbbbbbbb-0000')).rejects.toThrow(/git repository/)
+})
+
+it('clones a whole listed folder such as node_modules, links and all', async () => {
+  await writeFile(join(repo, '.worktreeinclude'), '.env\nnode_modules/\n')
+  await mkdir(join(repo, 'node_modules', '.bin'), { recursive: true })
+  await symlink('../left-pad/index.js', join(repo, 'node_modules', '.bin', 'left-pad'))
+  const worktree = await createWorktree(repo, 'c10e0000-0000-0000-0000-000000000000')
+  const copied = join(worktree.path, 'node_modules')
+  expect(await exists(join(copied, 'left-pad', 'index.js'))).toBe(true)
+  if (process.platform === 'darwin') {
+    // Cloned whole (copy-on-write), so its links come along as they are.
+    expect(worktree.cloned).toEqual(['node_modules/'])
+    expect(await exists(join(copied, '.bin', 'left-pad'))).toBe(true)
+  }
+  // The worktree's copy is its own: changing it leaves the main checkout alone.
+  await writeFile(join(copied, 'left-pad', 'index.js'), 'changed')
+  expect(await readFile(join(repo, 'node_modules', 'left-pad', 'index.js'), 'utf8')).toBe('')
+})
+
+it('copies a listed folder file by file where it can’t clone, but never half of one', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: 'linux' })
+  try {
+    await writeFile(join(repo, '.gitignore'), '.env\nnode_modules/\nsecret-link\nbig/\n')
+    await writeFile(join(repo, '.worktreeinclude'), 'node_modules/\nbig/\n')
+    git(repo, 'commit', '-q', '-am', 'ignore big')
+    await mkdir(join(repo, 'big'), { recursive: true })
+    await Promise.all(
+      Array.from({ length: 1001 }, (_, index) => writeFile(join(repo, 'big', `${index}.txt`), '')),
+    )
+    const worktree = await createWorktree(repo, 'f0110000-0000-0000-0000-000000000000')
+    // node_modules (1 file) fits: copied. big (1,001 files) doesn't: skipped whole.
+    expect(worktree).toMatchObject({ copied: 1 })
+    expect(worktree.cloned).toBeUndefined()
+    expect(await exists(join(worktree.path, 'node_modules', 'left-pad', 'index.js'))).toBe(true)
+    expect(await exists(join(worktree.path, 'big'))).toBe(false)
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
+})
+
+it('removes a worktree at once: moved out, forgotten by git, deleted in the background', async () => {
+  const worktree = await createWorktree(repo, 'fa570000-0000-0000-0000-000000000000')
+  await removeWorktree(worktree)
+  expect(await exists(worktree.path)).toBe(false)
+  expect(git(repo, 'worktree', 'list')).not.toContain(worktree.path)
+  expect(git(repo, 'branch', '--list', 't3m/fa570000')).toContain('t3m/fa570000')
+  // Whatever is still in the trash goes when it's emptied.
+  await emptyTrash()
+  const trash = join(worktreesRoot(), '.trash')
+  expect(await readdir(trash).catch(() => [])).toEqual([])
+  // The trash itself can't be removed as a worktree.
+  await mkdir(join(trash, 'x'), { recursive: true })
+  await expect(removeWorktree({ ...worktree, path: join(trash, 'x') })).rejects.toThrow(
+    /didn’t create/,
+  )
 })
