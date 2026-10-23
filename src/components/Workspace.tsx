@@ -888,6 +888,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // switching so the layout doesn't blank out and pop back in while fresh data loads.
   const threadCache = useRef(new Map<string, Thread>())
   const notice = useRef<string | undefined>(undefined)
+  // Threads this window is deleting. The live update that drops one often arrives before the
+  // delete call returns; the "deleted elsewhere" handling skips these, so deleting the open
+  // thread just moves on to the next one, without a "That thread was deleted." notice.
+  const deleting = useRef(new Set<string>())
   const gitCache = useRef(new Map<string, GitInfo>())
   const [git, setGit] = useState<GitInfo | null>(null)
   const scrollArea = useRef<HTMLDivElement>(null)
@@ -1062,7 +1066,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // go home like the desktop does after deleting, instead of waiting on a thread that's gone.
     let gone = false
     const leave = () => {
-      if (gone || !activeId) return
+      if (gone || !activeId || deleting.current.has(activeId)) return
       gone = true
       threadCache.current.delete(activeId)
       drafts.current.delete(activeId)
@@ -1250,7 +1254,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
               const loaded = hubThread(machine, data.thread)
               threadCache.current.set(loaded.id, loaded)
               setThread(loaded)
-            } else if (threadsHere && !threadsHere.some((item) => item.id === activeId)) {
+            } else if (
+              threadsHere &&
+              !threadsHere.some((item) => item.id === activeId) &&
+              !deleting.current.has(activeId ?? '')
+            ) {
               // Deleted on the machine (or from another window): go home, like a local thread.
               threadCache.current.delete(activeId ?? '')
               notice.current = 'That thread was deleted.'
@@ -2097,12 +2105,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
       return
     setBusy(true)
     const next = nextAfterDelete([target.id])
+    deleting.current.add(target.id)
     try {
       keptWorktrees(await api<DeleteResult>(threadApi(target.id), 'DELETE', {}))
       forget(target.id, next)
     } catch (error) {
       setError((error as Error).message)
     } finally {
+      deleting.current.delete(target.id)
       setBusy(false)
     }
   }
@@ -2170,6 +2180,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setError('')
     let failed = 0
     const next = nextAfterDelete(deletable.map((item) => item.id))
+    for (const target of deletable) deleting.current.add(target.id)
     for (const target of deletable)
       try {
         keptWorktrees(await api<DeleteResult>(threadApi(target.id), 'DELETE', {}))
@@ -2177,6 +2188,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       } catch {
         failed++
       }
+    for (const target of deletable) deleting.current.delete(target.id)
     setPicked(new Set())
     if (failed) setError(`Couldn't delete ${plural(failed, 'thread')}. Try again.`)
     else if (running.length)
