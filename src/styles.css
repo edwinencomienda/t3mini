@@ -4882,6 +4882,29 @@ body.resizing {
 }
 
 /* Scroll to bottom: a round button floating just above the composer. */
+/* "Press Esc again to stop": after one Esc while the agent works (Esc twice stops it). */
+.esc-hint {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  right: 1.25rem;
+  z-index: 1;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+.esc-hint kbd {
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  font: inherit;
+  font-size: 11px;
+  color: var(--foreground);
+}
 .scroll-to-bottom {
   position: absolute;
   bottom: calc(100% + 0.5rem);

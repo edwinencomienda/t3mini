@@ -2345,6 +2345,43 @@ export function Workspace({ threadId }: { threadId?: string }) {
     setPicked((current) => new Set([...current, ...range]))
   }
   const active = thread ? isActive(thread.status) && !isStopping(thread) : false
+  // Esc twice stops the open thread's agent, like Claude Code: the first press shows "Press Esc
+  // again to stop", a second within a second stops it. Esc that closes a menu or dialog, cancels
+  // an edit, or clears picked threads doesn't count.
+  const [escHint, setEscHint] = useState(false)
+  const escAt = useRef(0)
+  const stopRef = useRef(stop)
+  stopRef.current = stop
+  useEffect(() => {
+    escAt.current = 0
+    setEscHint(false)
+    if (!active || picked.size) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.repeat)
+        return
+      if (
+        document.querySelector(
+          '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+        )
+      )
+        return
+      if (Date.now() - escAt.current < 1000) {
+        escAt.current = 0
+        setEscHint(false)
+        void stopRef.current()
+      } else {
+        escAt.current = Date.now()
+        setEscHint(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, picked.size, thread?.id])
+  useEffect(() => {
+    if (!escHint) return
+    const timer = setTimeout(() => setEscHint(false), 1000)
+    return () => clearTimeout(timer)
+  }, [escHint])
   // Live dictation shows in the empty composer's placeholder. A placeholder doesn't count toward
   // the textarea's height, so the box is sized to the words as if they were typed; past the
   // maximum height it keeps the latest words (what you're saying now). Set on the element
@@ -3414,6 +3451,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
               {thread || !activeId ? (
                 <footer className="composer-area">
                   <ScrollToBottom scrollArea={scrollArea} stickToBottom={stickToBottom} />
+                  {escHint && active ? (
+                    <div className="esc-hint" role="status">
+                      Press <kbd>Esc</kbd> again to stop
+                    </div>
+                  ) : null}
                   {error ? (
                     <div className="error-banner" role="alert">
                       <span>{error}</span>
@@ -3592,7 +3634,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               className="stop-button"
                               type="button"
                               aria-label="Stop"
-                              title="Stop"
+                              title="Stop (Esc Esc)"
                               onClick={() => void stop()}
                               disabled={!connected}
                             >
