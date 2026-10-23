@@ -1,3 +1,4 @@
+import { renameSync, writeFileSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { isImageId } from './uploads'
 import { dirname, join } from 'node:path'
@@ -37,13 +38,62 @@ export class ThreadStore {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
     }
   }
+  // A saveSoon() that hasn't written yet.
+  private pending?: NodeJS.Timeout
   save() {
+    // This writes everything, so a pending saveSoon() has nothing left to do.
+    this.cancelPending()
     // Serialize snapshots before queueing writes; only one atomic rename can run at a time.
     const contents = JSON.stringify([...this.threads.values()])
     const write = this.queue.then(() => writeAtomic(this.path, contents))
     this.queue = write.catch(() => {})
     return write
   }
+  // Saves within saveDelay, however many changes come in meanwhile. Streamed replies change
+  // threads ten times a second, and each save rewrites every thread, so they're written at most
+  // once a second instead (the browser still gets every update). Turn ends and other changes
+  // that must not be lost still call save() directly, and t3 mini writes a pending save on exit.
+  saveSoon(onError: () => void) {
+    if (this.pending) return
+    pendingStores.add(this)
+    hookExit()
+    this.pending = setTimeout(() => {
+      this.cancelPending()
+      this.save().catch(onError)
+    }, saveDelay)
+    // Waiting to save doesn't keep the process alive; the exit hook writes it.
+    this.pending.unref?.()
+  }
+  // Writes a pending saveSoon() right away, synchronously (for the exit hook). An atomic write,
+  // like save(); if it fails, the last saved file is left as it was.
+  flushNow() {
+    if (!this.pending) return
+    this.cancelPending()
+    try {
+      writeFileSync(this.path + '.tmp', JSON.stringify([...this.threads.values()]), {
+        mode: 0o600,
+      })
+      renameSync(this.path + '.tmp', this.path)
+    } catch {
+      // Nothing more can be done while exiting.
+    }
+  }
+  private cancelPending() {
+    if (!this.pending) return
+    clearTimeout(this.pending)
+    this.pending = undefined
+    pendingStores.delete(this)
+  }
+}
+export const saveDelay = 1000
+// Stores with a saveSoon() waiting, written out when the process exits (signals end in
+// process.exit, which runs 'exit' hooks; see processes.ts and app-server.mjs).
+const pendingStores = new Set<ThreadStore>()
+let exitHooked = false
+function hookExit() {
+  if (exitHooked) return
+  exitHooked = true
+  process.once('exit', () => pendingStores.forEach((store) => store.flushNow()))
 }
 export const defaultStorePath = () =>
   join(process.env.T3_MINI_DATA_DIR || join(process.cwd(), '.data'), 'threads.json')

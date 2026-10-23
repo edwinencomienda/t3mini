@@ -554,11 +554,12 @@ export class AgentService {
     for (const listener of this.listeners) listener()
   }
   private changed() {
-    // Batch text bursts so the browser and disk are updated at most ten times a second.
+    // Batch text bursts so the browser is updated at most ten times a second, and the disk at
+    // most once a second (each save rewrites every thread; see ThreadStore.saveSoon).
     if (!this.timer)
       this.timer = setTimeout(() => {
         this.timer = undefined
-        void this.store.save().catch(() => {
+        this.store.saveSoon(() => {
           this.persistenceError =
             'Could not save conversations. Check disk space and permissions, then restart the server.'
           this.notify()

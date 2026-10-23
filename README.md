@@ -183,7 +183,7 @@ Developer details (architecture, security invariants, pitfalls, tests): [docs/ph
 
 ## Data and configuration
 
-Conversations are atomically saved to `.data/threads.json`, projects to `.data/projects.json`, and attachments under `.data/attachments/` (all gitignored). Deleting a thread does not delete its attachments. Creating a thread also saves its folder as a project. Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
+Conversations are atomically saved to `.data/threads.json` (while a reply streams, at most once a second; turn ends are saved right away, and a pending save is written when t3 mini exits), projects to `.data/projects.json`, and attachments under `.data/attachments/` (all gitignored). Deleting a thread does not delete its attachments. Creating a thread also saves its folder as a project. Provider session IDs are kept so later messages continue the same conversation. Deleting a thread removes its t3 mini history; the provider may retain its own native session history. Back up `.data` if you need it.
 
 | Environment variable     | Purpose                                                                                                                                        |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
