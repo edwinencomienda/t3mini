@@ -64,6 +64,12 @@ src/components/HtmlView.tsx the sandboxed HTML page in the reply (show_html)
 - **Safety:** `start_process` and `restart_process` are `approval` (Allow once / Decline unless the thread has full access); list, logs, and stop are `safe`.
 - **UI:** the live snapshot includes `processes`; the composer's meta row shows "● N running" for the open project (`components/Processes.tsx`), with Logs (polled every second while open), Restart, Stop, and Remove. API: `GET /api/processes/:id/logs`, `POST /api/processes/:id/stop|restart`, `DELETE /api/processes/:id`.
 
+## ask_user (Codex only)
+
+- Multiple-choice questions on the same question card as Claude's built-in AskUserQuestion: `{ questions: [{ question, header?, multiSelect?, options: [{ label, description? }] }] }`, 1–4 questions with 1–8 options each (`questionsSchema`, which Claude's AskUserQuestion is now checked against too). The tool waits for the answers (`context.ask`, which goes through the same approval path as Claude's questions, so the thread shows **Question**, phones get it, and Skip works) and returns them to the agent as text; a skip says so.
+- Only Codex gets it (`providers: ['codex']`): Claude already has AskUserQuestion. `toolsFor(provider)` and `instructionsFor(provider)` in `tools/index.ts` give each agent its own tool list and note; Codex's note tells it to use the card instead of listing options in its reply and ending the turn (without that firmer line, Codex tended to ask in plain text).
+- Codex declares tools when a thread starts, so only Codex threads started after this get it.
+
 ## rename_thread
 
 - Input: `{ title }`, trimmed, 1–120 characters. There is no thread id: the tool can only rename the thread the agent is running in (`context.rename`, which calls `AgentService.rename` for that thread, saves, and pushes a live update so the sidebar changes right away).

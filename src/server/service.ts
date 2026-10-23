@@ -1100,6 +1100,9 @@ export class AgentService {
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
         threads: this.threadControl(thread),
+        // ask_user: the same question card and answers as Claude's own AskUserQuestion.
+        ask: ({ title, questions }) =>
+          context.ask!({ id: `ask:${crypto.randomUUID()}`, title, questions }),
         setTodos: (todos) => {
           thread.todos = todos.length ? todos : undefined
           touch()

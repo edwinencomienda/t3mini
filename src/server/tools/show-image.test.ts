@@ -34,6 +34,7 @@ beforeEach(async () => {
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     setTodos: vi.fn(),
+    ask: vi.fn(),
     rename: vi.fn(),
   }
 })

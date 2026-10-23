@@ -2,7 +2,7 @@ import type { z } from 'zod'
 import type { Block } from '../../blocks'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
-import type { Todo } from '../../types'
+import type { Provider, Question, Todo } from '../../types'
 
 // A thread's own browser session (see ../browser.ts): one private page, local sites only.
 export type ThreadBrowser = {
@@ -76,6 +76,9 @@ export type ToolContext = {
   threads: ThreadControl
   // This thread's browser (browser_* tools).
   browser: ThreadBrowser
+  // Shows questions on the question card and waits for the answers (question → answer), or
+  // null if the user skipped them (ask_user).
+  ask: (input: { title: string; questions: Question[] }) => Promise<Record<string, string> | null>
   // Replaces this thread's to-do checklist (update_checklist); an empty list clears it.
   setTodos: (todos: Todo[]) => void
 }
@@ -99,6 +102,9 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   kind?: 'browser' | 'todo'
   // Inputs never shown in the work log or approval prompts (e.g. a login cookie's value).
   secretInputs?: string[]
+  // Only these agents get the tool (default: both), e.g. one that stands in for a built-in
+  // tool the other agent already has.
+  providers?: Provider[]
   // Returns a short message for the agent. Throw ToolError for a clear refusal.
   run: (context: ToolContext, input: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>
 }

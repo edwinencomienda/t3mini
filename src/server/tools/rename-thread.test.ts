@@ -15,6 +15,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   saveMedia: async () => ({ id: 'x.mp4' }),
   readThread: async () => '',
   setTodos: vi.fn(),
+  ask: vi.fn(),
   rename,
 })
 
