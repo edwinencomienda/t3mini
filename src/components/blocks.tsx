@@ -5,6 +5,7 @@ import type { AudioBlock, Block, ImageBlock, VideoBlock } from '../blocks'
 import { Diagram } from './Diagram'
 import { HtmlView } from './HtmlView'
 import { previewOnClick } from './ImagePreview'
+import { imageLoading } from '../loaded-images'
 
 // Renders the rich content tools add to agent replies. Each block type gets one component;
 // add new types (charts, tables…) to the switch.
@@ -26,7 +27,7 @@ function ImageView({ block }: { block: ImageBlock }) {
         <img
           src={src}
           alt={block.caption || 'Image from the agent'}
-          loading="lazy"
+          {...imageLoading(src)}
           decoding="async"
         />
       </a>

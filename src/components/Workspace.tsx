@@ -100,6 +100,7 @@ import { SidebarResize } from './SidebarResize'
 import { ProjectFilter } from './ProjectFilter'
 import { CopyButton } from './CopyButton'
 import { Diagram } from './Diagram'
+import { imageLoading } from '../loaded-images'
 import { ScrollToBottom } from './ScrollToBottom'
 import { localDevUrl, openPreview } from '../open-preview'
 import { dateSections } from '../sidebar-groups'
@@ -396,7 +397,7 @@ const MessageView = memo(
                     <img
                       src={`${base}/uploads/${encodeURIComponent(item.id)}`}
                       alt={item.name}
-                      loading="lazy"
+                      {...imageLoading(`${base}/uploads/${encodeURIComponent(item.id)}`)}
                       decoding="async"
                     />
                   </a>
@@ -597,8 +598,23 @@ const shortName = (name: string) => (name.length > 28 ? `${name.slice(0, 27)}…
 // working on it.
 const firstTurns = 12
 const moreTurns = 20
-// Where you were in a thread (this tab only): the oldest drawn turn, and how far from the bottom.
-type Place = { from?: string; atBottom: boolean; fromBottom: number }
+// Where you were in a thread (this tab only): the oldest drawn turn, the turn at the top of the
+// view and how far its top was from the view's top, and (when that turn isn't drawn) how far
+// from the bottom.
+type Place = {
+  from?: string
+  atBottom: boolean
+  fromBottom: number
+  anchor?: { turn: string; offset: number }
+}
+// The drawn turn at the top of the chat's view, and how far its top is from the view's top.
+function topTurn(element: HTMLElement): Place['anchor'] {
+  const top = element.getBoundingClientRect().top
+  for (const turn of element.querySelectorAll<HTMLElement>('[data-turn]')) {
+    const box = turn.getBoundingClientRect()
+    if (box.bottom > top) return { turn: turn.dataset.turn!, offset: box.top - top }
+  }
+}
 
 // The top of a partly drawn thread: draws older turns once you scroll near it (well before
 // you reach it), or when clicked.
@@ -884,17 +900,29 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const keepFromBottom = useRef<number | null>(null)
   // The thread on screen (clicking a thread shows its cached copy before the URL changes).
   const shownThread = useRef<string | undefined>(undefined)
-  // Where a thread that's settling is held: the bottom (null), or a distance from it.
-  const holdFromBottom = useRef<number | null>(null)
+  // The thread just clicked, until the URL catches up: its place is restored as soon as its
+  // cached copy is drawn, so it never shows a frame at the bottom first.
+  const selecting = useRef<string | null>(null)
+  // Where a thread that's settling is held: the bottom (null), or your place in it.
+  const hold = useRef<Place | null>(null)
   // Keeps the chat at the bottom while it's stuck there, and wherever it's held while it
-  // settles (diagrams and images size themselves a moment after they're drawn).
+  // settles (diagrams and images size themselves a moment after they're drawn). A place is
+  // held by its turn, so content growing above or below it doesn't move you; only if that
+  // turn isn't drawn, by the distance from the bottom.
   const pin = () => {
     const element = scrollArea.current
     if (!element) return
     const settling = Date.now() < settleUntil.current
-    if (settling && holdFromBottom.current !== null)
-      element.scrollTop = element.scrollHeight - holdFromBottom.current
-    else if (stickToBottom.current || settling) element.scrollTop = element.scrollHeight
+    const place = settling ? hold.current : null
+    if (place) {
+      const turn = place.anchor
+        ? element.querySelector<HTMLElement>(`[data-turn="${CSS.escape(place.anchor.turn)}"]`)
+        : null
+      if (turn && place.anchor) {
+        const offset = turn.getBoundingClientRect().top - element.getBoundingClientRect().top
+        element.scrollTop += offset - place.anchor.offset
+      } else element.scrollTop = element.scrollHeight - place.fromBottom
+    } else if (stickToBottom.current || settling) element.scrollTop = element.scrollHeight
   }
   // Back in a thread you'd scrolled up in: the same spot, measured from the bottom (new
   // messages since then are below you), held while the thread settles.
@@ -903,7 +931,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (!place || place.atBottom) return
     stickToBottom.current = false
     settleUntil.current = Date.now() + 900
-    holdFromBottom.current = place.fromBottom
+    hold.current = place
   }
   const composer = useRef<HTMLTextAreaElement>(null)
   const drafts = useRef(new Map<string, string>())
@@ -1298,8 +1326,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     // scroll momentum settles.
     stickToBottom.current = true
     settleUntil.current = Date.now() + 900
-    holdFromBottom.current = null
+    hold.current = null
     if (activeId && shownThread.current === activeId) restorePlace(activeId)
+    selecting.current = null
     pin()
     let frames = 0
     let frame = requestAnimationFrame(function repin() {
@@ -1320,9 +1349,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   useLayoutEffect(() => {
     const element = scrollArea.current
     if (!element || !loadedThread) return
-    // Only once it's the open thread (a click shows it before the URL changes; the effect
-    // above restores it then).
-    if (loadedThread === activeId) restorePlace(loadedThread)
+    // The open thread, or the one just clicked (shown before the URL changes).
+    if (loadedThread === activeId || loadedThread === selecting.current) restorePlace(loadedThread)
     pin()
   }, [loadedThread])
   // On a paired phone or tablet, a localhost link in the chat (an agent's "running at
@@ -1780,7 +1808,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     stickToBottom.current = true
     // Scrolling while the view switches isn't you moving around in either thread.
     settleUntil.current = Date.now() + 900
-    holdFromBottom.current = null
+    hold.current = null
+    selecting.current = id
   }
   function select(id: string) {
     prepareSelection(id)
@@ -1829,9 +1858,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
       list.removeEventListener('touchmove', stop)
     }
   }, [])
+  // (Sticking to the bottom is decided with the scroll position, in the layout effect above:
+  // setting it here, after a restored place, would pull you to the bottom on the next resize.)
   useEffect(() => {
     setDraft(activeId ? drafts.current.get(activeId) || '' : '')
-    stickToBottom.current = true
   }, [activeId])
   // Local or a new worktree, before the first message (the worktree is made on the first send).
   async function chooseWorktree(enabled: boolean) {
@@ -2503,6 +2533,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
       ...(firstDrawn ? { from: turns[firstDrawn]!.key } : {}),
       atBottom: stickToBottom.current,
       fromBottom: element.scrollHeight - element.scrollTop,
+      anchor: topTurn(element),
     })
   }
   // Older turns drawn above: stay on the same spot (the chat has no scroll anchoring).
@@ -3276,7 +3307,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         />
                       ) : null}
                       {drawnTurns.map((turn) => (
-                        <div className="turn" key={turn.key}>
+                        <div className="turn" key={turn.key} data-turn={turn.key}>
                           {turn.user ? <MessageView message={turn.user} /> : null}
                           {turn.done && turn.work.length ? (
                             <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>

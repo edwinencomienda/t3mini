@@ -182,8 +182,9 @@ function config(dark: boolean) {
 let queue: Promise<unknown> = Promise.resolve()
 let counter = 0
 const cache = new Map<string, string>()
+const cacheKey = (source: string, dark: boolean) => `${dark ? 'dark' : 'light'}\n${source}`
 function draw(source: string, dark: boolean): Promise<string> {
-  const key = `${dark ? 'dark' : 'light'}\n${source}`
+  const key = cacheKey(source, dark)
   const cached = cache.get(key)
   if (cached) return Promise.resolve(cached)
   const job = queue.then(async () => {
@@ -250,8 +251,20 @@ type State =
   { status: 'drawing' } | { status: 'ready'; svg: string } | { status: 'error'; message: string }
 function useDiagram(source: string): State {
   const dark = useDark()
-  const [state, setState] = useState<State>({ status: 'drawing' })
+  // Already drawn (back in a thread you've seen): shown at once, at its size, so the thread's
+  // height and your place in it don't shift while it's drawn again.
+  const [state, setState] = useState<State>(() => {
+    const svg = cache.get(cacheKey(source, dark))
+    return svg ? { status: 'ready', svg } : { status: 'drawing' }
+  })
   useEffect(() => {
+    const svg = cache.get(cacheKey(source, dark))
+    if (svg) {
+      setState((current) =>
+        current.status === 'ready' && current.svg === svg ? current : { status: 'ready', svg },
+      )
+      return
+    }
     let cancelled = false
     // A short pause so a streaming ```mermaid block isn't redrawn on every chunk.
     const timer = setTimeout(() => {
