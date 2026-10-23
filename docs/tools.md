@@ -16,6 +16,7 @@ src/server/tools/
   show-video.ts  the show_video tool
   play-audio.ts  the play_audio tool
   rename-thread.ts  the rename_thread tool
+  update-checklist.ts  the update_checklist tool (the to-do checklist card)
   read-thread.ts the read_thread tool (formatting in ../shared-thread.ts)
   threads.ts     orchestration: start_thread, message_thread, list_threads, stop_thread, delete_thread (see docs/orchestration.md)
   processes.ts   the process tools (start_process…)
@@ -69,6 +70,14 @@ src/components/HtmlView.tsx the sandboxed HTML page in the reply (show_html)
 - Safety: `safe` (it only changes a label). The description tells the agent to use it only when the user asks to rename the thread.
 - Typical use: "rename this thread to Login bug", or "give this a better name" / "regenerate the title", where the agent writes a 2–6 word title itself from the whole conversation (no separate title model; the agent knows the conversation best). The sidebar's **Regenerate title** menu item is the non-agent way (see `titles.ts`).
 - Codex declares tools when a thread starts, so Codex threads created before this tool existed don't have it; Claude threads get it on their next turn.
+
+## update_checklist
+
+- Input: `{ items: [{ text, status, activeText? }] }`, up to 50 items; `status` is `pending`, `in_progress`, or `completed`; text is trimmed, 1–200 characters. It sends the whole list every time (like Claude's `TodoWrite`) and replaces the thread's `todos` through `context.setTodos`; an empty list clears it.
+- Why a t3 mini tool: Claude's own to-do tools are deferred behind a tool search under the Agent SDK, and the SDK's default system prompt doesn't push planning, so agents rarely used them; Codex's plan is up to the model. As a t3 mini tool it's loaded from the start for both agents, and `toolInstructions` tells them when to use it (3+ steps or several files; one item in progress at a time; check items off as they finish; skip quick questions). Claude's `TodoWrite`/`TaskCreate`/`TaskUpdate` and Codex's plan still feed the same card.
+- `kind: 'todo'` marks the call as a to-do update (`ToolStep.todo`), so the timeline draws the checklist card instead of a work-log step, for both agents.
+- Safety: `safe` (display only).
+- A Claude subagent calling it replaces the main thread's checklist too (the tool can't tell who called it).
 
 ## read_thread
 

@@ -46,6 +46,7 @@ const setup = async () => {
     saveHtml: vi.fn(),
     saveMedia: (file, kind) => uploads.saveMedia(file, kind),
     readThread: async () => '',
+    setTodos: vi.fn(),
     processes: {} as never,
     threads: {} as never,
     browser: {} as never,

@@ -2,6 +2,7 @@ import type { z } from 'zod'
 import type { Block } from '../../blocks'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
+import type { Todo } from '../../types'
 
 // A thread's own browser session (see ../browser.ts): one private page, local sites only.
 export type ThreadBrowser = {
@@ -75,6 +76,8 @@ export type ToolContext = {
   threads: ThreadControl
   // This thread's browser (browser_* tools).
   browser: ThreadBrowser
+  // Replaces this thread's to-do checklist (update_checklist); an empty list clears it.
+  setTodos: (todos: Todo[]) => void
 }
 // What a tool returns: text for the agent, optionally with an image it can look at (a
 // browser screenshot). The image goes to the agent only; showing it in the chat is attach().
@@ -91,8 +94,9 @@ export type ToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> = {
   safety: 'safe' | 'approval'
   // The work-log summary for a call, e.g. the file name.
   summarize?: (input: z.infer<z.ZodObject<Shape>>, hints?: StepHints) => string | undefined
-  // Browser tools are marked in the work log (a globe) and the live line.
-  kind?: 'browser'
+  // Browser tools are marked in the work log (a globe) and the live line; to-do tools are
+  // drawn as the checklist card instead of a step.
+  kind?: 'browser' | 'todo'
   // Inputs never shown in the work log or approval prompts (e.g. a login cookie's value).
   secretInputs?: string[]
   // Returns a short message for the agent. Throw ToolError for a clear refusal.

@@ -33,6 +33,7 @@ beforeEach(async () => {
     saveHtml: async () => ({ id: 'x.html' }),
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
+    setTodos: vi.fn(),
     rename: vi.fn(),
   }
 })

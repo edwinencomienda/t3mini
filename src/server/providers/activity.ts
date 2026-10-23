@@ -151,6 +151,7 @@ export function describeClaudeTool(
       summary,
       detail: json(maskInput(own, rawInput)),
       ...(own.kind === 'browser' ? { browser: true } : {}),
+      ...(own.kind === 'todo' ? { todo: true } : {}),
     }
   }
   // MCP tools are named mcp__<server>__<tool>.
@@ -267,6 +268,7 @@ export function describeCodexItem(
         summary,
         detail: json(maskInput(own, item.arguments)),
         ...(own?.kind === 'browser' ? { browser: true } : {}),
+        ...(own?.kind === 'todo' ? { todo: true } : {}),
       }
     }
     case 'imageGeneration':

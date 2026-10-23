@@ -1096,6 +1096,10 @@ export class AgentService {
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
         threads: this.threadControl(thread),
+        setTodos: (todos) => {
+          thread.todos = todos.length ? todos : undefined
+          touch()
+        },
         // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
         // written anything since the user's message, it gets a reply of its own.
         attach: (block) => {

@@ -20,6 +20,7 @@ const context = (uploads: Uploads) => {
     saveHtml: (html) => uploads.saveHtml(html),
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
+    setTodos: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, value }
