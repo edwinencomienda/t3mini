@@ -4,7 +4,7 @@
 //   dev (bun run dev)       port 4016, data in the repo's .data
 // `t3mini start` runs `t3mini serve` in the background and keeps its pid and log in ~/.t3-mini.
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, statSync } from 'node:fs'
 import { cp, mkdir, readdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -55,6 +55,12 @@ async function serve() {
   loadEnvFile()
   process.env.PORT = String(port)
   process.env.T3_MINI_DATA_DIR = dataDir
+  // Which binary file this server runs from, so it can tell when a newer one is installed over
+  // it and offer to restart (src/server/app-update.ts).
+  const binary = statSync(process.execPath)
+  process.env.T3_MINI_BINARY = process.execPath
+  process.env.T3_MINI_BINARY_ID = `${binary.ino}:${Math.round(binary.mtimeMs)}`
+  process.env.T3_MINI_INSTALL_FILE = installFile
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const [{ default: app }, { default: files }, { startAppServer }] = await Promise.all([
     import('../dist/server/server.js'),

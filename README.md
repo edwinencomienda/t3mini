@@ -48,6 +48,7 @@ t3mini import .data   # once, to bring your dev threads and settings over (into 
 1. Try the change in dev first: `bun run dev` → http://127.0.0.1:4016.
 2. Run `t3mini update` (from anywhere), or `bun run install-cli` in the repo. Both rebuild the binary from the repo **as it is now, including uncommitted changes**, install it over `~/.local/bin/t3mini`, and restart production if it was running.
 3. If a thread is still working in production, the restart is skipped (it would stop that turn): the update lists the running threads, the new binary is already installed, and `t3mini restart` switches to it once they finish. `t3mini update --force` restarts anyway.
+   Production's sidebar also shows **t3 mini update installed** with a **Restart** button (Mac only). While agents are working it offers **When done** (production restarts itself as soon as every thread is idle) or **Restart now** (asks first, since it stops their turns). The page reloads itself on the new version.
 4. `t3mini status` shows the commit it was built from (`Source: … @ <commit>`).
 
 Updating never touches data: production keeps `~/.t3-mini/data`, and dev keeps `.data`.

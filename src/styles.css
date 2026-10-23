@@ -473,6 +473,12 @@ kbd {
 .provider-update-text small.error {
   color: var(--danger);
 }
+/* A newer t3mini installed (AppUpdate.tsx): its restart buttons under the row. */
+.app-update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
 .provider-update .secondary {
   height: 1.6rem;
   padding: 0 0.6rem;

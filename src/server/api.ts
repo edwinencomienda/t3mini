@@ -25,6 +25,7 @@ import {
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
 import { providerUpdates, updateProvider } from './cli-updates'
+import { appUpdate, restartApp, restartWhenIdle } from './app-update'
 
 // Live dictation is a WebSocket, which the HTTP servers route to this module (see vite.config.ts
 // and server.mjs).
@@ -329,6 +330,24 @@ export async function handleApi(request: Request) {
           .list()
           .some((thread) => thread.provider === provider && isActive(thread.status))
         return Response.json(await updateProvider(provider, busy))
+      }
+    }
+    // A newer t3mini installed while this one runs (app-update.ts): restart onto it, now or
+    // once no agent is working. Mac only, like agent updates.
+    if (parts[0] === 'app-update') {
+      macOnly('Restarting t3 mini')
+      if (!parts[1] && request.method === 'GET') return Response.json(await appUpdate())
+      if (parts[1] === 'restart' && !parts[2] && request.method === 'POST') {
+        const { when } = z
+          .object({ when: z.enum(['now', 'idle', 'cancel']) })
+          .parse(await request.json())
+        if (!(await appUpdate()).ready) throw new HttpError(409, 'No update is waiting.')
+        const busy = () => service.list().some((thread) => isActive(thread.status))
+        if (when === 'now') {
+          restartWhenIdle(false, busy)
+          await restartApp()
+        } else restartWhenIdle(when === 'idle', busy)
+        return Response.json(await appUpdate())
       }
     }
     if (parts[0] === 'folders' && parts[1] === 'pick' && request.method === 'POST') {

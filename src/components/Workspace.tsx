@@ -79,6 +79,7 @@ import {
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ProviderUpdates } from './ProviderUpdates'
+import { AppUpdate } from './AppUpdate'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
 import type { Block } from '../blocks'
@@ -3052,6 +3053,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               </button>
             </div>
           ) : null}
+          <AppUpdate enabled={Boolean(bootstrap && !bootstrap.remote)} running={runningCount} />
           <ProviderUpdates
             enabled={Boolean(bootstrap && !bootstrap.remote)}
             onUpdated={updatedProvider}
