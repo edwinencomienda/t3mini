@@ -21,6 +21,9 @@ export type Message = {
   // Set on a message that started a turn: how to take that turn back out of the agent's
   // memory, so the message can be edited and resent after a stop or failure.
   turn?: TurnCheckpoint
+  // Set on a message that started a turn: the agent's to-do checklist as that turn left it, so
+  // the turn keeps its own list once a later turn starts another.
+  todos?: Todo[]
   // An edit that couldn't rewind the agent, so it went out as a follow-up instead.
   rewindFailed?: boolean
   // Sent while the agent was waiting on its question, so it answered that question.

@@ -967,6 +967,8 @@ export class AgentService {
     thread.error = undefined
     thread.activities = []
     thread.approvals = []
+    // A new turn starts without a checklist (the last one is kept on its turn's message).
+    thread.todos = undefined
     const controller = new AbortController()
     const approvals = new Map<string, (answer: boolean | Record<string, string>) => void>()
     const run: Run = { controller, approvals, done: Promise.resolve(), queued: [], messageId }
@@ -1007,6 +1009,8 @@ export class AgentService {
       ? thread.messages.find((message) => message.id === run.messageId)
       : undefined
     const promptId = crypto.randomUUID()
+    // Run again (an edit): its old checklist goes; the new one is saved when this run ends.
+    if (started) started.todos = undefined
     if (started)
       started.turn =
         thread.provider === 'codex'
@@ -1213,6 +1217,8 @@ export class AgentService {
       run.approvals.clear()
       thread.approvals = []
       thread.background = undefined
+      // The turn keeps its checklist as it ended (see Message.todos).
+      if (started && thread.todos?.length) started.todos = thread.todos
       thread.activities = thread.activities.map((activity) =>
         activity.status === 'running'
           ? { ...activity, status: thread.status === 'completed' ? 'completed' : 'failed' }

@@ -1,5 +1,5 @@
 import type { Block } from './blocks'
-import type { Activity, Message, Status } from './types'
+import type { Activity, Message, Status, Todo } from './types'
 
 // How a thread's conversation is laid out, one turn at a time: your message, the agent's work
 // (its in-between notes and tool steps, in the order they happened), then its final answer.
@@ -15,7 +15,7 @@ export type WorkItem =
   | { kind: 'note'; message: Message; at: string }
   | { kind: 'step'; activity: Activity; at: string }
   // The to-do checklist card, where the agent first wrote its list in this turn.
-  | { kind: 'todos'; at: string }
+  | { kind: 'todos'; at: string; todos: Todo[] }
 
 export type Turn = {
   key: string
@@ -32,6 +32,9 @@ export type Turn = {
   blocks: Block[]
   done: boolean
   steps: number
+  // The agent's to-do checklist for this turn: live while it runs, then the one saved on the
+  // turn's message (Message.todos).
+  todos?: Todo[]
   // For the fold line: when the turn started and finished.
   startedAt?: string
   endedAt?: string
@@ -42,6 +45,7 @@ type ThreadState = {
   activities: Activity[]
   status: Status
   completedAt?: string
+  todos?: Todo[]
 }
 
 const running = (status: Status) =>
@@ -88,7 +92,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
     // To-do updates become one checklist card (not steps), placed at the first one.
     if (activity.todo) {
       if (!turn.work.some((item) => item.kind === 'todos'))
-        turn.work.push({ kind: 'todos', at: activity.startedAt ?? '' })
+        turn.work.push({ kind: 'todos', at: activity.startedAt ?? '', todos: [] })
       continue
     }
     turn.work.push({ kind: 'step', activity, at: activity.startedAt ?? '' })
@@ -97,6 +101,18 @@ export function buildTurns(thread: ThreadState): Turn[] {
 
   const active = running(thread.status)
   turns.forEach((turn, index) => {
+    // The turn's checklist: the live one for the current run (only if this run wrote one, so a
+    // list from before turns were given their own can't show up in the wrong turn), otherwise
+    // the one saved with the turn. Older turns have no steps left, so the card is added back.
+    const live = index === current && turn.work.some((item) => item.kind === 'todos')
+    const saved = active && index === current ? undefined : turn.user?.todos
+    const todos = saved?.length ? saved : live && thread.todos?.length ? thread.todos : undefined
+    if (todos) {
+      turn.todos = todos
+      const card = turn.work.find((item) => item.kind === 'todos')
+      if (card) card.todos = todos
+      else turn.work.unshift({ kind: 'todos', at: turn.startedAt ?? '', todos })
+    } else turn.work = turn.work.filter((item) => item.kind !== 'todos')
     // Notes and dated steps by time; undated steps keep their place after the turn's notes.
     turn.work.sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : b.at ? 1 : 0))
     turn.done = !(active && index >= current)
@@ -132,6 +148,10 @@ export function buildTurns(thread: ThreadState): Turn[] {
   return turns
 }
 
+// How many of the turn's checklist items aren't done (0 without a checklist).
+export const unfinished = (turn: Pick<Turn, 'todos'>) =>
+  turn.todos?.filter((todo) => todo.status !== 'completed').length ?? 0
+
 // How long a turn took: "24s", "2m 10s", "1h 5m".
 export function turnDuration(turn: Pick<Turn, 'startedAt' | 'endedAt'>) {
   if (!turn.startedAt || !turn.endedAt) return undefined
@@ -158,7 +178,7 @@ export function foldLabel(turn: Turn, status?: Status) {
   const parts = [verb!]
   const time = turnDuration(turn)
   if (time) parts[0] = `${verb} ${joiner} ${time}`
-  const notes = turn.work.length - turn.steps
+  const notes = turn.work.filter((item) => item.kind === 'note').length
   if (turn.steps) parts.push(`${turn.steps} ${turn.steps === 1 ? 'step' : 'steps'}`)
   else if (notes) parts.push(`${notes} ${notes === 1 ? 'message' : 'messages'}`)
   // The conversation was compacted in this turn (the divider is inside the fold).
@@ -169,6 +189,9 @@ export function foldLabel(turn: Turn, status?: Status) {
     )
   )
     parts.push('compacted')
+  // The turn ended with its checklist unfinished: "2 of 6 left".
+  const left = unfinished(turn)
+  if (left) parts.push(`${left} of ${turn.todos!.length} left`)
   return parts.join(' · ')
 }
 

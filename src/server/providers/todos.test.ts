@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest'
-import { applyClaudeTodo, codexPlan, taskCreated } from './todos'
+import { describe, expect, it } from 'vitest'
+import { applyClaudeTodo, codexPlan, taskCreated, todoTools } from './todos'
 
 it('takes TodoWrite’s whole list', () => {
   expect(
@@ -67,4 +67,25 @@ it('reads Codex’s plan', () => {
     { id: '3', text: 'Verify', status: 'pending' },
   ])
   expect(codexPlan({})).toEqual([])
+})
+
+describe('update_checklist from Claude', () => {
+  const name = 'mcp__t3mini__update_checklist'
+  it('is read from the stream like TodoWrite, replacing the list', () => {
+    expect(todoTools.has(name)).toBe(true)
+    expect(
+      applyClaudeTodo(
+        [{ id: '9', text: 'Old', status: 'pending' }],
+        name,
+        { items: [{ text: 'New', status: 'in_progress', activeText: 'Doing new' }] },
+        'call-1',
+      ),
+    ).toEqual([{ id: '1', text: 'New', activeText: 'Doing new', status: 'in_progress' }])
+  })
+  it('clears on an empty list and ignores an invalid call', () => {
+    expect(applyClaudeTodo([], name, { items: [] }, 'c')).toEqual([])
+    expect(
+      applyClaudeTodo([], name, { items: [{ text: 'x', status: 'done' }] }, 'c'),
+    ).toBeUndefined()
+  })
 })

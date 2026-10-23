@@ -137,11 +137,56 @@ describe('buildTurns', () => {
     const [turn] = buildTurns({
       messages: [user('q', 0), reply('n1', 2), reply('final', 20)],
       activities: [todo('t1', 3), step('s1', 5), todo('t2', 8), step('s2', 10)],
+      todos: [{ id: '1', text: 'Step', status: 'completed' }],
       status: 'completed',
       completedAt: at(21),
     })
     expect(kinds(turn!.work)).toEqual(['n1', 'todos', 'step:s1', 'step:s2'])
     expect(turn!.steps).toBe(2)
+  })
+
+  it('gives each turn its own checklist: saved ones for older turns, the live one for this run', () => {
+    const list = (done: number, total: number) =>
+      Array.from({ length: total }, (_, index) => ({
+        id: String(index + 1),
+        text: `Item ${index + 1}`,
+        status: index < done ? ('completed' as const) : ('pending' as const),
+      }))
+    const todo = (id: string, s: number): Activity => ({ ...step(id, s), todo: true })
+    const [first, second, third] = buildTurns({
+      messages: [
+        user('q1', 0, { todos: list(2, 2) }),
+        reply('a1', 10),
+        user('q2', 20),
+        reply('a2', 30),
+        user('q3', 40),
+        reply('n3', 42),
+      ],
+      activities: [todo('t3', 41), step('s3', 43, 'running')],
+      todos: list(1, 3),
+      status: 'working',
+    })
+    // The first turn's steps are gone, but its own list comes back as a card.
+    expect(kinds(first!.work)).toEqual(['todos'])
+    expect(first!.todos).toEqual(list(2, 2))
+    // A turn that kept no list shows none, even though the thread has a live one.
+    expect(second!.todos).toBeUndefined()
+    expect(kinds(second!.work)).toEqual([])
+    // The running turn shows the live list.
+    expect(third!.todos).toEqual(list(1, 3))
+    expect(kinds(third!.work)).toEqual(['todos', 'n3', 'step:s3'])
+  })
+
+  it('never shows a live list in a turn that did not write one', () => {
+    const [turn] = buildTurns({
+      messages: [user('q', 0), reply('a', 5)],
+      activities: [step('s1', 2)],
+      todos: [{ id: '1', text: 'Old item', status: 'in_progress' }],
+      status: 'completed',
+      completedAt: at(6),
+    })
+    expect(turn!.todos).toBeUndefined()
+    expect(kinds(turn!.work)).toEqual(['step:s1'])
   })
 
   it('says when a run stopped or failed', () => {
@@ -153,6 +198,26 @@ describe('buildTurns', () => {
     })
     expect(foldLabel(turn!, 'interrupted')).toBe('Stopped after 1m 15s · 1 step')
     expect(foldLabel(turn!, 'failed')).toBe('Failed after 1m 15s · 1 step')
+  })
+
+  it('says how much of the checklist was left when a turn ended unfinished', () => {
+    const todos = [
+      { id: '1', text: 'One', status: 'completed' as const },
+      { id: '2', text: 'Two', status: 'in_progress' as const },
+      { id: '3', text: 'Three', status: 'pending' as const },
+    ]
+    const [turn] = buildTurns({
+      messages: [user('q', 0, { todos }), reply('n1', 3), reply('partial', 70)],
+      activities: [step('s1', 5), { ...step('t1', 4), todo: true }],
+      status: 'interrupted',
+      completedAt: at(75),
+    })
+    expect(foldLabel(turn!, 'interrupted')).toBe('Stopped after 1m 15s · 1 step · 2 of 3 left')
+    const finished = {
+      ...turn!,
+      todos: todos.map((todo) => ({ ...todo, status: 'completed' as const })),
+    }
+    expect(foldLabel(finished, 'completed')).toBe('Worked for 1m 15s · 1 step')
   })
 })
 

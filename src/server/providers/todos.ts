@@ -1,9 +1,13 @@
 import type { Todo, TodoStatus } from '../../types'
+import { checklistTodos } from '../tools/update-checklist'
+import { claudeToolName } from '../tools'
 
 // The agent's to-do checklist, kept on the thread and drawn as a live card (like Claude
 // Desktop). Built from:
 // - Claude's TodoWrite: the whole list each time;
 // - Claude's newer task tools: TaskCreate adds one, TaskUpdate changes or deletes one by id;
+// - t3 mini's update_checklist: the whole list each time (Claude's calls are applied here, from
+//   the stream, so a subagent's list is left out; Codex's go through the tool itself);
 // - Codex's plan updates (turn/plan/updated): the whole list each time.
 // Each function returns the new list, or undefined when the call isn't about to-dos.
 
@@ -20,7 +24,8 @@ const status = (value: unknown): TodoStatus =>
 // A checklist stays small; a runaway list is cut.
 const limit = 50
 
-export const todoTools = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate'])
+const checklistTool = claudeToolName('update_checklist')
+export const todoTools = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', checklistTool])
 
 export function applyClaudeTodo(
   current: Todo[],
@@ -28,6 +33,7 @@ export function applyClaudeTodo(
   rawInput: unknown,
   toolId: string,
 ): Todo[] | undefined {
+  if (name === checklistTool) return checklistTodos(rawInput)
   const input = object(rawInput)
   if (name === 'TodoWrite') {
     if (!Array.isArray(input.todos)) return undefined

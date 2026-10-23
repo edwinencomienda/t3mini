@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { defineTool } from './types'
+import type { Todo } from '../../types'
 
 // The agent's to-do checklist as a t3 mini tool, so both agents have it loaded from the start
 // (Claude's own to-do tools are deferred behind a tool search; Codex's plan is up to the
@@ -19,6 +20,22 @@ const item = z.object({
     .describe('Optional: the step as it happens, e.g. "Running the tests".'),
 })
 
+const input = { items: z.array(item).max(50).describe('Every item, in order.') }
+const inputSchema = z.object(input)
+
+// The checklist a call sets, or undefined for an invalid call. Claude's calls are applied from
+// its message stream with this (so a subagent's own list can be left out, see claude.ts).
+export function checklistTodos(raw: unknown): Todo[] | undefined {
+  const parsed = inputSchema.safeParse(raw)
+  if (!parsed.success) return undefined
+  return parsed.data.items.map((entry, index) => ({
+    id: String(index + 1),
+    text: entry.text,
+    ...(entry.activeText ? { activeText: entry.activeText } : {}),
+    status: entry.status,
+  }))
+}
+
 export const updateChecklist = defineTool({
   name: 'update_checklist',
   label: 'Update checklist',
@@ -29,9 +46,7 @@ export const updateChecklist = defineTool({
     'in_progress while you work, and mark each item completed as soon as it is done (not all ' +
     'at the end). Add or drop items when the plan changes. Skip it for quick questions and ' +
     'one-line fixes. Send an empty list to clear it.',
-  input: {
-    items: z.array(item).max(50).describe('Every item, in order.'),
-  },
+  input,
   safety: 'safe',
   kind: 'todo',
   summarize: (input) => {
@@ -41,12 +56,7 @@ export const updateChecklist = defineTool({
     return `${done} of ${items.length} done`
   },
   async run(context, input) {
-    const todos = input.items.map((entry, index) => ({
-      id: String(index + 1),
-      text: entry.text,
-      ...(entry.activeText ? { activeText: entry.activeText } : {}),
-      status: entry.status,
-    }))
+    const todos = checklistTodos(input) ?? []
     context.setTodos(todos)
     if (!todos.length) return 'Cleared the checklist.'
     const done = todos.filter((todo) => todo.status === 'completed').length

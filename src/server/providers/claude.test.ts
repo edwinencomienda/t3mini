@@ -497,3 +497,65 @@ it('reports compacting the conversation as a step, with how much it shrank', asy
   // Four compactions, four steps.
   expect(new Set(calls.map((step) => step.id)).size).toBe(4)
 })
+it("keeps a subagent's update_checklist out of the thread's checklist", async () => {
+  const checklist = (text: string) => ({ items: [{ text, status: 'in_progress' }] })
+  vi.mocked(query).mockImplementation(() => {
+    async function* messages(): AsyncGenerator<SDKMessage> {
+      for (const [id, parent, text] of [
+        ['main-1', null, 'Main plan'],
+        ['sub-1', 'agent-1', 'Subagent plan'],
+      ] as const)
+        yield {
+          type: 'assistant',
+          parent_tool_use_id: parent,
+          message: {
+            id,
+            content: [
+              {
+                type: 'tool_use',
+                id,
+                name: 'mcp__t3mini__update_checklist',
+                input: checklist(text),
+              },
+            ],
+          },
+        } as unknown as SDKMessage
+      yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' } as SDKMessage
+    }
+    return Object.assign(messages(), {
+      applyFlagSettings: vi.fn(async () => {}),
+      close: vi.fn(),
+    }) as unknown as ReturnType<typeof query>
+  })
+  const todos = vi.fn()
+  await runClaude({
+    cwd: process.cwd(),
+    thread: {
+      id: 't',
+      title: 'Test',
+      provider: 'claude',
+      cwd: process.cwd(),
+      model: '',
+      effort: '',
+      permissionMode: 'full-access',
+      status: 'starting',
+      createdAt: '',
+      updatedAt: '',
+      messages: [],
+      activities: [],
+      approvals: [],
+    },
+    prompt: 'Plan it',
+    images: [],
+    tools: {} as never,
+    signal: new AbortController().signal,
+    session: vi.fn(),
+    text: vi.fn(),
+    activity: vi.fn(),
+    approve: vi.fn(async () => true),
+    onSteer: () => {},
+    todos,
+  } as never)
+  expect(todos).toHaveBeenCalledTimes(1)
+  expect(todos).toHaveBeenCalledWith([{ id: '1', text: 'Main plan', status: 'in_progress' }])
+})

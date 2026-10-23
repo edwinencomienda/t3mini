@@ -132,7 +132,14 @@ import {
 import type { MachineSummary } from '../server/machines'
 // A machine's part of the sidebar (the hub, src/hub.ts).
 type HubState = { threads: ThreadSummary[]; projects: ProjectSummary[] }
-import { buildTurns, finishLabel, foldLabel, liveNote, type WorkItem } from '../timeline'
+import {
+  buildTurns,
+  finishLabel,
+  foldLabel,
+  liveNote,
+  unfinished,
+  type WorkItem,
+} from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -2604,8 +2611,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
             />
           )
         ) : item.kind === 'todos' ? (
-          thread?.todos?.length ? (
-            <TodoCard key="todos" todos={thread.todos} />
+          item.todos.length ? (
+            <TodoCard key="todos" todos={item.todos} ended={folded} />
           ) : null
         ) : item.activity.compact ? (
           <CompactMarker key={item.activity.id} step={item.activity} />
@@ -3342,16 +3349,23 @@ export function Workspace({ threadId }: { threadId?: string }) {
                                 </span>
                                 <ChevronRight size={13} className="chevron" />
                               </button>
-                              {openTurns.has(turn.key) ? workList(turn.work, true) : null}
+                              {openTurns.has(turn.key) ? (
+                                workList(turn.work, true)
+                              ) : unfinished(turn) ? (
+                                // Ended with items left: the checklist stays in view, so what
+                                // wasn't done is plain without opening the turn.
+                                <div className="work">
+                                  <TodoCard todos={turn.todos!} ended />
+                                </div>
+                              ) : null}
                             </div>
                           ) : !turn.done && turn.work.length ? (
                             openTurns.has(turn.key) ? (
                               workList(turn.work)
-                            ) : turn.work.some((item) => item.kind === 'todos') &&
-                              thread.todos?.length ? (
+                            ) : turn.todos?.length ? (
                               // Folded: only the to-do checklist stays, a summary in itself.
                               <div className="work">
-                                <TodoCard todos={thread.todos} />
+                                <TodoCard todos={turn.todos} />
                               </div>
                             ) : null
                           ) : null}

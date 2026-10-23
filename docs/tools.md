@@ -77,7 +77,8 @@ src/components/HtmlView.tsx the sandboxed HTML page in the reply (show_html)
 - Why a t3 mini tool: Claude's own to-do tools are deferred behind a tool search under the Agent SDK, and the SDK's default system prompt doesn't push planning, so agents rarely used them; Codex's plan is up to the model. As a t3 mini tool it's loaded from the start for both agents, and `toolInstructions` tells them when to use it (3+ steps or several files; one item in progress at a time; check items off as they finish; skip quick questions). Claude's `TodoWrite`/`TaskCreate`/`TaskUpdate` and Codex's plan still feed the same card.
 - `kind: 'todo'` marks the call as a to-do update (`ToolStep.todo`), so the timeline draws the checklist card instead of a work-log step, for both agents.
 - Safety: `safe` (display only).
-- A Claude subagent calling it replaces the main thread's checklist too (the tool can't tell who called it).
+- Claude's calls are applied from its message stream (`todoTools` in `providers/todos.ts`), not by the tool itself, because only the stream says whether a subagent made the call (`parent_tool_use_id`); a subagent's list is left out, like its `TodoWrite`. Codex's calls go through `run()` and `context.setTodos`.
+- Each turn keeps its own list: `thread.todos` is cleared when a turn starts and saved on the turn's starting message (`Message.todos`) when it ends; `buildTurns()` gives every turn its own (`Turn.todos`). A turn that ends with items not done keeps its card in view and its fold line adds "2 of 6 left".
 
 ## read_thread
 

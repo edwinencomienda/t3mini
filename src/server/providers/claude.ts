@@ -154,7 +154,9 @@ export const runClaude: Runner = async (ctx) => {
         definition.input,
         async (input) => {
           // Refusals (bad path, wrong file type…) go back to Claude as a readable error.
-          const result = await runTool(definition, ctx.tools, input)
+          // update_checklist is applied from the stream instead (see todoTools), where a
+          // subagent's call can be told apart and left out of the thread's checklist.
+          const result = await runTool(definition, { ...ctx.tools, setTodos: () => {} }, input)
           return {
             content: [
               { type: 'text' as const, text: result.text },

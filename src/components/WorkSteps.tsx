@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   Globe,
   LoaderCircle,
   X,
@@ -134,8 +135,15 @@ export const StepRow = memo(function StepRow({ step }: { step: Activity }) {
 })
 
 // The agent's to-do list as a checklist that updates in place: done items checked, the
-// current one spinning, the rest waiting.
-export const TodoCard = memo(function TodoCard({ todos }: { todos: Todo[] }) {
+// current one spinning, the rest waiting. ended: the turn is over, so the item it was on stops
+// spinning (it wasn't finished).
+export const TodoCard = memo(function TodoCard({
+  todos,
+  ended = false,
+}: {
+  todos: Todo[]
+  ended?: boolean
+}) {
   const done = todos.filter((todo) => todo.status === 'completed').length
   return (
     <ul className="todo-card" aria-label={`To-do list, ${done} of ${todos.length} done`}>
@@ -144,8 +152,10 @@ export const TodoCard = memo(function TodoCard({ todos }: { todos: Todo[] }) {
           <span className="todo-icon" aria-hidden>
             {todo.status === 'completed' ? (
               <CircleCheck size={16} />
-            ) : todo.status === 'in_progress' ? (
+            ) : todo.status === 'in_progress' && !ended ? (
               <LoaderCircle size={16} className="status-spinner" />
+            ) : todo.status === 'in_progress' ? (
+              <CircleDot size={16} />
             ) : (
               <CircleDashed size={16} />
             )}
@@ -155,7 +165,9 @@ export const TodoCard = memo(function TodoCard({ todos }: { todos: Todo[] }) {
             {todo.status === 'completed'
               ? ' (done)'
               : todo.status === 'in_progress'
-                ? ' (in progress)'
+                ? ended
+                  ? ' (not finished)'
+                  : ' (in progress)'
                 : ''}
           </span>
         </li>
