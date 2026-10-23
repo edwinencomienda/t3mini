@@ -132,7 +132,7 @@ import {
 import type { MachineSummary } from '../server/machines'
 // A machine's part of the sidebar (the hub, src/hub.ts).
 type HubState = { threads: ThreadSummary[]; projects: ProjectSummary[] }
-import { buildTurns, finishLabel, foldLabel, noteLine, type WorkItem } from '../timeline'
+import { buildTurns, finishLabel, foldLabel, liveNote, type WorkItem } from '../timeline'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -2570,12 +2570,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // that turn, like a finished turn's fold).
   const runningTurn = active ? turns.find((turn) => !turn.done) : undefined
   const runningOpen = runningTurn ? openTurns.has(runningTurn.key) : false
-  const latestNote = runningTurn
-    ? [...runningTurn.work]
-        .reverse()
-        .map((item) => (item.kind === 'note' ? noteLine(item.message.text) : ''))
-        .find(Boolean)
-    : undefined
+  const latestNote = runningTurn ? liveNote(runningTurn.work) : undefined
   const workToggle =
     runningTurn && runningTurn.work.some((item) => item.kind !== 'todos')
       ? {

@@ -189,6 +189,29 @@ export function finishLabel(turn: Turn, status?: Status, now = new Date()) {
   return `${verb} ${joiner} ${time} · ${done}${day}${clock}`
 }
 
+// The working line's text while a turn runs: the agent's latest note, but only finished text,
+// like Claude Desktop (a note that's still streaming would change word by word). A note is
+// finished once anything comes after it in the turn; the last one, maybe still streaming, counts
+// only up to its last finished paragraph (one followed by a blank line), never inside an open
+// code block. Nothing finished yet: the note before it, or nothing.
+export function liveNote(work: WorkItem[]): string | undefined {
+  for (let index = work.length - 1; index >= 0; index--) {
+    const item = work[index]!
+    if (item.kind !== 'note') continue
+    const line = noteLine(
+      index === work.length - 1 ? finishedText(item.message.text) : item.message.text,
+    )
+    if (line) return line
+  }
+}
+function finishedText(text: string) {
+  const end = text.search(/\n\s*\n(?![\s\S]*\n\s*\n)/)
+  let done = end < 0 ? '' : text.slice(0, end)
+  // An unclosed code block: up to where it opened.
+  if ((done.match(/^\s*```/gm)?.length ?? 0) % 2) done = done.slice(0, done.lastIndexOf('```'))
+  return done
+}
+
 // The working line's text from the agent's latest note: its last paragraph, as plain words
 // (Markdown marks, links, and list bullets dropped), on one line.
 export function noteLine(text: string) {

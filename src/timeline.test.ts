@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTurns, finishLabel, foldLabel, noteLine } from './timeline'
+import { buildTurns, finishLabel, foldLabel, liveNote, noteLine, type WorkItem } from './timeline'
 import type { Activity, Message } from './types'
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16, 9, 0, seconds)).toISOString()
@@ -237,4 +237,29 @@ it('turns the agent’s latest note into one plain line for the working line', (
   )
   expect(noteLine('Here it is:\n\n```ts\nconst x = 1\n```')).toBe('Here it is:')
   expect(noteLine('   ')).toBe('')
+})
+
+describe('liveNote', () => {
+  const note = (text: string): WorkItem => ({
+    kind: 'note',
+    message: { id: text, role: 'assistant', text, createdAt: '' },
+    at: '',
+  })
+  const step: WorkItem = { kind: 'step', activity: { id: 's' } as never, at: '' }
+
+  it('waits for a streaming note to finish a paragraph', () => {
+    expect(liveNote([note('Checking the build and')])).toBeUndefined()
+    expect(liveNote([note('Checking the build and the tests.\n\nThen I')])).toBe(
+      'Checking the build and the tests.',
+    )
+  })
+  it('shows the whole note once something comes after it', () => {
+    expect(liveNote([note('Running the tests now'), step])).toBe('Running the tests now')
+  })
+  it('keeps the previous note while the next one streams', () => {
+    expect(liveNote([note('Build passed.'), step, note('Now the')])).toBe('Build passed.')
+  })
+  it('never shows the inside of an unfinished code block', () => {
+    expect(liveNote([note('Here:\n\n```ts\nconst a = 1\n\nconst b')])).toBe('Here:')
+  })
 })
