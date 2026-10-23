@@ -3461,10 +3461,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           ) : !turn.done && turn.work.length ? (
                             openTurns.has(turn.key) ? (
                               workList(turn.work)
-                            ) : turn.todos?.length ? (
-                              // Folded: only the to-do checklist stays, a summary in itself.
+                            ) : turn.todos?.length || turn.cards.length ? (
+                              // Folded: the to-do checklist and status cards stay in view, live,
+                              // since they're the progress you're following.
                               <div className="work">
-                                <TodoCard todos={turn.todos} />
+                                {turn.todos?.length ? <TodoCard todos={turn.todos} /> : null}
+                                {turn.cards.length ? <Blocks blocks={turn.cards} /> : null}
                               </div>
                             ) : null
                           ) : null}

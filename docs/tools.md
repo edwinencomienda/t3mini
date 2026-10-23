@@ -17,6 +17,7 @@ src/server/tools/
   play-audio.ts  the play_audio tool
   rename-thread.ts  the rename_thread tool
   update-checklist.ts  the update_checklist tool (the to-do checklist card)
+  show-status.ts the show_status tool (live status cards; updates in ../status-cards.ts)
   read-thread.ts the read_thread tool (formatting in ../shared-thread.ts)
   threads.ts     orchestration: start_thread, message_thread, list_threads, stop_thread, delete_thread (see docs/orchestration.md)
   processes.ts   the process tools (start_process…)
@@ -79,6 +80,14 @@ src/components/HtmlView.tsx the sandboxed HTML page in the reply (show_html)
 - Safety: `safe` (display only).
 - Claude's calls are applied from its message stream (`todoTools` in `providers/todos.ts`), not by the tool itself, because only the stream says whether a subagent made the call (`parent_tool_use_id`); a subagent's list is left out, like its `TodoWrite`. Codex's calls go through `run()` and `context.setTodos`.
 - Each turn keeps its own list: `thread.todos` is cleared when a turn starts and saved on the turn's starting message (`Message.todos`) when it ends; `buildTurns()` gives every turn its own (`Turn.todos`). A turn that ends with items not done keeps its card in view and its fold line adds "2 of 6 left".
+
+## show_status
+
+- A live status card for something the user wants to follow: a push (`kind: 'push'`), pull request (`pr`), deploy, release, or any other long step (`task`). The agent starts it as `running`, calls again with the same `id` to move it along (`stage` of `stages`) and to finish it (`done` with a link, or `failed` with the key error lines). Other optional fields: `detail`, `commits` (`sha` shortened to 7, `message`), `url`, `urlLabel`, `error`.
+- Updates by id only within the current turn (`status-cards.ts`, the replies after the message that started it), so a later turn reusing `"deploy"` gets its own card. Fields left out of an update keep their value; t3 mini sets `startedAt`/`endedAt`. A card still `running` when the turn ends becomes `stopped` ("Didn't finish").
+- The agent only describes the card; `components/StatusCard.tsx` draws it with our own icons per kind (a built-in GitHub mark for push, lucide icons for the rest) and colors per status. It never takes markup, images, or styles from the agent.
+- Links must be plain `https` addresses with no user name or password (`safeLink`); anything else is refused so the agent can fix it, and the card checks again when drawing (`target="_blank"`, `rel="noopener noreferrer"`).
+- Cards are tool content (`StatusBlock` in `src/blocks.ts`). While the turn runs they stay in view under the working line even with the work folded (`Turn.cards` in `timeline.ts`, drawn next to the checklist); when it's done they move into the final answer, like images and diagrams. `toolInstructions` tells both agents when to use it; safety `safe` (display only).
 
 ## read_thread
 

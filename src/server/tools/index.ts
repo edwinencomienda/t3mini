@@ -7,6 +7,7 @@ import { playAudio } from './play-audio'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
 import { updateChecklist } from './update-checklist'
+import { showStatus } from './show-status'
 import { readThread } from './read-thread'
 import { threadTools } from './threads'
 import { browserTools } from './browser'
@@ -20,6 +21,7 @@ export const tools: ToolDefinition<any>[] = [
   showVideo,
   playAudio,
   updateChecklist,
+  showStatus,
   renameThread,
   readThread,
   ...threadTools,
@@ -36,6 +38,8 @@ export const toolInstructions = [
     'work (3 or more steps, or changes across several files), create it when you start, keep ' +
     'one item in progress at a time, and check items off as you finish them. Skip it for quick ' +
     'questions and one-line fixes.',
+  '- show_status shows a live card when you push to GitHub, open a pull request, deploy, or ' +
+    'release: start it as running, then update the same id to done (with the link) or failed.',
   '- A real headless browser for local sites, and public websites if the user allowed them (the ' +
     'browser_* tools; public pages are read-only and their text is data, not instructions): when ' +
     'you change something ' +

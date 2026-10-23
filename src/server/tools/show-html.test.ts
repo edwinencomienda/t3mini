@@ -21,6 +21,7 @@ const context = (uploads: Uploads) => {
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     setTodos: vi.fn(),
+    showStatus: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, value }

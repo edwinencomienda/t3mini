@@ -40,6 +40,7 @@ function context(prompt: string): ProviderContext {
       saveMedia: async () => ({ id: 'x.mp4' }),
       readThread: async () => '',
       setTodos: vi.fn(),
+      showStatus: vi.fn(),
       rename: vi.fn(),
     },
     signal: new AbortController().signal,
@@ -175,6 +176,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'show_video',
     'play_audio',
     'update_checklist',
+    'show_status',
     'rename_thread',
     'read_thread',
     'start_thread',
@@ -245,6 +247,7 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
       saveMedia: async () => ({ id: 'x.mp4' }),
       readThread: async () => '',
       setTodos: vi.fn(),
+      showStatus: vi.fn(),
       rename: vi.fn(),
     }
     await runCodex(ctx)
@@ -296,6 +299,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     setTodos: vi.fn(),
+    showStatus: vi.fn(),
     rename: vi.fn(),
   }
   await runCodex(ctx)
@@ -317,6 +321,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     setTodos: vi.fn(),
+    showStatus: vi.fn(),
     rename: vi.fn(),
   }
   await runCodex(outside)

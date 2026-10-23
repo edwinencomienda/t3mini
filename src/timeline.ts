@@ -1,4 +1,4 @@
-import type { Block } from './blocks'
+import type { Block, StatusBlock } from './blocks'
 import type { Activity, Message, Status, Todo } from './types'
 
 // How a thread's conversation is laid out, one turn at a time: your message, the agent's work
@@ -30,6 +30,9 @@ export type Turn = {
   replies: Message[]
   // Images (and other tool content) from the folded notes, shown above the answer.
   blocks: Block[]
+  // While the turn runs: its status cards (show_status), kept in view under the working line
+  // even though the work is folded. Once it's done they're part of `blocks`, above the answer.
+  cards: StatusBlock[]
   done: boolean
   steps: number
   // The agent's to-do checklist for this turn: live while it runs, then the one saved on the
@@ -52,6 +55,7 @@ const running = (status: Status) =>
   status === 'starting' || status === 'working' || status === 'waiting'
 
 const noBlocks: Block[] = []
+const noCards: StatusBlock[] = []
 
 export function buildTurns(thread: ThreadState): Turn[] {
   const turns: Turn[] = []
@@ -62,6 +66,7 @@ export function buildTurns(thread: ThreadState): Turn[] {
         ...(message.role === 'user' ? { user: message } : {}),
         work: [],
         blocks: [],
+        cards: noCards,
         replies: [],
         done: true,
         steps: 0,
@@ -71,7 +76,15 @@ export function buildTurns(thread: ThreadState): Turn[] {
       turns.at(-1)!.work.push({ kind: 'note', message, at: message.createdAt })
   }
   if (!turns.length && thread.activities.length)
-    turns.push({ key: 'work', work: [], blocks: [], replies: [], done: true, steps: 0 })
+    turns.push({
+      key: 'work',
+      work: [],
+      blocks: [],
+      cards: noCards,
+      replies: [],
+      done: true,
+      steps: 0,
+    })
   if (!turns.length) return turns
 
   // The turn the current run belongs to: the one started by your latest message that was sent
@@ -118,6 +131,14 @@ export function buildTurns(thread: ThreadState): Turn[] {
     // Notes and dated steps by time; undated steps keep their place after the turn's notes.
     turn.work.sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : b.at ? 1 : 0))
     turn.done = !(active && index >= current)
+    if (!turn.done) {
+      const cards = turn.work.flatMap((item) =>
+        item.kind === 'note'
+          ? (item.message.blocks ?? []).filter((block) => block.type === 'status')
+          : [],
+      )
+      if (cards.length) turn.cards = cards
+    }
     if (turn.done) {
       const last = [...turn.work]
         .reverse()

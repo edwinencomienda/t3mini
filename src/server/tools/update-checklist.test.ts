@@ -16,6 +16,7 @@ const context = (setTodos: ToolContext['setTodos']): ToolContext => ({
   readThread: async () => '',
   rename: vi.fn(),
   setTodos,
+  showStatus: vi.fn(),
 })
 
 it('replaces the checklist with the whole list', async () => {

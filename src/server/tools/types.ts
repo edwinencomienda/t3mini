@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { Block } from '../../blocks'
+import type { Block, StatusBlock } from '../../blocks'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
 import type { Todo } from '../../types'
@@ -78,6 +78,12 @@ export type ToolContext = {
   browser: ThreadBrowser
   // Replaces this thread's to-do checklist (update_checklist); an empty list clears it.
   setTodos: (todos: Todo[]) => void
+  // Adds a status card to this turn, or updates the one with the same id (show_status).
+  showStatus: (card: StatusCard) => 'created' | 'updated'
+}
+// What show_status sends: a status card without the times t3 mini sets.
+export type StatusCard = Omit<StatusBlock, 'type' | 'startedAt' | 'endedAt' | 'status'> & {
+  status: Exclude<StatusBlock['status'], 'stopped'>
 }
 // What a tool returns: text for the agent, optionally with an image it can look at (a
 // browser screenshot). The image goes to the agent only; showing it in the chat is attach().

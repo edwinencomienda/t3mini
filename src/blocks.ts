@@ -12,4 +12,30 @@ export type HtmlBlock = { type: 'html'; id: string; title?: string }
 // still carry `autoplay`/`at` fields; they're ignored.)
 export type VideoBlock = { type: 'video'; id: string; caption?: string }
 export type AudioBlock = { type: 'audio'; id: string; caption?: string }
-export type Block = ImageBlock | DiagramBlock | HtmlBlock | VideoBlock | AudioBlock
+// A live status card from the agent (show_status): a push, pull request, deploy, release, or
+// any other long step. The agent updates it in place by id within a turn; t3 mini picks the
+// icon and colors from `kind` and `status`, so the agent never sends markup or images.
+export const statusKinds = ['push', 'pr', 'deploy', 'release', 'task'] as const
+export const statusStates = ['running', 'done', 'failed'] as const
+export type StatusKind = (typeof statusKinds)[number]
+// stopped: still running when the turn ended (set by t3 mini, never by the agent).
+export type StatusState = (typeof statusStates)[number] | 'stopped'
+export type StatusBlock = {
+  type: 'status'
+  id: string
+  kind: StatusKind
+  status: StatusState
+  title: string
+  detail?: string
+  stages?: string[]
+  stage?: string
+  commits?: { sha: string; message: string }[]
+  // Always https (checked by the tool, and again when drawn).
+  url?: string
+  urlLabel?: string
+  error?: string
+  // Set by t3 mini: when the card first appeared and when it finished.
+  startedAt: string
+  endedAt?: string
+}
+export type Block = ImageBlock | DiagramBlock | HtmlBlock | VideoBlock | AudioBlock | StatusBlock

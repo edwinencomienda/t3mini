@@ -21,6 +21,8 @@ import {
   type Thread,
   type ThreadSummary,
 } from '../types'
+import type { Block } from '../blocks'
+import { newStatusBlock, stopRunningCards, updateStatusCard } from './status-cards'
 import {
   ProjectStore,
   ThreadStore,
@@ -1008,6 +1010,23 @@ export class AgentService {
     const started = run.messageId
       ? thread.messages.find((message) => message.id === run.messageId)
       : undefined
+    // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
+    // written anything since the user's message, it gets a reply of its own.
+    const attach = (block: Block) => {
+      const last = thread.messages.at(-1)
+      if (last?.role === 'assistant') last.blocks = [...(last.blocks ?? []), block]
+      else
+        thread.messages.push({
+          id: `tool:${crypto.randomUUID()}`,
+          role: 'assistant',
+          text: '',
+          createdAt: new Date().toISOString(),
+          blocks: [block],
+        })
+      touch()
+    }
+    // Where this turn starts in the thread, for its status cards (status-cards.ts).
+    const turnFrom = () => (started ? thread.messages.indexOf(started) : -1)
     const promptId = crypto.randomUUID()
     // Run again (an edit): its old checklist goes; the new one is saved when this run ends.
     if (started) started.todos = undefined
@@ -1104,20 +1123,17 @@ export class AgentService {
           thread.todos = todos.length ? todos : undefined
           touch()
         },
-        // A tool's content joins the agent's latest reply in this turn; if the agent hasn't
-        // written anything since the user's message, it gets a reply of its own.
-        attach: (block) => {
-          const last = thread.messages.at(-1)
-          if (last?.role === 'assistant') last.blocks = [...(last.blocks ?? []), block]
-          else
-            thread.messages.push({
-              id: `tool:${crypto.randomUUID()}`,
-              role: 'assistant',
-              text: '',
-              createdAt: new Date().toISOString(),
-              blocks: [block],
-            })
-          touch()
+        attach,
+        // A status card (show_status): updated in place when this turn already has one with
+        // that id (fields left out keep their value), otherwise added like any tool content.
+        showStatus: (card) => {
+          const now = new Date().toISOString()
+          if (updateStatusCard(thread.messages, turnFrom(), card, now)) {
+            touch()
+            return 'updated'
+          }
+          attach(newStatusBlock(card, now))
+          return 'created'
         },
       },
       onSteer: (handler) => {
@@ -1217,6 +1233,8 @@ export class AgentService {
       run.approvals.clear()
       thread.approvals = []
       thread.background = undefined
+      // A status card still running when the turn ends didn't finish (never spins forever).
+      stopRunningCards(thread.messages, turnFrom(), new Date().toISOString())
       // The turn keeps its checklist as it ended (see Message.todos).
       if (started && thread.todos?.length) started.todos = thread.todos
       thread.activities = thread.activities.map((activity) =>

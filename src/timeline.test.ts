@@ -177,6 +177,28 @@ describe('buildTurns', () => {
     expect(kinds(third!.work)).toEqual(['todos', 'n3', 'step:s3'])
   })
 
+  it('keeps a running turn’s status cards in view, and moves them to the answer when done', () => {
+    const card = {
+      type: 'status' as const,
+      id: 'deploy',
+      kind: 'deploy' as const,
+      status: 'running' as const,
+      title: 'Deploying',
+      startedAt: at(2),
+    }
+    const note = { ...reply('n1', 2), blocks: [card] }
+    const [live] = buildTurns({ messages: [user('q', 0), note], activities: [], status: 'working' })
+    expect(live!.cards).toEqual([card])
+    const [done] = buildTurns({
+      messages: [user('q', 0), note, reply('final', 9)],
+      activities: [],
+      status: 'completed',
+      completedAt: at(10),
+    })
+    expect(done!.cards).toEqual([])
+    expect(done!.blocks).toEqual([card])
+  })
+
   it('never shows a live list in a turn that did not write one', () => {
     const [turn] = buildTurns({
       messages: [user('q', 0), reply('a', 5)],
