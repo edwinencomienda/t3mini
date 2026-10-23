@@ -25,7 +25,7 @@ import {
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
 import { providerUpdates, updateProvider } from './cli-updates'
-import { appUpdate, restartApp, restartWhenIdle } from './app-update'
+import { appUpdate, latestAppUpdate, onAppUpdate, restartApp, restartWhenIdle } from './app-update'
 
 // Live dictation is a WebSocket, which the HTTP servers route to this module (see vite.config.ts
 // and server.mjs).
@@ -508,13 +508,18 @@ export async function handleApi(request: Request) {
           const sent = new Map<string, string>()
           const push = () => {
             try {
-              const changes = changedParts(sent, service.snapshot(id))
+              const changes = changedParts(sent, {
+                ...service.snapshot(id),
+                // A newer t3mini installed (app-update.ts), on the Mac only.
+                ...(remote ? {} : { appUpdate: latestAppUpdate() }),
+              })
               if (changes) controller.enqueue(encode.encode(`data: ${changes}\n\n`))
             } catch {
               cleanup()
             }
           }
           const unsubscribe = service.subscribe(push)
+          const unwatch = remote ? () => {} : onAppUpdate(push)
           const heartbeat = setInterval(() => {
             try {
               controller.enqueue(encode.encode(': keepalive\n\n'))
@@ -524,6 +529,7 @@ export async function handleApi(request: Request) {
           }, 15_000)
           cleanup = () => {
             unsubscribe()
+            unwatch()
             clearInterval(heartbeat)
             request.signal.removeEventListener('abort', close)
           }

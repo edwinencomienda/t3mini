@@ -79,7 +79,7 @@ import {
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
 import { ProviderUpdates } from './ProviderUpdates'
-import { AppUpdate } from './AppUpdate'
+import { AppUpdate, type Update as AppUpdateState } from './AppUpdate'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
 import type { Block } from '../blocks'
@@ -983,6 +983,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [processes, setProcesses] = useState<ProcessInfo[]>([])
   // Threads whose agent has a browser page open (browser_* tools).
   const [browsers, setBrowsers] = useState<BrowserInfo[]>([])
+  // A newer t3mini installed (pushed with the live updates; see AppUpdate).
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState | null>(null)
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   const [addProject, setAddProject] = useState(false)
@@ -1111,6 +1113,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ui?: UiSettings
           activeTab?: string | null
           persistenceError?: string | null
+          appUpdate?: AppUpdateState
         }
         if (data.projects) {
           latest.projects = data.projects
@@ -1118,6 +1121,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         }
         if (data.processes) setProcesses(data.processes)
         if (data.browsers) setBrowsers(data.browsers)
+        if (data.appUpdate) setAppUpdate(data.appUpdate)
         // Which tab, in any browser or profile, notifies and plays music.
         if (data.activeTab !== undefined) setServerTab(data.activeTab)
         if (data.ui) {
@@ -3048,7 +3052,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
               </button>
             </div>
           ) : null}
-          <AppUpdate enabled={Boolean(bootstrap && !bootstrap.remote)} running={runningCount} />
+          <AppUpdate
+            enabled={Boolean(bootstrap && !bootstrap.remote)}
+            running={runningCount}
+            live={appUpdate}
+          />
           <ProviderUpdates
             enabled={Boolean(bootstrap && !bootstrap.remote)}
             onUpdated={updatedProvider}

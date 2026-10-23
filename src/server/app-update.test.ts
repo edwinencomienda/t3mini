@@ -2,7 +2,15 @@ import { mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { appUpdate, binaryFileId, restartApp, restartWhenIdle } from './app-update'
+import {
+  appUpdate,
+  binaryFileId,
+  latestAppUpdate,
+  onAppUpdate,
+  resetAppUpdateWatch,
+  restartApp,
+  restartWhenIdle,
+} from './app-update'
 
 let dir: string
 let env: NodeJS.ProcessEnv
@@ -22,6 +30,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   restartWhenIdle(false, () => false, env)
+  resetAppUpdateWatch()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -91,5 +100,21 @@ describe('restartWhenIdle', () => {
     await installNewBinary()
     restartWhenIdle(true, () => false, env)
     expect(await ran()).toBe('restart --port 4099')
+  })
+})
+
+describe('onAppUpdate', () => {
+  it('tells open pages as soon as a new binary is installed', async () => {
+    let calls = 0
+    onAppUpdate(() => calls++, env)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(latestAppUpdate().ready).toBe(false)
+    const before = Date.now()
+    await installNewBinary('abc1234')
+    for (let i = 0; i < 100 && !latestAppUpdate().ready; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(latestAppUpdate()).toEqual({ ready: true, commit: 'abc1234', whenIdle: false })
+    expect(calls).toBeGreaterThan(0)
+    expect(Date.now() - before).toBeLessThan(1500)
   })
 })

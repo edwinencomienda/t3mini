@@ -7,7 +7,7 @@ import { useConfirm } from './ConfirmDialog'
 // away, or once every agent is done, since restarting stops turns that are running. The page
 // reloads itself when the new server answers.
 
-type Update = { ready: boolean; commit?: string; whenIdle: boolean }
+export type Update = { ready: boolean; commit?: string; whenIdle: boolean }
 
 async function request(method = 'GET', body?: unknown): Promise<Update> {
   const response = await fetch(`/api/app-update${method === 'GET' ? '' : '/restart'}`, {
@@ -21,7 +21,17 @@ async function request(method = 'GET', body?: unknown): Promise<Update> {
   return data as Update
 }
 
-export function AppUpdate({ enabled, running }: { enabled: boolean; running: number }) {
+export function AppUpdate({
+  enabled,
+  running,
+  live,
+}: {
+  enabled: boolean
+  running: number
+  // Pushed with the page's live updates the moment it changes (an install just finished);
+  // the slower check below is only a fallback.
+  live?: Update | null
+}) {
   const [update, setUpdate] = useState<Update | null>(null)
   const [restarting, setRestarting] = useState(false)
   const [error, setError] = useState('')
@@ -33,6 +43,12 @@ export function AppUpdate({ enabled, running }: { enabled: boolean; running: num
   waitingRef.current = waiting
   const restartingRef = useRef(restarting)
   restartingRef.current = restarting
+
+  useEffect(() => {
+    if (!enabled || !live) return
+    if (waitingRef.current && !live.ready) return window.location.reload()
+    setUpdate(live)
+  }, [enabled, live])
 
   useEffect(() => {
     if (!enabled) return
@@ -54,8 +70,8 @@ export function AppUpdate({ enabled, running }: { enabled: boolean; running: num
           }
         })
     void check()
-    // Checking is a file stat on the server: cheap, but only often while a restart is coming.
-    const timer = setInterval(check, waiting ? 1500 : 30_000)
+    // A fallback for the live updates: often only while a restart is coming.
+    const timer = setInterval(check, waiting ? 1500 : 60_000)
     window.addEventListener('focus', check)
     return () => {
       cancelled = true

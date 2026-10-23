@@ -11,8 +11,10 @@
 // it. "When idle" waits for every agent to finish first.
 
 import { spawn } from 'node:child_process'
+import { watch, type FSWatcher } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { basename, dirname } from 'node:path'
 
 export type AppUpdate = {
   // A newer t3mini is installed than the one running.
@@ -66,6 +68,53 @@ export async function restartApp(env: NodeJS.ProcessEnv = process.env) {
   child.unref()
 }
 
+// Live: the latest state, sent to open pages with their live updates (/api/events) the moment
+// it changes. The binary's folder is watched (installs rename a new file into it), so the card
+// shows up as soon as an install finishes instead of at the page's next check.
+let latest: AppUpdate = { ready: false, whenIdle: false }
+const listeners = new Set<() => void>()
+let watcher: FSWatcher | undefined
+let pending: ReturnType<typeof setTimeout> | undefined
+async function refresh(env: NodeJS.ProcessEnv = process.env) {
+  const next = await appUpdate(env)
+  if (JSON.stringify(next) === JSON.stringify(latest)) return
+  latest = next
+  for (const listener of listeners) listener()
+}
+export const latestAppUpdate = () => latest
+// Stops watching and forgets the state (tests).
+export function resetAppUpdateWatch() {
+  watcher?.close()
+  watcher = undefined
+  clearTimeout(pending)
+  listeners.clear()
+  latest = { ready: false, whenIdle: false }
+}
+export function onAppUpdate(listener: () => void, env: NodeJS.ProcessEnv = process.env) {
+  listeners.add(listener)
+  const binary = env.T3_MINI_BINARY
+  if (binary && !watcher) {
+    try {
+      watcher = watch(dirname(binary), (_event, name) => {
+        if (name && name !== basename(binary)) return
+        // The install's commit is written just after the rename: read once things settle.
+        clearTimeout(pending)
+        pending = setTimeout(() => void refresh(env), 300)
+      })
+      watcher.on('error', () => {
+        watcher?.close()
+        watcher = undefined
+      })
+    } catch {
+      watcher = undefined
+    }
+    void refresh(env)
+  }
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
 // Restarts as soon as no agent is working (checked every few seconds), or stops waiting.
 let timer: ReturnType<typeof setInterval> | undefined
 export function restartWhenIdle(
@@ -76,6 +125,7 @@ export function restartWhenIdle(
   whenIdle = enabled
   clearInterval(timer)
   timer = undefined
+  void refresh(env)
   if (!enabled) return
   const check = () => {
     if (busy()) return
