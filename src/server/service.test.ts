@@ -563,28 +563,88 @@ it('removes a project together with its threads, unless one is running', async (
   const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
   expect(saved.map((item: { id: string }) => item.id)).toEqual([elsewhere.id])
 })
-it('switches agents only before the first message', async () => {
-  const created = await thread()
-  const switched = await service.updateSettings(created.id, {
-    provider: 'claude',
-    model: '',
-    effort: '',
-    permissionMode: 'full-access',
+it('switches agents mid-thread with a recap, and resumes a parked session on switching back', async () => {
+  const calls: { provider: string; prompt: string; resume?: string }[] = []
+  const fake =
+    (provider: 'claude' | 'codex'): Runner =>
+    async (ctx) => {
+      calls.push({ provider, prompt: ctx.prompt, resume: ctx.thread.sessionId })
+      ctx.session(ctx.thread.sessionId ?? `${provider}-session`)
+      ctx.turnStarted?.(`turn-${calls.length}`)
+      ctx.text(`reply-${calls.length}`, `${provider} answer ${calls.length}`)
+    }
+  const switching = new AgentService(new ThreadStore(join(directory, 'switch.json')), {
+    codex: fake('codex'),
+    claude: fake('claude'),
   })
-  expect(switched.provider).toBe('claude')
+  const settings = { model: '', effort: '', permissionMode: 'full-access' }
+  const turn = async (id: string, text: string) => {
+    const done = new Promise<void>((resolve) => {
+      const unsubscribe = switching.subscribe(() => {
+        const current = switching.get(id)
+        if (current.status === 'completed' && current.messages.at(-1)?.role === 'assistant') {
+          unsubscribe()
+          resolve()
+        }
+      })
+    })
+    await switching.send(id, { text })
+    await done
+  }
+  try {
+    const created = await switching.create({ provider: 'codex', cwd: directory })
+    await turn(created.id, 'First question')
+    expect(calls[0]).toEqual({ provider: 'codex', prompt: 'First question', resume: undefined })
+
+    // Codex → Claude: Claude starts its own session with a recap of the first turn.
+    await switching.updateSettings(created.id, { provider: 'claude', ...settings })
+    expect(switching.get(created.id).sessions?.codex?.id).toBe('codex-session')
+    await turn(created.id, 'Second question')
+    expect(calls[1]!.provider).toBe('claude')
+    expect(calls[1]!.resume).toBeUndefined()
+    expect(calls[1]!.prompt).toContain('switched to you from Codex')
+    expect(calls[1]!.prompt).toContain('First question')
+    expect(calls[1]!.prompt).toContain('codex answer 1')
+    expect(calls[1]!.prompt.endsWith('Second question')).toBe(true)
+    expect(switching.get(created.id).handoff).toBeUndefined()
+
+    // A second Claude turn needs no recap.
+    await turn(created.id, 'Third question')
+    expect(calls[2]!.prompt).toBe('Third question')
+
+    // Back to Codex: its parked session resumes, with a recap of only the turns it missed.
+    await switching.updateSettings(created.id, { provider: 'codex', ...settings })
+    await turn(created.id, 'Fourth question')
+    expect(calls[3]!.resume).toBe('codex-session')
+    expect(calls[3]!.prompt).toContain('switched to you from Claude')
+    expect(calls[3]!.prompt).toContain('Second question')
+    expect(calls[3]!.prompt).toContain('claude answer 3')
+    expect(calls[3]!.prompt).not.toContain('First question')
+    const final = switching.get(created.id)
+    expect(final.sessions?.claude?.id).toBe('claude-session')
+    // Each turn records the agent that ran it.
+    expect(
+      final.messages.filter((message) => message.role === 'user').map((m) => m.provider),
+    ).toEqual(['codex', 'claude', 'claude', 'codex'])
+  } finally {
+    await switching.close()
+  }
+})
+it('does not switch agents while the agent waits on you', async () => {
+  const created = await thread()
   await service.send(created.id, { text: 'Hello' })
   await started
-  finish()
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  service.get(created.id).approvals.push({ id: 'a', title: 'Run?', detail: '' })
   await expect(
     service.updateSettings(created.id, {
-      provider: 'codex',
+      provider: 'claude',
       model: '',
       effort: '',
       permissionMode: 'full-access',
     }),
-  ).rejects.toThrow('new thread')
-  expect(service.get(created.id).provider).toBe('claude')
+  ).rejects.toThrow()
+  expect(service.get(created.id).provider).toBe('codex')
+  finish()
 })
 it('reports the git branch of a thread project, or none outside a repository', async () => {
   const { execFile } = await import('node:child_process')
@@ -1354,8 +1414,9 @@ it('reads a thread the user shared, from any project, as reference only', async 
   const earlier = read(source.id, 2)
   expect(earlier).toContain('## Turn 1')
   expect(earlier).not.toContain('## Turn 2')
-  // Its own thread, a missing one, or no id at all.
-  expect(() => read(reader.id)).toThrow('this thread')
+  // Its own thread (turns a switch recap left out), as context rather than a shared one.
+  expect(read(reader.id)).toContain('your own thread')
+  // A missing one, or no id at all.
   service.get(reader.id).messages.push(say('user', 'and 00000000-0000-0000-0000-000000000000', 7))
   expect(() => read('00000000-0000-0000-0000-000000000000')).toThrow('doesn’t exist')
   expect(() => read('the other one')).toThrow('link or id')

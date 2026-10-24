@@ -3433,6 +3433,11 @@ body.resizing {
 .picker-menu.settings {
   min-width: 15rem;
 }
+/* Room for Model, Effort, and Service tier whichever agent is picked: the menu opens upward,
+   so a row more or less would move the tabs under the pointer when switching agents. */
+.picker-menu.settings.with-tabs .picker-rows {
+  min-height: calc(3 * (1rem + 13px * 1.5));
+}
 .picker-row {
   display: flex;
   align-items: center;
@@ -5221,6 +5226,25 @@ body.resizing {
   margin: 0.35rem 0;
   font-size: 12px;
   color: var(--muted-foreground);
+}
+/* Where a thread switched agents (Workspace: between turns). */
+.agent-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 1rem;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.agent-switch-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.agent-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .compact-rule {
   flex: 1;

@@ -56,7 +56,13 @@ import {
 } from 'lucide-react'
 import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { AgentSettingsControls, Picker, ProviderMark, SettingsMenu } from './AgentSettingsControls'
+import {
+  AgentSettingsControls,
+  Picker,
+  ProviderMark,
+  providerNames,
+  SettingsMenu,
+} from './AgentSettingsControls'
 import { VSCodeIcon } from './ProviderIcon'
 import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
@@ -3429,8 +3435,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           onShow={showOlder}
                         />
                       ) : null}
-                      {drawnTurns.map((turn) => (
+                      {drawnTurns.map((turn, index) => (
                         <div className="turn" key={turn.key} data-turn={turn.key}>
+                          {/* The thread switched agents at this turn (server/handoff.ts). */}
+                          {turn.user?.provider &&
+                          drawnTurns[index - 1]?.user?.provider &&
+                          drawnTurns[index - 1]!.user!.provider !== turn.user.provider ? (
+                            <div
+                              className="agent-switch"
+                              role="note"
+                              title="This agent got a recap of the conversation before this turn."
+                            >
+                              <span className="agent-switch-rule" aria-hidden />
+                              <span className="agent-switch-label">
+                                <ProviderMark provider={turn.user.provider} size={12} />
+                                Switched to {providerNames[turn.user.provider]}
+                              </span>
+                              <span className="agent-switch-rule" aria-hidden />
+                            </div>
+                          ) : null}
                           {turn.user ? <MessageView message={turn.user} /> : null}
                           {turn.done && turn.work.length ? (
                             <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>
@@ -3756,17 +3779,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
                                       claude: bootstrap.providers.claude.installed,
                                       codex: bootstrap.providers.codex.installed,
                                     },
-                                    locked: thread.messages.length > 0 || Boolean(thread.sessionId),
                                     // Switching agents brings back that agent's last-used settings,
-                                    // or the model picked from its tab (with default effort).
-                                    onChange: (provider, model) => {
+                                    // or the ones picked in its tab (model, effort, tier).
+                                    onChange: (provider, settings) => {
                                       if (provider === thread.provider) return
-                                      const remembered = settingsFor(provider)
-                                      // Your last model for that agent keeps its effort and tier.
                                       void updateSettings(
-                                        model === undefined || model === remembered.model
-                                          ? remembered
-                                          : { ...remembered, model, effort: '', serviceTier: '' },
+                                        settings ?? settingsFor(provider),
                                         provider,
                                       )
                                     },

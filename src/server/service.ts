@@ -66,6 +66,7 @@ import {
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import { providerExecutable } from './cli-updates'
+import { handoffRecap, switchAgent } from './handoff'
 import {
   rewindRefused,
   type PromptImage,
@@ -699,10 +700,12 @@ export class AgentService {
     const { provider = thread.provider, ...data } = settingsSchema
       .extend({ provider: z.enum(['codex', 'claude']).optional() })
       .parse(input)
-    // A provider session can't move to another agent, so switching is only allowed before
-    // the first message.
-    if (provider !== thread.provider && (thread.messages.length || thread.sessionId))
-      throw new HttpError(409, 'Start a new thread to use a different agent.')
+    // A started thread can switch agents too: a session can't move to another agent, so the
+    // current one is parked (resumed if you switch back) and the new agent gets a recap of
+    // what it missed with its next turn (server/handoff.ts).
+    const switching = provider !== thread.provider && (thread.messages.length || thread.sessionId)
+    if (switching && thread.approvals.length)
+      throw new HttpError(409, 'Answer the agent first, then switch.')
     this.settingsUpdates.add(id)
     try {
       try {
@@ -716,7 +719,14 @@ export class AgentService {
         effort: thread.effort,
         permissionMode: thread.permissionMode,
         serviceTier: thread.serviceTier,
+        sessionId: thread.sessionId,
+        claudeEntry: thread.claudeEntry,
+        sessions: thread.sessions,
+        handoff: thread.handoff,
+        rewind: thread.rewind,
+        todos: thread.todos,
       }
+      if (switching) switchAgent(thread, provider)
       Object.assign(thread, data, { provider })
       try {
         await this.store.save()
@@ -907,6 +917,9 @@ export class AgentService {
       ...(attachments.length ? { attachments } : {}),
     }
     thread.messages.push(message)
+    // The turn being taken back carried a recap (the first after switching agents): send it
+    // again, since the agent loses it with the turn.
+    if (target.handoff) thread.handoff = target.handoff
     if (checkpoint.fresh) {
       // It was the session's first turn: start over with a new session.
       thread.sessionId = undefined
@@ -1047,10 +1060,20 @@ export class AgentService {
             : thread.claudeEntry
               ? { claudeResumeAt: thread.claudeEntry, claudePrompt: promptId }
               : undefined
+    // Which agent ran this turn, and (after a switch) the recap of what it missed, sent ahead
+    // of the prompt (server/handoff.ts). The turn keeps its handoff, so an edit that takes the
+    // turn back sends the recap again.
+    const handoff = thread.handoff
+    const recap = handoff ? handoffRecap(thread, started?.id) : ''
+    if (started) {
+      started.provider = thread.provider
+      if (handoff) started.handoff = handoff
+      else delete started.handoff
+    }
     const context: ProviderContext = {
       thread,
       cwd: workdir(thread),
-      prompt,
+      prompt: recap + prompt,
       images,
       promptId,
       rewind: thread.rewind,
@@ -1064,10 +1087,14 @@ export class AgentService {
       },
       turnStarted: (turnId) => {
         if (started) started.turn = { codexTurn: turnId }
+        // Codex took the turn, recap included.
+        if (thread.handoff === handoff) thread.handoff = undefined
       },
       signal: run.controller.signal,
       session: (id) => {
         thread.sessionId = id
+        // Claude reports its session once it has the prompt, recap included.
+        if (thread.provider === 'claude' && thread.handoff === handoff) thread.handoff = undefined
         working()
         touch()
       },
@@ -1545,9 +1572,12 @@ export class AgentService {
     const id = threadIdFrom(reference)
     if (!id)
       throw new ToolError('Pass the thread’s link or id (from its right-click menu → Copy link).')
-    if (id === current.id) throw new ToolError('That’s this thread.')
+    // Its own thread too: after switching agents, the turns its recap left out.
     // A lead may read its helpers, and a helper its lead, without the link being shared.
-    const family = this.store.threads.get(id)?.parentId === current.id || current.parentId === id
+    const family =
+      id === current.id ||
+      this.store.threads.get(id)?.parentId === current.id ||
+      current.parentId === id
     const shared =
       family ||
       current.messages.some(
@@ -1560,7 +1590,12 @@ export class AgentService {
     const thread = this.store.threads.get(id)
     if (!thread) throw new ToolError('That thread doesn’t exist any more.')
     const project = this.projectStore.projects.get(thread.cwd)
-    return describeThread(thread, projectLabel(thread.cwd, project?.name), before)
+    return describeThread(
+      thread,
+      projectLabel(thread.cwd, project?.name),
+      before,
+      thread.id === current.id,
+    )
   }
   // Stop shows right away, like Claude Desktop: the thread is marked stopped and every tab is
   // told at once, while the agent finishes exiting in the background (Claude ends the turn

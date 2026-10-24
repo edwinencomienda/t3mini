@@ -37,13 +37,13 @@ export const providerNames: Record<Provider, string> = { codex: 'Codex', claude:
 export function ProviderMark({ provider, size = 14 }: { provider: Provider; size?: number }) {
   return <ProviderIcon provider={provider} size={size} />
 }
-// Agent choice for a thread. It can change until the first message; after that the
-// provider session belongs to that agent.
+// Agent choice for a thread. Picking the other agent's tab switches right away, with your last
+// settings for it; in a started thread the new agent gets a recap of the conversation (see
+// server/handoff.ts).
 export type AgentChoice = {
   installed: Record<Provider, boolean>
-  locked: boolean
-  // Switches agent; with a model, also selects that model (picked from the other tab).
-  onChange: (provider: Provider, model?: string) => void
+  // Switches agent: with your last settings for it, or the ones picked in its tab.
+  onChange: (provider: Provider, settings?: AgentSettings) => void
 }
 
 // The menus open above the composer (or below a field) and stay inside the window; Base UI
@@ -222,46 +222,53 @@ export function SettingsMenu({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner className="picker-positioner" {...positioner(placement)}>
-          <Menu.Popup className="picker-menu settings" aria-label={label}>
+          <Menu.Popup
+            className={`picker-menu settings${header ? ' with-tabs' : ''}`}
+            aria-label={label}
+          >
             {header}
-            {rows.map((row) => (
-              <Menu.SubmenuRoot
-                key={row.key}
-                open={submenu === row.key}
-                onOpenChange={(next) =>
-                  setSubmenu((current) => (next ? row.key : current === row.key ? null : current))
-                }
-              >
-                <Menu.SubmenuTrigger className="picker-row" label={row.label} openOnHover>
-                  <span className="picker-row-label">{row.label}</span>
-                  <span className="picker-row-value">{row.text}</span>
-                  <ChevronRight size={14} />
-                </Menu.SubmenuTrigger>
-                <Menu.Portal>
-                  <Menu.Positioner
-                    className="picker-positioner"
-                    sideOffset={4}
-                    alignOffset={-5}
-                    collisionPadding={8}
-                  >
-                    <Menu.Popup className="picker-menu picker-submenu" aria-label={row.label}>
-                      <OptionList
-                        label={row.label}
-                        value={row.value}
-                        options={row.options}
-                        disabled={busy}
-                        onSelect={(value) => {
-                          row.onSelect(value)
-                          if (row.closeOnSelect) change(false)
-                          else setSubmenu(null)
-                        }}
-                      />
-                      {row.footer}
-                    </Menu.Popup>
-                  </Menu.Positioner>
-                </Menu.Portal>
-              </Menu.SubmenuRoot>
-            ))}
+            {/* With agent tabs, the rows keep one height for either agent (styles.css), so the
+                menu, which opens upward, doesn't jump when a switch adds or drops a row. */}
+            <div className="picker-rows">
+              {rows.map((row) => (
+                <Menu.SubmenuRoot
+                  key={row.key}
+                  open={submenu === row.key}
+                  onOpenChange={(next) =>
+                    setSubmenu((current) => (next ? row.key : current === row.key ? null : current))
+                  }
+                >
+                  <Menu.SubmenuTrigger className="picker-row" label={row.label} openOnHover>
+                    <span className="picker-row-label">{row.label}</span>
+                    <span className="picker-row-value">{row.text}</span>
+                    <ChevronRight size={14} />
+                  </Menu.SubmenuTrigger>
+                  <Menu.Portal>
+                    <Menu.Positioner
+                      className="picker-positioner"
+                      sideOffset={4}
+                      alignOffset={-5}
+                      collisionPadding={8}
+                    >
+                      <Menu.Popup className="picker-menu picker-submenu" aria-label={row.label}>
+                        <OptionList
+                          label={row.label}
+                          value={row.value}
+                          options={row.options}
+                          disabled={busy}
+                          onSelect={(value) => {
+                            row.onSelect(value)
+                            if (row.closeOnSelect) change(false)
+                            else setSubmenu(null)
+                          }}
+                        />
+                        {row.footer}
+                      </Menu.Popup>
+                    </Menu.Positioner>
+                  </Menu.Portal>
+                </Menu.SubmenuRoot>
+              ))}
+            </div>
             {note}
           </Menu.Popup>
         </Menu.Positioner>
@@ -275,21 +282,27 @@ export function SettingsMenu({
 const inflight = new Map<string, Promise<ModelCatalog>>()
 function useCatalog(provider: Provider, cwd: string) {
   const cacheKey = `${provider}|${cwd}`
-  const [catalog, setCatalog] = useState<ModelCatalog>(
-    () => catalogs.get(cacheKey) ?? { models: [] },
-  )
-  const [loading, setLoading] = useState(() => !catalogs.has(cacheKey))
+  // Kept per key: when the agent or folder changes, a list already loaded shows in the same
+  // render (no empty or loading frame in between).
+  const [state, setState] = useState(() => ({
+    key: cacheKey,
+    catalog: catalogs.get(cacheKey) ?? { models: [] },
+    loading: !catalogs.has(cacheKey),
+  }))
   const [reload, setReload] = useState(0)
+  const cached = catalogs.get(cacheKey)
+  const current =
+    state.key === cacheKey
+      ? state
+      : { key: cacheKey, catalog: cached ?? { models: [] }, loading: !cached }
   useEffect(() => {
     const cached = catalogs.get(cacheKey)
     if (cached && !reload) {
-      setCatalog(cached)
-      setLoading(false)
+      setState({ key: cacheKey, catalog: cached, loading: false })
       return
     }
     let cancelled = false
-    setLoading(true)
-    setCatalog({ models: [] })
+    setState({ key: cacheKey, catalog: { models: [] }, loading: true })
     const timer = setTimeout(() => {
       let request = reload ? undefined : inflight.get(cacheKey)
       if (!request) {
@@ -319,8 +332,7 @@ function useCatalog(provider: Provider, cwd: string) {
       }
       void request.then((loaded) => {
         if (cancelled) return
-        setCatalog(loaded)
-        setLoading(false)
+        setState({ key: cacheKey, catalog: loaded, loading: false })
       })
     }, 200)
     return () => {
@@ -328,7 +340,141 @@ function useCatalog(provider: Provider, cwd: string) {
       clearTimeout(timer)
     }
   }, [cacheKey, provider, cwd, reload])
-  return { catalog, loading, retry: () => setReload((count) => count + 1) }
+  return {
+    catalog: current.catalog,
+    loading: current.loading,
+    retry: () => setReload((count) => count + 1),
+  }
+}
+
+// The rows for one agent's settings: Model, then Effort and (Codex) Service tier for that
+// model. With Provider default, effort and tier choices come from the model the agent picks.
+function settingRows({
+  current,
+  catalog,
+  loading,
+  retry,
+  apply,
+}: {
+  current: AgentSettings
+  catalog: ModelCatalog
+  loading: boolean
+  retry: () => void
+  apply: (settings: AgentSettings) => void
+}) {
+  const model = catalog.models.find((item) => item.id === current.model)
+  const effective =
+    model ??
+    (current.model
+      ? undefined
+      : catalog.models.find((item) => item.isDefault || item.id === 'default'))
+  const efforts = effective?.efforts || []
+  const tiers = effective?.serviceTiers || []
+  const tier = tiers.find((item) => item.id === current.serviceTier)
+  const modelOptions: Option[] = loading
+    ? []
+    : [
+        { value: '', label: 'Provider default' },
+        ...(current.model && !model ? [{ value: current.model, label: current.model }] : []),
+        ...catalog.models.map((item) => ({
+          value: item.id,
+          label: item.label,
+          description: item.description,
+        })),
+      ]
+  const effortOptions: Option[] = [
+    {
+      value: '',
+      label: effective?.defaultEffort
+        ? `Default (${effortLabel(effective.defaultEffort)})`
+        : 'Default',
+    },
+    ...(current.effort && !efforts.includes(current.effort)
+      ? [{ value: current.effort, label: effortLabel(current.effort) }]
+      : []),
+    ...efforts.map((effort) => ({ value: effort, label: effortLabel(effort) })),
+  ]
+  const modelText = loading
+    ? current.model
+      ? current.model
+      : 'Loading…'
+    : model?.label || current.model || 'Default model'
+  // The pill reads like "Opus 5.5 Medium": the model, then the effort (and a faster tier).
+  const effortText = [
+    current.effort
+      ? effortLabel(current.effort)
+      : effective?.defaultEffort
+        ? effortLabel(effective.defaultEffort)
+        : '',
+    tier?.label ?? '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const rows: MenuRow[] = [
+    {
+      key: 'model',
+      label: 'Model',
+      text: modelText,
+      value: current.model,
+      options: modelOptions,
+      onSelect: (model) => apply({ ...current, model, effort: '', serviceTier: '' }),
+      footer: loading ? (
+        <div className="picker-error">Loading models…</div>
+      ) : catalog.error ? (
+        <div className="picker-error">
+          <span>{catalog.error}</span>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Retry loading models"
+            onClick={retry}
+          >
+            <RefreshCw size={13} />
+          </button>
+        </div>
+      ) : null,
+    },
+    ...(efforts.length || current.effort
+      ? [
+          {
+            key: 'effort',
+            label: 'Effort',
+            text: effortOptions.find((item) => item.value === current.effort)?.label ?? 'Default',
+            value: current.effort,
+            options: effortOptions,
+            // The server needs a model for an effort, so with Provider default this selects
+            // the default model whose levels are listed.
+            onSelect: (effort: string) =>
+              apply({
+                ...current,
+                model: current.model || (effort ? (effective?.id ?? '') : ''),
+                effort,
+              }),
+          },
+        ]
+      : []),
+    // Codex models can offer faster service tiers.
+    ...(tiers.length
+      ? [
+          {
+            key: 'tier',
+            label: 'Service tier',
+            text: tier?.label ?? 'Standard',
+            value: current.serviceTier || '',
+            options: [
+              { value: '', label: 'Standard', badge: 'Default' },
+              ...tiers.map((item) => ({
+                value: item.id,
+                label: item.label,
+                description: item.description,
+              })),
+            ],
+            onSelect: (serviceTier: string) => apply({ ...current, serviceTier }),
+          },
+        ]
+      : []),
+  ]
+  return { rows, modelText, effortText }
 }
 
 export function AgentSettingsControls({
@@ -354,151 +500,40 @@ export function AgentSettingsControls({
   // The menu's Claude / Codex tabs. Opening the menu starts on the thread's own agent.
   const [tab, setTab] = useState<Provider>(provider)
   useEffect(() => setTab(provider), [provider])
-  const { catalog, loading, retry } = useCatalog(provider, cwd)
-  const browsing = useCatalog(tab, cwd)
+  // Both agents' model lists load with the composer, so switching tabs or agents shows the
+  // other list at once instead of loading it then.
+  const lists = { claude: useCatalog('claude', cwd), codex: useCatalog('codex', cwd) }
+  const { catalog, loading, retry } = lists[provider]
+  const browsing = lists[tab]
   const otherTab = tab !== provider
-  const model = catalog.models.find((item) => item.id === value.model)
-  // With Provider default, effort and tier choices come from the model the provider picks.
-  const effective =
-    model ??
-    (value.model
-      ? undefined
-      : catalog.models.find((item) => item.isDefault || item.id === 'default'))
   const mode = permissionModes.find((item) => item.value === value.permissionMode)!
-  const efforts = effective?.efforts || []
-  const tiers = effective?.serviceTiers || []
-  const tier = tiers.find((item) => item.id === value.serviceTier)
-  // The list under the selected tab: this thread's agent, or the other one to switch to.
-  const listed = otherTab ? browsing.catalog : catalog
-  // The other agent's tab (while the switch saves, or when its CLI is missing) shows your last
-  // choices for that agent, which a switch reuses.
-  const remembered = otherTab ? loadPreferences().settings[tab] : undefined
-  const rememberedModel = remembered
-    ? browsing.catalog.models.find((item) => item.id === remembered.model)
-    : undefined
-  const rememberedText = remembered
-    ? [
-        rememberedModel?.label || remembered.model || 'Provider default',
-        remembered.effort ? effortLabel(remembered.effort) : '',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : 'Choose'
-  const listLoading = otherTab ? browsing.loading : loading
-  const modelOptions: Option[] = listLoading
-    ? []
-    : [
-        { value: '', label: 'Provider default' },
-        ...(!otherTab && value.model && !model ? [{ value: value.model, label: value.model }] : []),
-        ...listed.models.map((item) => ({
-          value: item.id,
-          label: item.label,
-          description: item.description,
-        })),
-      ]
-  const canSwitch = Boolean(agent && !agent.locked)
-  const effortOptions: Option[] = [
-    {
-      value: '',
-      label: effective?.defaultEffort
-        ? `Default (${effortLabel(effective.defaultEffort)})`
-        : 'Default',
-    },
-    ...(value.effort && !efforts.includes(value.effort)
-      ? [{ value: value.effort, label: effortLabel(value.effort) }]
-      : []),
-    ...efforts.map((effort) => ({ value: effort, label: effortLabel(effort) })),
-  ]
-  const modelText = loading
-    ? value.model
-      ? value.model
-      : 'Loading…'
-    : model?.label || value.model || 'Default model'
-  // The pill reads like "Opus 5.5 Medium": the model, then the effort (and a faster tier).
-  const effortText = [
-    value.effort
-      ? effortLabel(value.effort)
-      : effective?.defaultEffort
-        ? effortLabel(effective.defaultEffort)
-        : '',
-    tier?.label ?? '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  const modelRow: MenuRow = {
-    key: 'model',
-    label: 'Model',
-    text: otherTab ? rememberedText : modelText,
-    // In the other agent's tab: your last model there, else nothing selected yet.
-    value: otherTab ? (remembered ? remembered.model : '\u0000') : value.model,
-    options: modelOptions,
-    // Picking from the other agent's tab switches the thread to that agent.
-    onSelect: (model) =>
-      otherTab
-        ? agent?.onChange(tab, model)
-        : onChange({ ...value, model, effort: '', serviceTier: '' }),
-    closeOnSelect: otherTab,
-    footer: listLoading ? (
-      <div className="picker-error">Loading models…</div>
-    ) : listed.error ? (
-      <div className="picker-error">
-        <span>{listed.error}</span>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Retry loading models"
-          onClick={() => (otherTab ? browsing.retry() : retry())}
-        >
-          <RefreshCw size={13} />
-        </button>
-      </div>
-    ) : null,
+  // This thread's agent: its settings, applied as you pick.
+  const own = settingRows({
+    current: value,
+    catalog,
+    loading,
+    retry,
+    apply: onChange,
+  })
+  // The other agent's tab starts from your last choices for it (or its defaults); any pick
+  // there (model, effort, or tier) switches the thread to that agent with those settings.
+  const pending: AgentSettings = (otherTab && loadPreferences().settings[tab]) || {
+    model: '',
+    effort: '',
+    serviceTier: '',
+    permissionMode: value.permissionMode,
   }
-  // Effort and tier belong to this thread's model, so they show on its own tab only.
-  const rows: MenuRow[] = otherTab
-    ? [modelRow]
-    : [
-        modelRow,
-        ...(efforts.length || value.effort
-          ? [
-              {
-                key: 'effort',
-                label: 'Effort',
-                text: effortOptions.find((item) => item.value === value.effort)?.label ?? 'Default',
-                value: value.effort,
-                options: effortOptions,
-                // The server needs a model for an effort, so with Provider default this
-                // selects the default model whose levels are listed.
-                onSelect: (effort: string) =>
-                  onChange({
-                    ...value,
-                    model: value.model || (effort ? (effective?.id ?? '') : ''),
-                    effort,
-                  }),
-              },
-            ]
-          : []),
-        // Codex models can offer faster service tiers.
-        ...(tiers.length
-          ? [
-              {
-                key: 'tier',
-                label: 'Service tier',
-                text: tier?.label ?? 'Standard',
-                value: value.serviceTier || '',
-                options: [
-                  { value: '', label: 'Standard', badge: 'Default' },
-                  ...tiers.map((item) => ({
-                    value: item.id,
-                    label: item.label,
-                    description: item.description,
-                  })),
-                ],
-                onSelect: (serviceTier: string) => onChange({ ...value, serviceTier }),
-              },
-            ]
-          : []),
-      ]
+  const other = otherTab
+    ? settingRows({
+        current: pending,
+        catalog: browsing.catalog,
+        loading: browsing.loading,
+        retry: browsing.retry,
+        apply: (settings) => agent?.onChange(tab, settings),
+      })
+    : undefined
+  const rows = other ? other.rows : own.rows
+  const { modelText, effortText } = own
   return (
     <div className="agent-settings" aria-label="Agent settings" role="group">
       {/* One pill for agent, model, effort, and tier; permissions stay one tap away. */}
@@ -526,24 +561,19 @@ export function AgentSettingsControls({
               onValueChange={(next: Provider) => {
                 setTab(next)
                 // Picking the other agent's tab switches to it right away, with your last
-                // model and effort for that agent. (Without its CLI you can only browse.)
-                if (next !== provider && canSwitch && agent.installed[next]) agent.onChange(next)
+                // model and effort for that agent; the menu stays open on its settings.
+                // (Without its CLI you can only browse.)
+                if (next !== provider && agent.installed[next]) agent.onChange(next)
               }}
             >
               <Tabs.List className="picker-tabs" aria-label="Agent">
                 {(['claude', 'codex'] as const).map((item) => {
-                  const blocked = item !== provider && !canSwitch
                   return (
                     <Tabs.Tab
                       key={item}
                       value={item}
-                      disabled={blocked}
                       title={
-                        blocked
-                          ? `Start a new thread to use ${providerNames[item]}.`
-                          : !agent.installed[item]
-                            ? `${providerNames[item]} CLI not found`
-                            : undefined
+                        !agent.installed[item] ? `${providerNames[item]} CLI not found` : undefined
                       }
                     >
                       <ProviderMark provider={item} size={12} />
@@ -555,11 +585,11 @@ export function AgentSettingsControls({
             </Tabs.Root>
           ) : null
         }
+        // The other agent's tab only stays open when its CLI is missing (a click switches
+        // otherwise), so that's the only note.
         note={
-          otherTab ? (
-            <div className="picker-note">
-              Picking a model switches this thread to {providerNames[tab]}.
-            </div>
+          otherTab && agent && !agent.installed[tab] ? (
+            <div className="picker-note">{providerNames[tab]} CLI not found.</div>
           ) : null
         }
       />

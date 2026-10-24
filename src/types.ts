@@ -31,6 +31,10 @@ export type Message = {
   // A report from a helper thread to its lead (see server/orchestration): sent as a message so
   // the lead's agent reads it, shown as a card. The text holds the full report for the agent.
   report?: HelperReport
+  // Set on a message that started a turn: the agent that ran it (a thread can switch agents),
+  // and the recap it was sent first when it took over (see Thread.handoff).
+  provider?: Provider
+  handoff?: { after?: string }
   // The agent's reply when it finished responding (Claude's result). A turn can have more than
   // one: Claude answers, then wakes up again when background work it left running finishes and
   // adds a follow-up. Every such reply stays in view when the turn folds, not just the last.
@@ -44,6 +48,7 @@ export type HelperReport = {
   // The helper's final answer (or what it's waiting on), shortened.
   answer: string
 }
+export type ParkedSession = { id: string; claudeEntry?: string; seen?: string }
 export type TurnCheckpoint = {
   // Claude: the turn was the session's first (an edit starts a new session), or the last
   // conversation entry before it (resumeSessionAt) and this prompt's id (resumeDropsTurn).
@@ -159,6 +164,12 @@ export type Thread = {
   claudeEntry?: string
   // A turn to drop from the agent's memory before the next run (set by an edit).
   rewind?: TurnCheckpoint
+  // Switching agents mid-thread: the other agent's session, parked until it's picked again,
+  // with the last message it had seen.
+  sessions?: Partial<Record<Provider, ParkedSession>>
+  // After a switch: the agent hasn't seen the messages after this one (all of them when
+  // `after` is absent), so its next turn starts with a recap of them (server/handoff.ts).
+  handoff?: { after?: string }
   // Background tasks still running in the current turn.
   background?: BackgroundTask[]
   // The agent's latest to-do checklist (kept across turns: Claude's tasks live for the session).
@@ -308,8 +319,9 @@ export function editableMessage(thread: Pick<Thread, 'status' | 'provider' | 'me
   if (thread.status !== 'interrupted' && thread.status !== 'failed') return undefined
   const last = [...thread.messages].reverse().find((message) => message.role === 'user')
   const turn = last?.turn
-  // A helper's report isn't yours to edit.
-  if (!turn || last.report) return undefined
+  // A helper's report isn't yours to edit, and a turn another agent ran can't be taken back
+  // out of this one's memory.
+  if (!turn || last.report || (last.provider && last.provider !== thread.provider)) return undefined
   const undoable =
     thread.provider === 'claude'
       ? turn.fresh || Boolean(turn.claudeResumeAt)
