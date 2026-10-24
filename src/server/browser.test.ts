@@ -139,6 +139,21 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
         return response.end(`<!doctype html><title>Slow</title><p id="status">Loading…</p>
           <script>setTimeout(() => { document.querySelector('#status').textContent = 'Ready!'; history.pushState({}, '', '/slow/done') }, 1200)</script>`)
       }
+      if (request.url === '/menu') {
+        // A long list (like a sidebar), a button, and an open menu lying on top of the button.
+        response.setHeader('content-type', 'text/html')
+        const items = Array.from(
+          { length: 30 },
+          (_, index) =>
+            `<li><a href="/item/${index + 1}">Item ${index + 1}</a><button>More for item ${index + 1}</button></li>`,
+        ).join('')
+        return response.end(`<!doctype html><title>Menu</title>
+          <ul>${items}</ul>
+          <button id="save" style="position:fixed;top:20px;left:20px">Save</button>
+          <div role="menu" aria-label="Model" style="position:fixed;top:0;left:0;width:300px;height:200px;background:white">
+            <div role="menuitem">Opus</div><div role="menuitem">Sonnet</div>
+          </div>`)
+      }
       if (request.url === '/missing') {
         response.writeHead(404)
         return response.end()
@@ -217,6 +232,28 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     })
     const preview = await browsers.preview('thread-1')
     expect(preview?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]))
+  }, 30_000)
+
+  it('reads long pages short, open menus first, and says why a click failed', async () => {
+    const tools = context('thread-menu')
+    const opened = await runTool(browserOpen, tools, { url: `${base}/menu` })
+    expect(opened.text).toMatch(/Open now \(menus and dialogs\):\n- menu "Model"/)
+    expect(opened.text).toContain('Item 3"')
+    expect(opened.text).not.toContain('Item 30"')
+    expect(opened.text).toMatch(/27 more listitem like these hidden/)
+    // The whole list on request: full, or just that part with a target.
+    expect((await runTool(browserSnapshot, tools, { full: true })).text).toContain('Item 30"')
+    const list = await runTool(browserSnapshot, tools, { target: 'role=list' })
+    expect(list.text).toContain('Item 30"')
+    expect(list.text).not.toContain('menu "Model"')
+    // The menu lies on top of Save: the click says so, quickly, instead of a bare timeout.
+    const started = Date.now()
+    const covered = await runTool(browserClick, tools, { target: 'role=button[name="Save"]' })
+    expect(covered.ok).toBe(false)
+    expect(covered.text).toMatch(/on top of it: menu “Model”/)
+    expect(Date.now() - started).toBeLessThan(8000)
+    const gone = await runTool(browserClick, tools, { target: 'e99999' })
+    expect(gone.text).toMatch(/nothing on the page matches/)
   }, 30_000)
 
   it('takes screenshots the agent can see, and shows them only when asked', async () => {

@@ -1,6 +1,7 @@
 import type { Page } from 'playwright-core'
 import { z } from 'zod'
 import { checkPageUrl, isLocalPage } from '../browser'
+import { compactSnapshot } from './snapshot-text'
 import { ToolError, defineTool, type StepHints, type ToolContext } from './types'
 
 // Browser tools: the agent opens its local app (a dev server on localhost) in its own private,
@@ -59,14 +60,25 @@ async function openPage(context: ToolContext, url: string, newTab?: boolean) {
   return page
 }
 
-async function snapshot(context: ToolContext, page: Page) {
-  const tree = await page.ariaSnapshot({ mode: 'ai', timeout: 5000 }).catch(() => '')
+// The page as text: open menus and dialogs first, long look-alike lists shortened
+// (snapshot-text.ts). With a target, just that part of the page; with full, everything.
+async function snapshot(
+  context: ToolContext,
+  page: Page,
+  options: { target?: string; full?: boolean } = {},
+) {
+  const tree = options.target
+    ? await guarded('Reading that part of the page', () =>
+        element(page, options.target!).ariaSnapshot({ mode: 'ai', timeout: 5000 }),
+      )
+    : await page.ariaSnapshot({ mode: 'ai', timeout: 5000 }).catch(() => '')
   // So later steps read "Click button 'Save'" instead of "Click e12".
-  context.browser.recordSnapshot(tree)
+  if (!options.target) context.browser.recordSnapshot(tree)
+  const compact = compactSnapshot(tree, { full: options.full })
   const text =
-    tree.length > maxSnapshot
-      ? `${tree.slice(0, maxSnapshot)}\n… (cut; scroll or look closer)`
-      : tree
+    compact.length > maxSnapshot
+      ? `${compact.slice(0, maxSnapshot)}\n… (cut; pass a target to browser_snapshot to read one part)`
+      : compact
   // With several tabs open, say which one this is.
   const tabs = await context.browser.tabs()
   const where =
@@ -171,6 +183,64 @@ const describeTarget = z
 async function settle(page: Page) {
   await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {})
   await page.waitForTimeout(300)
+}
+// Clicking and typing give up sooner than Playwright's default, and then say why.
+const actTimeout = 4000
+// Why an element couldn't be clicked or typed into, in words: not there, hidden, disabled, or
+// covered by something else (e.g. a menu that opened on hover), naming what covers it.
+async function whyNot(page: Page, target: string): Promise<string | undefined> {
+  const found = element(page, target)
+  if (!(await found.count().catch(() => 1)))
+    return 'nothing on the page matches it now. Take a fresh browser_snapshot: refs change when the page re-renders.'
+  if (!(await found.isVisible().catch(() => true)))
+    return 'it is on the page but hidden. Open whatever shows it first, or scroll to it.'
+  if (!(await found.isEnabled().catch(() => true))) return 'it is disabled.'
+  const cover = await found
+    .evaluate(
+      (el) => {
+        const box = el.getBoundingClientRect()
+        const x = box.left + box.width / 2
+        const y = box.top + box.height / 2
+        if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return 'offscreen'
+        const top = document.elementFromPoint(x, y)
+        if (!top || el === top || el.contains(top)) return null
+        // Whatever is on top, by the menu or dialog it belongs to ("menu “Model”"), else its
+        // nearest named part.
+        const name = (node: Element) => {
+          const role = node.getAttribute('role')
+          const label = node.getAttribute('aria-label')
+          return `${role ?? node.tagName.toLowerCase()}${label ? ` “${label.slice(0, 60)}”` : ''}`
+        }
+        const popup = top.closest('[role=menu], [role=dialog], [role=alertdialog], [role=listbox]')
+        if (popup) return name(popup)
+        const named = top.closest('[role], [aria-label]')
+        if (named && named !== document.body) return name(named)
+        const text = (top.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)
+        return `${top.tagName.toLowerCase()}${text ? ` “${text}”` : ''}`
+      },
+      undefined,
+      { timeout: 2000 },
+    )
+    .catch(() => null)
+  if (cover === 'offscreen')
+    return 'it is outside the visible area. Scroll to it with browser_scroll first.'
+  if (cover)
+    return (
+      `something else is on top of it: ${cover} (from the page). Close that first (often ` +
+      'browser_press Escape, or click elsewhere), then try again.'
+    )
+  return undefined
+}
+// Runs a click or a fill on an element; if it fails, explains why instead of a bare timeout.
+async function act(page: Page, target: string, action: string, run: () => Promise<void>) {
+  try {
+    await run()
+  } catch (error) {
+    if (error instanceof ToolError) throw error
+    const reason = await whyNot(page, target)
+    if (reason) throw new ToolError(`${action} failed: ${reason}`)
+    failure(action, error)
+  }
 }
 // Playwright's errors are long; the first line says what went wrong.
 function failure(action: string, error: unknown): never {
@@ -291,13 +361,28 @@ export const browserSnapshot = defineTool({
   label: 'Read page',
   description:
     'Read the open page as an accessibility snapshot: headings, text, links, buttons, and fields, ' +
-    'each with a ref (e1, e2…) to use with browser_click and browser_type. Take a fresh one after ' +
-    'the page changes; refs from older snapshots may no longer work.',
-  input: {},
+    'each with a ref (e1, e2…) to use with browser_click and browser_type. Open menus and dialogs ' +
+    'come first, and long lists of look-alike items are shortened; pass target to read just one ' +
+    'part (a ref or selector, e.g. the sidebar), or full to see everything. Take a fresh one ' +
+    'after the page changes; refs from older snapshots may no longer work.',
+  input: {
+    target: describeTarget
+      .optional()
+      .describe('Only this part of the page (a ref like "e12" or a selector), in full.'),
+    full: z
+      .boolean()
+      .optional()
+      .describe('Show every item of long lists instead of the first few.'),
+  },
   safety: 'safe',
   kind: 'browser',
-  async run(context) {
-    return snapshot(context, await current(context))
+  summarize: (input, hints) => (input.target ? targetName(input.target, hints) : undefined),
+  async run(context, input) {
+    return snapshot(context, await current(context), {
+      target: input.target,
+      // A target is read in full: asking for one part means wanting all of it.
+      full: input.full || Boolean(input.target),
+    })
   },
 })
 
@@ -312,7 +397,9 @@ export const browserClick = defineTool({
   async run(context, input) {
     const page = await current(context)
     const before = await tabIds(context)
-    await guarded('Clicking', () => element(page, input.target).click())
+    await act(page, input.target, 'Clicking', () =>
+      element(page, input.target).click({ timeout: actTimeout }),
+    )
     return after(context, before)
   },
 })
@@ -336,7 +423,7 @@ export const browserType = defineTool({
     readOnlyOnPublic(page)
     const before = await tabIds(context)
     const field = element(page, input.target)
-    await guarded('Typing', () => field.fill(input.text))
+    await act(page, input.target, 'Typing', () => field.fill(input.text, { timeout: actTimeout }))
     if (input.submit) await guarded('Submitting', () => field.press('Enter'))
     return after(context, before)
   },
