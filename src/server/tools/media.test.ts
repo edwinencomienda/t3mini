@@ -44,6 +44,8 @@ const setup = async () => {
     attach,
     saveImage: vi.fn(),
     saveHtml: vi.fn(),
+    renderHtml: vi.fn(),
+    showHtml: vi.fn(),
     saveMedia: (file, kind) => uploads.saveMedia(file, kind),
     readThread: async () => '',
     setTodos: vi.fn(),

@@ -1,5 +1,7 @@
 import type { z } from 'zod'
-import type { Block, StatusBlock } from '../../blocks'
+import type { Block, HtmlBlock, StatusBlock } from '../../blocks'
+import type { PageLibrary } from '../../html-page'
+import type { RenderedPage } from '../browser'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
 import type { Provider, Question, Todo } from '../../types'
@@ -63,6 +65,14 @@ export type ToolContext = {
   saveImage: (bytes: Buffer) => Promise<{ id: string }>
   // Stores an HTML page for show_html and returns the id to reference.
   saveHtml: (html: string) => Promise<{ id: string }>
+  // show_html's render check: the page as it will look in the chat (in the app's current
+  // theme), in a sealed throwaway browser context. Throws when no browser can be started.
+  renderHtml: (
+    html: string,
+    libraries: PageLibrary[],
+  ) => Promise<RenderedPage & { theme: 'light' | 'dark' }>
+  // Adds a show_html page to the reply, or replaces this turn's page with the same key.
+  showHtml: (block: HtmlBlock) => 'created' | 'replaced'
   // Copies a video or sound file (an allowed path) into the uploads, checking its format.
   saveMedia: (file: string, kind: 'video' | 'audio') => Promise<{ id: string }>
   // Long-running processes (dev servers…) in this thread's project.

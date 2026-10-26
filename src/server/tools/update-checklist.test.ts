@@ -12,6 +12,8 @@ const context = (setTodos: ToolContext['setTodos']): ToolContext => ({
   threads: {} as never,
   browser: {} as never,
   saveHtml: async () => ({ id: 'x.html' }),
+  renderHtml: vi.fn(),
+  showHtml: vi.fn(),
   saveMedia: async () => ({ id: 'x.mp4' }),
   readThread: async () => '',
   rename: vi.fn(),

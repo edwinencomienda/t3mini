@@ -75,6 +75,8 @@ import {
   type Steer,
 } from './providers/types'
 import { defaultPermission } from '../agent-settings'
+import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
+import { replaceHtmlBlock } from './html-pages'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
@@ -1155,6 +1157,26 @@ export class AgentService {
         },
         saveImage: (bytes) => this.uploads.saveImage(bytes),
         saveHtml: (html) => this.uploads.saveHtml(html),
+        renderHtml: async (html, libraries) => {
+          const theme = this.ui.settings.theme === 'dark' ? 'dark' : 'light'
+          const page = pageDocument({
+            html,
+            theme: themeCss(previewTokens[theme], theme === 'dark'),
+            inline: true,
+            // Finished, not mid-animation, in the screenshot.
+            still: true,
+            libraries: await loadLibraries(libraries),
+          })
+          return { ...(await this.browsers.renderPage(page)), theme }
+        },
+        showHtml: (block) => {
+          if (replaceHtmlBlock(thread.messages, turnFrom(), block)) {
+            touch()
+            return 'replaced'
+          }
+          attach(block)
+          return 'created'
+        },
         saveMedia: (file, kind) => this.uploads.saveMedia(file, kind),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),

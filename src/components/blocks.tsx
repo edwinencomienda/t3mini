@@ -152,7 +152,14 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
           case 'diagram':
             return <Diagram key={index} source={block.source} title={block.title} />
           case 'html':
-            return <HtmlView key={block.id} id={block.id} title={block.title} />
+            return (
+              <HtmlView
+                key={block.id}
+                id={block.id}
+                title={block.title}
+                libraries={block.libraries}
+              />
+            )
           case 'video':
             return <VideoView key={block.id} block={block} />
           case 'audio':

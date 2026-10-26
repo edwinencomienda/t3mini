@@ -24,6 +24,13 @@ import {
 import { maskInput, runTool } from './tools'
 import { describeClaudeTool } from './providers/activity'
 import type { ToolContext } from './tools/types'
+import {
+  loadLibraries,
+  pageDocument,
+  previewTokens,
+  themeCss,
+  type PageLibrary,
+} from '../html-page'
 
 const t3 = new Set([4310, 4311])
 
@@ -184,6 +191,8 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'shot' })),
     saveHtml: async () => ({ id: 'x.html' }),
+    renderHtml: vi.fn(),
+    showHtml: vi.fn(),
     saveMedia: async () => ({ id: 'x.mp4' }),
     readThread: async () => '',
     setTodos: vi.fn(),
@@ -491,4 +500,74 @@ describe('public websites (Settings → Agents)', () => {
     expect(isLocalPage('https://example.com/login')).toBe(false)
     expect(isLocalPage('about:blank')).toBe(false)
   })
+})
+
+describe.skipIf(!hasBrowser)('show_html’s render check', () => {
+  let hits = 0
+  let server: Server
+  let port = 0
+  const browsers = new BrowserManager()
+  beforeAll(async () => {
+    server = createServer((_request, response) => {
+      hits++
+      response.end('x')
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    port = (server.address() as AddressInfo).port
+  })
+  afterAll(async () => {
+    await browsers.closeAll()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  const render = async (html: string, libraries: PageLibrary[] = []) =>
+    browsers.renderPage(
+      pageDocument({
+        html,
+        theme: themeCss(previewTokens.dark, true),
+        inline: true,
+        still: true,
+        libraries: await loadLibraries(libraries),
+      }),
+    )
+
+  it('returns a screenshot, its errors, and phone overflow, with no network', async () => {
+    const page = await render(
+      `<div style="width:600px;height:120px">wide</div><img src="http://127.0.0.1:${port}/img">` +
+        `<script>fetch('http://127.0.0.1:${port}/api').catch(()=>{});missing()</script>`,
+    )
+    expect(page.image.subarray(1, 4).toString()).toBe('PNG')
+    expect(page.errors.some((error) => error.includes('missing is not defined'))).toBe(true)
+    expect(page.height).toBeGreaterThanOrEqual(120)
+    expect(page.overflow).toBeGreaterThan(200)
+    expect(hits).toBe(0)
+  }, 30_000)
+
+  it('draws a themed Chart.js chart', async () => {
+    const page = await render(
+      `<div style="height:200px"><canvas id="c"></canvas></div><script>
+        new Chart(document.getElementById('c'), {type:'bar',data:{labels:['a','b'],
+        datasets:[{label:'n',data:[1,2]}]},options:{maintainAspectRatio:false}})
+        document.body.dataset.color = Chart.defaults.color + '|' + t3.color('--chart-1')
+      </script>`,
+      ['chart.js'],
+    )
+    expect(page.errors).toEqual([])
+    expect(page.height).toBeGreaterThanOrEqual(200)
+  }, 30_000)
+})
+
+describe.skipIf(!hasBrowser)('show_html’s render check sizes', () => {
+  const browsers = new BrowserManager()
+  afterAll(() => browsers.closeAll())
+  it('measures the content, not the window: an empty page is nearly 0px tall', async () => {
+    const theme = themeCss(previewTokens.light, false)
+    const empty = await browsers.renderPage(
+      pageDocument({ html: '<div></div>', theme, inline: true, still: true }),
+    )
+    expect(empty.height).toBeLessThan(10)
+    const tall = await browsers.renderPage(
+      pageDocument({ html: '<div style="height:900px"></div>', theme, inline: true, still: true }),
+    )
+    expect(tall.height).toBe(900)
+  }, 30_000)
 })

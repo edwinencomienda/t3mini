@@ -294,6 +294,18 @@ export function snapshotRefs(snapshot: string) {
   return refs
 }
 
+// show_html's render check (renderPage).
+export type RenderedPage = {
+  image: Buffer
+  errors: string[]
+  height: number
+  width: number
+  // How many pixels wider than a phone screen the page is (0 when it fits).
+  overflow: number
+}
+const renderTimeout = 8000
+const maxRenderHeight = 2400
+const phoneWidth = 360
 export class BrowserManager {
   private browser?: Promise<Browser>
   private sessions = new Map<string, Promise<Session>>()
@@ -407,6 +419,67 @@ export class BrowserManager {
     if (value?.timer) clearTimeout(value.timer)
     await value?.context.close().catch(() => {})
     if (!this.sessions.size) await this.shutdown()
+  }
+  // The render check for show_html: the page (built by pageDocument(), with our CSP) loaded in a
+  // throwaway context of its own (never a thread's session: no cookies, tabs, or history), with
+  // every request refused and the network off, at the chat's width. Returns a screenshot, the
+  // errors it logged, its height, and how far it overflows a phone-width screen.
+  async renderPage(html: string, width = 736): Promise<RenderedPage> {
+    const browser = await this.launch()
+    const context = await browser.newContext({
+      // Short, so the page's height is its content's, not the window's.
+      viewport: { width, height: 40 },
+      deviceScaleFactor: 1,
+      acceptDownloads: false,
+      serviceWorkers: 'block',
+      permissions: [],
+      offline: true,
+    })
+    try {
+      context.setDefaultTimeout(renderTimeout)
+      await context.route('**/*', (route) => route.abort())
+      const page = await context.newPage()
+      const errors: string[] = []
+      page.on('pageerror', (error) => errors.push(error.message.split('\n')[0]!))
+      page.on('console', (message: ConsoleMessage) => {
+        if (message.type() === 'error') errors.push(message.text().split('\n')[0]!)
+      })
+      await page.setContent(html, { waitUntil: 'load', timeout: renderTimeout })
+      // Let scripts that draw after load (charts, timers) finish.
+      await page.waitForTimeout(400)
+      // The content's height (the document's own is never under the window's).
+      const height = await page.evaluate(() =>
+        Math.ceil(
+          Math.max(document.body.scrollHeight, document.body.getBoundingClientRect().height),
+        ),
+      )
+      await page.setViewportSize({ width, height: Math.max(40, Math.min(height, maxRenderHeight)) })
+      await page.waitForTimeout(100)
+      const image = await page.screenshot({ type: 'png', animations: 'disabled' })
+      await page.setViewportSize({ width: phoneWidth, height: 700 })
+      await page.waitForTimeout(150)
+      // The page hides overflow in the chat (it can't scroll there), so measure what sticks out,
+      // leaving out what sits in its own scroll box (a wide table in overflow-x: auto is fine).
+      const overflow = await page.evaluate(() => {
+        const width = document.documentElement.clientWidth
+        const clipped = (element: Element) => {
+          for (let parent = element.parentElement; parent && parent !== document.body;) {
+            if (getComputedStyle(parent).overflowX !== 'visible') return true
+            parent = parent.parentElement
+          }
+          return false
+        }
+        let right = 0
+        for (const element of document.body.querySelectorAll('*')) {
+          const edge = element.getBoundingClientRect().right
+          if (edge > width && edge > right && !clipped(element)) right = edge
+        }
+        return Math.max(0, Math.ceil(right - width))
+      })
+      return { image, errors: [...new Set(errors)].slice(0, 10), height, width, overflow }
+    } finally {
+      await context.close().catch(() => {})
+    }
   }
   async closeAll() {
     await Promise.all([...this.sessions.keys()].map((id) => this.close(id)))

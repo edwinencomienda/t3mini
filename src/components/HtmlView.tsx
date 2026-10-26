@@ -3,6 +3,7 @@ import { useApiBase } from '../hub'
 import { AppWindow, Code2, Maximize2, RotateCcw, TriangleAlert } from 'lucide-react'
 import { CopyButton } from './CopyButton'
 import { Modal } from './Modal'
+import { loadLibraries, pageDocument, pageTokens, themeCss, type PageLibrary } from '../html-page'
 
 // An agent's HTML page (show_html) in a card. The HTML is untrusted (the agent may have copied
 // it, or been tricked by something it read), so it runs sealed off from t3 mini:
@@ -16,31 +17,8 @@ import { Modal } from './Modal'
 // - If the page navigates its own frame elsewhere, it's put back and you're told.
 //
 // Its height follows the content (a small script posts it), and the app's theme colors are
-// passed in as CSS variables.
-
-const policy = [
-  "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
-  'img-src data: blob:',
-  'font-src data:',
-  'media-src data: blob:',
-  "form-action 'none'",
-  "base-uri 'none'",
-].join('; ')
-const tokens = [
-  '--background',
-  '--foreground',
-  '--card',
-  '--muted',
-  '--muted-foreground',
-  '--border',
-  '--primary',
-  '--font-sans',
-  '--font-mono',
-]
-// Reports the page's height to the card (only a number goes out).
-const sizer = `(function(){var last=0;function post(){var h=Math.ceil(document.documentElement.scrollHeight);if(h!==last){last=h;parent.postMessage({t3html:'size',h:h},'*')}}addEventListener('load',post);new ResizeObserver(post).observe(document.documentElement);setTimeout(post,50)})()`
+// passed in as CSS variables. A page that asked for a bundled library (Chart.js) gets it
+// inlined, still with no network.
 
 const pages = new Map<string, Promise<string>>()
 // Pages already fetched, and each frame's last height, so coming back to a thread draws the card
@@ -70,21 +48,15 @@ function themeStyle() {
     document.documentElement.dataset.theme === 'dark' ||
     (!document.documentElement.dataset.theme &&
       window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const vars = tokens.map((name) => `${name}:${style.getPropertyValue(name).trim()}`).join(';')
-  return `:root{${vars};color-scheme:${dark ? 'dark' : 'light'}}html,body{margin:0;background:transparent;color:var(--foreground);font:14px/1.5 var(--font-sans)}body{padding:2px}`
+  const values = Object.fromEntries(
+    pageTokens.map((name) => [name, style.getPropertyValue(name).trim()]),
+  )
+  return themeCss(values, dark)
 }
-// The agent's HTML can't break out of this: its tags all land inside <body>.
-// In the reply the frame is as tall as its page, so it never scrolls inside (inline); full
-// screen it may.
-// In the reply it also lines up with the text: no outer margin or padding, whatever the page
-// sets. Shown again (back in a thread you've seen), it opens finished: for its first 3 seconds
-// CSS animations and transitions take no time and requestAnimationFrame runs as if they'd long
-// since ended, so a chart doesn't draw itself again on every visit; after that it behaves
-// normally (hover effects, toggles). Reload plays it from the start.
-const settled = `<style id="t3-settled">*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;transition-duration:0s!important;transition-delay:0s!important}</style><script>(function(){var raf=requestAnimationFrame.bind(window),until=performance.now()+3000;window.requestAnimationFrame=function(cb){return raf(function(t){cb(performance.now()<until?t+1e7:t)})};setTimeout(function(){var s=document.getElementById('t3-settled');if(s)s.remove()},3000)})()</script>`
-const document_ = (html: string, theme: string, inline: boolean, still: boolean) =>
-  `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${theme}${inline ? 'html,body{overflow:hidden}body{margin:0!important;padding:0!important}' : ''}</style><script>${sizer}</script>${still ? settled : ''}</head><body>${html}</body></html>`
-// Pages already shown in this tab (see settled).
+// The page itself is built by pageDocument() (src/html-page.ts), shared with the server's render
+// check. The agent's HTML can't break out of it: its tags all land inside <body>. In the reply
+// the frame is as tall as its page, so it never scrolls inside (inline); full screen it may.
+// Pages already shown in this tab (see settledHead in html-page.ts).
 const shown = new Set<string>()
 // A page sized to its window (100vh) grows each time its frame does: after this many growths
 // in quick succession its height is kept where it is.
@@ -114,6 +86,7 @@ function useTheme() {
 
 function Frame({
   html,
+  libraries,
   title,
   maxHeight,
   inline = false,
@@ -122,6 +95,7 @@ function Frame({
   onEscaped,
 }: {
   html: string
+  libraries: { name: PageLibrary; source: string }[]
   title: string
   maxHeight: number
   // In the reply: no scrolling inside, the frame takes the page's whole height.
@@ -167,7 +141,7 @@ function Frame({
       title={title}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
-      srcDoc={document_(html, theme, inline, still)}
+      srcDoc={pageDocument({ html, theme, inline, still, libraries })}
       style={{ height }}
       onLoad={() => {
         // The first load is ours; another one means the page navigated itself elsewhere.
@@ -178,17 +152,41 @@ function Frame({
   )
 }
 
-export function HtmlView({ id, title }: { id: string; title?: string }) {
+const noLibraries: { name: PageLibrary; source: string }[] = []
+
+export function HtmlView({
+  id,
+  title,
+  libraries: wanted,
+}: {
+  id: string
+  title?: string
+  libraries?: PageLibrary[]
+}) {
   const base = useApiBase()
   const key = `${base}/${id}`
   const [html, setHtml] = useState<string | null>(() => loaded.get(key) ?? null)
   const [failed, setFailed] = useState(false)
+  // Bundled libraries the page asked for, loaded before it's drawn.
+  const [libraries, setLibraries] = useState(wanted?.length ? null : noLibraries)
+  const wantedKey = wanted?.join(',') ?? ''
+  useEffect(() => {
+    if (!wantedKey) return
+    let current = true
+    loadLibraries(wantedKey.split(',') as PageLibrary[]).then(
+      (loaded) => current && setLibraries(loaded),
+      () => current && setFailed(true),
+    )
+    return () => {
+      current = false
+    }
+  }, [wantedKey])
   const [source, setSource] = useState(false)
   const [expanded, setExpanded] = useState(false)
   // Bumped to rebuild the frame (after it tried to navigate away, or on Reload).
   const [run, setRun] = useState(0)
   const [escaped, setEscaped] = useState(false)
-  // Seen before in this tab: opens finished (see settled). Reload plays it again.
+  // Seen before in this tab: opens finished (see settledHead in html-page.ts). Reload plays it again.
   const [still, setStill] = useState(() => shown.has(key))
   useEffect(() => {
     shown.add(key)
@@ -260,7 +258,7 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
     <figure className="inline-tool html-card" aria-label={label}>
       {failed ? (
         <p className="html-card-note">This page couldn’t be loaded.</p>
-      ) : !html ? (
+      ) : !html || !libraries ? (
         <p className="html-card-note">Loading…</p>
       ) : source ? (
         <pre className="html-source">{html}</pre>
@@ -276,6 +274,7 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
         <Frame
           key={run}
           html={html}
+          libraries={libraries}
           title={label}
           // Tall enough for any real page; a cap only against one that keeps growing.
           maxHeight={4000}
@@ -285,11 +284,12 @@ export function HtmlView({ id, title }: { id: string; title?: string }) {
           onEscaped={escape}
         />
       )}
-      {expanded && html && !escaped ? (
+      {expanded && html && libraries && !escaped ? (
         <Modal className="new-dialog html-dialog" label={label} onClose={() => setExpanded(false)}>
           <Frame
             key={`full-${run}`}
             html={html}
+            libraries={libraries}
             title={label}
             maxHeight={Math.round(window.innerHeight * 0.85)}
             sizeKey={`${key}#full`}
