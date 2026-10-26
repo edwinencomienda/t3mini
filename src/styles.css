@@ -5648,3 +5648,10 @@ body.resizing {
     animation: none;
   }
 }
+
+/* Opening a search result (sidebar or ⌘K): the matched words get a soft highlight for a few
+   seconds, like a browser's find (CSS Custom Highlight API; see highlightMatch). */
+::highlight(search-match) {
+  background-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  color: inherit;
+}

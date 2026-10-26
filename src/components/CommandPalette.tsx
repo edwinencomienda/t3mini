@@ -44,7 +44,8 @@ export function CommandPalette({
   // The sidebar's time, which doubles as the status ("3m", working dots, "Question"…).
   status: (thread: ThreadSummary) => ReactNode
   isUnread: (thread: ThreadSummary) => boolean
-  onOpenThread: (id: string) => void
+  // With target: a match inside the conversation, opened at that message.
+  onOpenThread: (id: string, target?: { message: string; query: string }) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
@@ -113,7 +114,9 @@ export function CommandPalette({
         ),
         hint: status(byId.get(match.threadId)!),
         icon: <MessageSquare size={13} />,
-        run: run(() => onOpenThread(match.threadId)),
+        run: run(() =>
+          onOpenThread(match.threadId, { message: match.messageId, query: found.query }),
+        ),
       })),
     },
     {

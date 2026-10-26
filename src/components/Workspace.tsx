@@ -561,12 +561,12 @@ const MessageView = memo(
     // A helper thread's report to this (lead) thread: a card with a link to the helper.
     if (message.report)
       return (
-        <article className="message report">
+        <article className="message report" data-message={message.id}>
           <ReportCard message={message} report={message.report} />
         </article>
       )
     return (
-      <article className={`message ${message.role}`}>
+      <article className={`message ${message.role}`} data-message={message.id}>
         {message.role === 'user' ? (
           <>
             {message.attachments?.length ? (
@@ -838,6 +838,39 @@ function topTurn(element: HTMLElement): Place['anchor'] {
   }
 }
 
+// Marks a search result's matched words in its message for a few seconds (CSS Custom
+// Highlight API: no DOM changes, styled by ::highlight(search-match)). Browsers without it just
+// scroll there.
+function highlightMatch(element: HTMLElement, query: string) {
+  const highlights = (globalThis.CSS as { highlights?: Map<string, unknown> } | undefined)
+    ?.highlights
+  const Highlighter = (globalThis as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+  const needle = query.toLowerCase()
+  if (!highlights || !Highlighter || !needle) return
+  const ranges: Range[] = []
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node && ranges.length < 20; node = walker.nextNode()) {
+    const text = node.textContent?.toLowerCase() ?? ''
+    for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + needle.length)
+      ranges.push(range)
+    }
+  }
+  if (!ranges.length) return
+  highlights.set('search-match', new Highlighter(...ranges))
+  setTimeout(() => highlights.delete('search-match'), 4000)
+}
+
+// A search result being opened: scroll to its message once the thread is on screen (see the
+// effect after drawnTurns in Workspace). Given up after a few seconds if the message never
+// shows up. Kept outside the component, since going from the home page to a thread mounts a
+// new Workspace.
+const jump: {
+  current: { thread: string; message: string; query: string; until: number } | null
+} = { current: null }
+
 // The top of a partly drawn thread: draws older turns once you scroll near it (well before
 // you reach it), or when clicked.
 function OlderTurns({
@@ -911,7 +944,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [contentMatches, setContentMatches] = useState<{
     query: string
     snippets: Map<string, string>
-  }>({ query: '', snippets: new Map() })
+    // The message each excerpt came from, so clicking the result scrolls to it.
+    messages: Map<string, string>
+  }>({ query: '', snippets: new Map(), messages: new Map() })
   const contentQuery = search.trim()
   useEffect(() => {
     if (contentQuery.length < 2) return
@@ -925,6 +960,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
           setContentMatches({
             query: contentQuery,
             snippets: new Map((data.matches ?? []).map((match) => [match.threadId, match.snippet])),
+            messages: new Map(
+              (data.matches ?? []).map((match) => [match.threadId, match.messageId]),
+            ),
           }),
         )
         .catch(() => {})
@@ -1152,6 +1190,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Per thread: how much is drawn and where you were (see Place). Changing it re-renders.
   const places = useRef(new Map<string, Place>())
   const [, setPlacesVersion] = useState(0)
+  const [jumpStep, setJumpStep] = useState(0)
   // Set just before older turns are drawn: the distance from the bottom to keep.
   const keepFromBottom = useRef<number | null>(null)
   // The thread on screen (clicking a thread shows its cached copy before the URL changes).
@@ -2129,7 +2168,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
     hold.current = null
     selecting.current = id
   }
-  function select(id: string) {
+  function select(id: string, target?: { message: string; query: string }) {
+    if (target) {
+      jump.current = { thread: id, ...target, until: Date.now() + 8000 }
+      setJumpStep((step) => step + 1)
+    }
     prepareSelection(id)
     void navigate({ to: '/threads/$threadId', params: { threadId: id } })
   }
@@ -2932,6 +2975,64 @@ export function Workspace({ threadId }: { threadId?: string }) {
     })
     setPlacesVersion((version) => version + 1)
   }
+  // Opening a search result: draw the turn its message is in (and unfold it when the message is
+  // one of the turn's folded notes), then scroll it into view a third of the way down, hold it
+  // there while the thread settles (images and diagrams sizing), and highlight the match.
+  useLayoutEffect(() => {
+    const target = jump.current
+    if (!target || !thread || thread.id !== target.thread) return
+    if (Date.now() > target.until) {
+      jump.current = null
+      return
+    }
+    const index = turns.findIndex(
+      (turn) =>
+        turn.user?.id === target.message ||
+        turn.answer?.id === target.message ||
+        turn.replies.some((reply) => reply.id === target.message) ||
+        turn.work.some((item) => item.kind === 'note' && item.message.id === target.message),
+    )
+    // Not in this copy (a cached one from before the message): the live copy comes next.
+    if (index < 0) return
+    const turn = turns[index]!
+    if (index < firstDrawn) {
+      places.current.set(thread.id, {
+        atBottom: false,
+        fromBottom: 0,
+        ...places.current.get(thread.id),
+        from: turn.key,
+      })
+      setJumpStep((step) => step + 1)
+      return
+    }
+    const folded =
+      turn.done &&
+      turn.work.some((item) => item.kind === 'note' && item.message.id === target.message)
+    if (folded && !openTurns.has(turn.key)) {
+      setOpenTurns((current) => new Set(current).add(turn.key))
+      return
+    }
+    const area = scrollArea.current
+    const element = area?.querySelector<HTMLElement>(
+      `[data-message="${CSS.escape(target.message)}"]`,
+    )
+    if (!area || !element) return
+    jump.current = null
+    const view = area.getBoundingClientRect()
+    area.scrollTop += element.getBoundingClientRect().top - view.top - view.height / 3
+    stickToBottom.current = false
+    settleUntil.current = Date.now() + 900
+    hold.current = {
+      atBottom: false,
+      fromBottom: area.scrollHeight - area.scrollTop,
+      anchor: topTurn(area),
+    }
+    places.current.set(thread.id, {
+      ...hold.current,
+      from: turns[Math.min(index, firstDrawn)]!.key,
+    })
+    highlightMatch(element, target.query)
+  }, [thread, turns, firstDrawn, openTurns, jumpStep])
   // Remembers where you are in this thread (on scroll, and again as you leave it, since
   // content may have finished sizing since you last scrolled).
   const savePlace = () => {
@@ -3094,7 +3195,21 @@ export function Workspace({ threadId }: { threadId?: string }) {
         else togglePick(id)
         return
       }
-      if (!event.altKey && event.button === 0) prepareSelection(id)
+      if (!event.altKey && event.button === 0) {
+        // Found inside its conversation (the excerpt is shown): open it at that message.
+        const message = foundIn?.get(id) && contentMatches.messages.get(id)
+        if (
+          message &&
+          !threads
+            .find((item) => item.id === id)
+            ?.title.toLowerCase()
+            .includes(query)
+        )
+          jump.current = { thread: id, message, query: contentQuery, until: Date.now() + 8000 }
+        // (Already open: nothing else changes, so run the jump now.)
+        if (message) setJumpStep((step) => step + 1)
+        prepareSelection(id)
+      }
     },
     contextMenu: (event, id) => {
       event.preventDefault()

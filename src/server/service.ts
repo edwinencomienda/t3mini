@@ -524,6 +524,7 @@ export class AgentService {
         const excerpt = text.slice(start, end).replace(/\s+/g, ' ')
         return {
           threadId: thread.id,
+          messageId: message.id,
           title: thread.title,
           cwd: thread.cwd,
           role: message.role,

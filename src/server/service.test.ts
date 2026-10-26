@@ -328,6 +328,8 @@ it('searches conversations for the command palette, one excerpt per thread', asy
   const [match, ...rest] = service.searchMessages('flaky LOGIN')
   expect(rest).toEqual([])
   expect(match).toMatchObject({ threadId: created.id, cwd: created.cwd, role: 'user' })
+  // Which message it was found in, so opening the result can scroll to it.
+  expect(match!.messageId).toBe(service.get(created.id).messages[0]!.id)
   // Whitespace is collapsed, and long text is cut around the match.
   expect(match!.snippet).toBe('Please fix the Flaky login test in CI')
   expect(service.searchMessages('nothing like this')).toEqual([])

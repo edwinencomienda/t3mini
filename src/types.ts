@@ -236,6 +236,8 @@ export type BrowserInfo = { threadId: string; url: string; title: string; tabs: 
 // A conversation that mentions what you searched for (command palette), with a short excerpt.
 export type MessageMatch = {
   threadId: string
+  // The message it was found in, so opening the result can scroll to it.
+  messageId: string
   title: string
   cwd: string
   role: 'user' | 'assistant'
