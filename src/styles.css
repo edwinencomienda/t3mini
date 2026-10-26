@@ -1988,6 +1988,30 @@ kbd {
 .context-menu {
   outline: 0;
 }
+.selection-actions {
+  display: flex;
+  padding: 0.2rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  outline: 0;
+}
+.selection-actions button,
+.selection-actions .selection-ask {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.55rem;
+  border-radius: 0.35rem;
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+.selection-actions button:hover,
+.selection-actions button:focus-visible,
+.selection-actions button[data-popup-open] {
+  background: var(--muted);
+}
 .context-menu-separator {
   height: 1px;
   margin: 0.25rem 0.3rem;

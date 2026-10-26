@@ -148,6 +148,7 @@ import {
 } from '../timeline'
 import { reuseItems, reuseThread } from '../reuse'
 import { RecentMap } from '../recent-map'
+import { quote, SelectionActions } from './SelectionActions'
 import { applyThreadPatch, type ThreadPatch } from '../thread-patch'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
@@ -1848,6 +1849,33 @@ export function Workspace({ threadId }: { threadId?: string }) {
   }
   const insertTextRef = useRef(insertText)
   insertTextRef.current = insertText
+  // Highlighted chat text → "Add to chat": quoted at the end of the composer, on its own lines.
+  // Stable, so the selection bar (memoized) never re-renders with the page.
+  // Ask: the selection quoted, then the question, sent right away. With a draft or attachments
+  // already in the composer it's added there instead (sending would take those along too).
+  const askAbout = useCallback((text: string, question: string) => {
+    const id = activeIdRef.current
+    if (draftText.current.trim() || (id && pendingRef.current[id]?.length)) {
+      quoteSelectionRef.current(text)
+      insertTextRef.current(question, true)
+      return
+    }
+    setDraft(quote(text) + question)
+    void sendRef.current()
+  }, [])
+  const quoteSelection = useCallback((text: string) => {
+    const draft = draftText.current
+    const gap = !draft ? '' : draft.endsWith('\n\n') ? '' : draft.endsWith('\n') ? '\n' : '\n\n'
+    insertTextRef.current(gap + quote(text), true)
+    // The cursor goes under the quote, ready for your question, scrolled into view.
+    const element = composer.current
+    if (element) {
+      element.focus()
+      element.setSelectionRange(element.value.length, element.value.length)
+      element.scrollTop = element.scrollHeight
+    }
+  }, [])
+  const quoteSelectionRef = useRef(quoteSelection)
   // Images become attachments. Other files insert their path: the original path when the drag
   // carries one, otherwise the path of a saved copy (browsers hide Finder paths).
   async function handleFiles(files: File[], paths: string[]) {
@@ -2179,6 +2207,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
     if (activeId) setPending((list) => ({ ...list, [activeId]: [] }))
     composer.current?.focus()
   }
+  const sendRef = useRef(send)
+  sendRef.current = send
+  const activeIdRef = useRef(activeId)
+  activeIdRef.current = activeId
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
   async function send(event?: FormEvent) {
     event?.preventDefault()
     const attached = activeId ? pending[activeId] || [] : []
@@ -3383,6 +3417,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
               ) : null}
             </header>
             <div className="chat-column">
+              <SelectionActions root={scrollArea} onQuote={quoteSelection} onAsk={askAbout} />
               <div
                 className="chat-scroll"
                 ref={scrollArea}
