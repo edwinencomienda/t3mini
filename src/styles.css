@@ -2981,6 +2981,19 @@ body.resizing {
   flex: none;
   margin-top: 0.3rem;
 }
+.thread-lines .thread-title:first-child {
+  margin-top: 0;
+}
+/* Searching: where the query was found inside the conversation, under the title. */
+.thread-snippet {
+  margin-top: 0.15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--thread-project, var(--faint));
+}
 .thread-project {
   display: flex;
   align-items: center;

@@ -334,6 +334,32 @@ it('searches conversations for the command palette, one excerpt per thread', asy
   expect(() => service.searchMessages('a')).toThrow()
   expect(() => service.searchMessages('x'.repeat(201))).toThrow()
 })
+it('narrows the sidebar search as you type, and sees new messages', async () => {
+  const first = await thread()
+  await service.send(first.id, { text: 'Deploy (the) app.example.com [staging]' })
+  await started
+  await settle(first.id, finish)
+  // Regex characters are matched literally.
+  expect(service.searchMessages('(the) app.example', 500).map((match) => match.threadId)).toEqual([
+    first.id,
+  ])
+  expect(service.searchMessages('[staging]').map((match) => match.threadId)).toEqual([first.id])
+  expect(service.searchMessages('the app')).toEqual([])
+  // A longer query reuses the shorter one's threads; a change in between rescans them all.
+  expect(service.searchMessages('depl').map((match) => match.threadId)).toEqual([first.id])
+  const second = await thread()
+  await service.send(second.id, { text: 'Deploy the docs' })
+  await settle(second.id, finish)
+  expect(
+    service
+      .searchMessages('deploy')
+      .map((match) => match.threadId)
+      .sort(),
+  ).toEqual([first.id, second.id].sort())
+  expect(service.searchMessages('deploy', 1)).toHaveLength(1)
+  // A bad limit falls back to the default.
+  expect(service.searchMessages('deploy', 'lots')).toHaveLength(2)
+})
 it('keeps a project’s place in the sidebar after its threads are deleted', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'older'))

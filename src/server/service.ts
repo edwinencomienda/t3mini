@@ -477,28 +477,62 @@ export class AgentService {
       ...(waitingOn ? { waitingOn: shorten(waitingOn, 120) } : {}),
     }
   }
-  searchMessages(input: unknown): MessageMatch[] {
-    const query = z.string().trim().min(2).max(200).parse(input).toLowerCase()
-    const matches: MessageMatch[] = []
-    for (const thread of this.list()) {
-      const full = this.store.threads.get(thread.id)
-      const message = full?.messages.find((item) => item.text.toLowerCase().includes(query))
-      if (!full || !message) continue
-      const text = message.text.replace(/\s+/g, ' ')
-      const at = text.toLowerCase().indexOf(query)
-      const start = Math.max(0, at - 60)
-      const end = Math.min(text.length, at + query.length + 80)
-      matches.push({
-        threadId: full.id,
-        title: full.title,
-        cwd: full.cwd,
-        role: message.role,
-        snippet: `${start ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`,
-      })
-      if (matches.length >= 20) break
+  // Threads whose messages mention the query (case-insensitive), newest first, one match per
+  // thread (its latest mention), with a short excerpt around it. For the command palette's "In
+  // messages" results and the sidebar's search (which asks for more with `limit`).
+  // Kept cheap: one native case-insensitive regex per message (no lowercased copies of every
+  // message), only the excerpt is cut and cleaned, and while you type a longer query only
+  // rescans the threads the shorter one matched (unless something changed in between).
+  searchMessages(input: unknown, limitInput?: unknown): MessageMatch[] {
+    const query = z.string().trim().min(2).max(200).parse(input)
+    const limit = z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .catch(20)
+      .parse(limitInput ?? 20)
+    const lower = query.toLowerCase()
+    const last = this.lastSearch
+    const candidates =
+      last && last.version === this.version && lower.includes(last.query)
+        ? [...last.ids].flatMap((id) => this.store.threads.get(id) ?? [])
+        : this.store.threads.values()
+    const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+    const found: { thread: Thread; message: Message; at: number; sentAt: string }[] = []
+    for (const thread of candidates) {
+      for (let index = thread.messages.length - 1; index >= 0; index--) {
+        const message = thread.messages[index]!
+        const at = message.text.search(pattern)
+        if (at < 0) continue
+        found.push({ thread, message, at, sentAt: lastMessageAt(thread) })
+        break
+      }
     }
-    return matches
+    this.lastSearch = {
+      query: lower,
+      version: this.version,
+      ids: new Set(found.map((item) => item.thread.id)),
+    }
+    return found
+      .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+      .slice(0, limit)
+      .map(({ thread, message, at }) => {
+        const { text } = message
+        const start = Math.max(0, at - 60)
+        const end = Math.min(text.length, at + query.length + 80)
+        const excerpt = text.slice(start, end).replace(/\s+/g, ' ')
+        return {
+          threadId: thread.id,
+          title: thread.title,
+          cwd: thread.cwd,
+          role: message.role,
+          snippet: `${start ? '…' : ''}${excerpt}${end < text.length ? '…' : ''}`,
+        }
+      })
   }
+  // The last search's matching threads, so typing more letters narrows instead of rescanning.
+  private lastSearch: { query: string; version: number; ids: Set<string> } | undefined
   // Changes the name shown for a project; an empty name goes back to the folder name. Only the
   // label changes: the folder, its path, and its threads stay as they are.
   async renameProject(input: unknown) {

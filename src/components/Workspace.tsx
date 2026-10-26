@@ -193,6 +193,7 @@ import {
   type PullRequest,
   type HelperReport,
   type Message,
+  type MessageMatch,
   type ProjectSummary,
   type Provider,
   type Status,
@@ -404,6 +405,7 @@ const ThreadRow = memo(function ThreadRow({
   retitling,
   time,
   menuOpen,
+  snippet,
 }: {
   item: ThreadSummary
   actions: React.RefObject<RowActions>
@@ -422,6 +424,8 @@ const ThreadRow = memo(function ThreadRow({
   // The time or status word ("Done", "Question"…) shown when it isn't working.
   time: string
   menuOpen: boolean
+  // Searching: where the query was found in the conversation (when the title doesn't have it).
+  snippet?: string
 }) {
   // The time doubles as the status: the working dots while the agent works, a spinner while a
   // new title is being written, Question or Approval while it waits for you, Done (green) or
@@ -490,6 +494,12 @@ const ThreadRow = memo(function ThreadRow({
               {item.machine ? <MachineTag name={item.machine} /> : null}
             </span>
             <span className="thread-title">{item.title}</span>
+            {snippet ? <span className="thread-snippet">{snippet}</span> : null}
+          </span>
+        ) : snippet ? (
+          <span className="thread-lines">
+            <span className="thread-title">{item.title}</span>
+            <span className="thread-snippet">{snippet}</span>
           </span>
         ) : (
           <span className="thread-title">{item.title}</span>
@@ -680,6 +690,15 @@ const composerMaxHeight = 240
 const groupByKey = 't3-mini:sidebar-group'
 // Only the sections you folded or opened yourself; v2 dropped the old defaults (Older folded).
 const projectFilterKey = 't3-mini:project-filter'
+// A sidebar search excerpt, started a few words before the match so the match shows in the
+// narrow sidebar (the server's excerpt starts further back, for the wider ⌘K palette).
+function nearMatch(snippet: string, query: string) {
+  const at = snippet.toLowerCase().indexOf(query)
+  if (at <= 24) return snippet
+  const space = snippet.indexOf(' ', at - 20)
+  const start = space >= 0 && space < at ? space + 1 : at
+  return `…${snippet.slice(start)}`
+}
 const dateFoldedKey = 't3-mini:date-sections-folded-v2'
 // The folder's name (a machine's folder too: its hub id carries the machine, see src/hub.ts).
 const folderName = (cwd: string) => machinePath(cwd).split('/').filter(Boolean).at(-1) || '/'
@@ -886,6 +905,35 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
   const [search, setSearch] = useState('')
+  // The sidebar search also looks inside conversations: the server holds the messages, so it's
+  // asked shortly after typing stops (one request at a time, the older one cancelled). Each
+  // matching thread keeps a short excerpt of where it was found.
+  const [contentMatches, setContentMatches] = useState<{
+    query: string
+    snippets: Map<string, string>
+  }>({ query: '', snippets: new Map() })
+  const contentQuery = search.trim()
+  useEffect(() => {
+    if (contentQuery.length < 2) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      fetch(`/api/search?limit=500&q=${encodeURIComponent(contentQuery)}`, {
+        signal: controller.signal,
+      })
+        .then((response) => (response.ok ? response.json() : { matches: [] }))
+        .then((data: { matches?: MessageMatch[] }) =>
+          setContentMatches({
+            query: contentQuery,
+            snippets: new Map((data.matches ?? []).map((match) => [match.threadId, match.snippet])),
+          }),
+        )
+        .catch(() => {})
+    }, 200)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [contentQuery])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   // Wide screens hide the sidebar in place; phones use the slide-out drawer instead.
   const [sidebarHidden, setSidebarHidden] = useState(false)
@@ -2674,10 +2722,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
   ]
   // The project picked in the sidebar's filter, while it still exists.
   const filterPath = projectFilter && projectPaths.includes(projectFilter) ? projectFilter : ''
+  // Threads found inside their conversations (only for the query in the box, never a stale one).
+  const foundIn =
+    query && contentMatches.query === contentQuery ? contentMatches.snippets : undefined
   const visibleThreads = threads.filter(
     (item) =>
       (!filterPath || item.cwd === filterPath) &&
-      `${item.title} ${item.cwd}`.toLowerCase().includes(query),
+      (`${item.title} ${item.cwd}`.toLowerCase().includes(query) || foundIn?.has(item.id)),
   )
   const groups = projectPaths
     .filter((path) => !filterPath || path === filterPath)
@@ -3020,6 +3071,11 @@ export function Workspace({ threadId }: { threadId?: string }) {
         retitling={retitling.has(item.id)}
         time={threadTime(item, now, unread.has(item.id))}
         menuOpen={menu?.kind === 'thread' && menu.id === item.id}
+        snippet={
+          foundIn?.has(item.id) && !item.title.toLowerCase().includes(query)
+            ? nearMatch(foundIn.get(item.id)!, query)
+            : undefined
+        }
       />
     )
   // What a sidebar row does when used. Read through a ref, so the memoized rows never need new
