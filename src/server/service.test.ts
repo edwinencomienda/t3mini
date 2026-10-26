@@ -1168,13 +1168,39 @@ describe('editing the last message after a stop', () => {
     await finishTurn(created.id, () => retry.end())
   })
 
-  it('refuses edits that are not the last message of a stopped or failed turn', async () => {
+  it('retries the last message of a finished turn, rewinding Claude', async () => {
+    setup(scripted())
+    const created = await editService.create({ provider: 'claude', cwd: directory })
+    await editService.send(created.id, { text: 'One' })
+    const first = await nextTurn()
+    first.ctx.entry?.('entry-1')
+    await finishTurn(created.id, () => first.end())
+    await editService.send(created.id, { text: 'Two' })
+    const second = await nextTurn()
+    second.ctx.entry?.('entry-2')
+    await finishTurn(created.id, () => second.end())
+    expect(editService.get(created.id).status).toBe('completed')
+    const target = editService.get(created.id).messages.at(-1)!
+    expect(target.text).toBe('Two')
+    await editService.edit(created.id, { messageId: target.id, text: 'Two' })
+    const retry = await nextTurn()
+    expect(retry.ctx.rewind?.claudeResumeAt).toBe('entry-1')
+    const texts = editService.get(created.id).messages.map((message) => message.text)
+    expect(texts).toEqual(['One', 'Two'])
+    expect(editService.get(created.id).messages.at(-1)!.id).not.toBe(target.id)
+    await finishTurn(created.id, () => retry.end())
+  })
+
+  it('refuses edits that are not your last message, or while the agent works', async () => {
     setup(scripted())
     const created = await editService.create({ provider: 'claude', cwd: directory })
     await editService.send(created.id, { text: 'Finish normally' })
     const first = await nextTurn()
     await finishTurn(created.id, () => first.end())
     const sent = editService.get(created.id).messages[0]
+    await editService.send(created.id, { text: 'Then this' })
+    const second = await nextTurn()
+    await finishTurn(created.id, () => second.end())
     await expect(
       editService.edit(created.id, { messageId: sent.id, text: 'Rewrite history' }),
     ).rejects.toThrow('Only your last message')

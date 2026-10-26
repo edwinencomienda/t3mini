@@ -313,10 +313,10 @@ export type GitInfo = {
   pullRequest?: PullRequest | null
 }
 export type PullRequest = { number: number; url: string }
-// The message that can be edited and resent: the last thing you sent, when its turn was stopped
-// or failed and the agent can take that turn back (see TurnCheckpoint).
+// The message that can be edited or retried: the last thing you sent, once its turn has ended
+// (finished, stopped, or failed) and the agent can take that turn back (see TurnCheckpoint).
 export function editableMessage(thread: Pick<Thread, 'status' | 'provider' | 'messages'>) {
-  if (thread.status !== 'interrupted' && thread.status !== 'failed') return undefined
+  if (isActive(thread.status)) return undefined
   const last = [...thread.messages].reverse().find((message) => message.role === 'user')
   const turn = last?.turn
   // A helper's report isn't yours to edit, and a turn another agent ran can't be taken back

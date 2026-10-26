@@ -35,6 +35,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Monitor,
+  RotateCcw,
   Moon,
   Pencil,
   Plus,
@@ -507,22 +508,31 @@ const ThreadRow = memo(function ThreadRow({
 
 // Shared empty block list: a new [] on each render would defeat MessageView's memo.
 const noBlocks: Block[] = []
+// What the Retry and Edit buttons under your last message do. Workspace passes a ref that never
+// changes, so MessageView's memo isn't defeated by new callbacks on every live update.
+type MessageActions = { retry: (message: Message) => void; edit: (message: Message) => void }
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
   // images and diagrams onto the final answer, and its folded notes show none).
   // leading: tool content shown above the text: what the agent showed while working, before it
   // wrote this answer (so "the diagrams above" reads right).
+  // editable: your last message once its turn has ended: it gets Retry and Edit buttons, which
+  // call `actions` (a stable ref).
   function MessageView({
     message,
     meta = true,
     blocks = message.blocks,
     leading,
+    editable = false,
+    actions,
   }: {
     message: Message
     meta?: boolean
     blocks?: Block[]
     leading?: Block[]
+    editable?: boolean
+    actions?: { current: MessageActions | null }
   }) {
     // Where this thread's uploads live: here, or on its machine (the hub).
     const base = useApiBase()
@@ -591,8 +601,9 @@ const MessageView = memo(
             {blocks?.length ? <Blocks blocks={blocks} /> : null}
           </>
         )}
-        {/* Shown on hover (always on touch screens), like Claude Desktop: the time and a copy
-            button for the message as written (a reply's Markdown source). */}
+        {/* Shown on hover (always on touch screens), like Claude Desktop: the time, Retry and
+            Edit on your last message, and a copy button for the message as written (a reply's
+            Markdown source). */}
         {meta ? (
           <div className="message-actions">
             <time dateTime={message.createdAt}>
@@ -601,6 +612,28 @@ const MessageView = memo(
                 minute: '2-digit',
               })}
             </time>
+            {editable && message.role === 'user' ? (
+              <>
+                <button
+                  type="button"
+                  className="icon-button message-action"
+                  aria-label="Retry"
+                  title="Retry · run this message again"
+                  onClick={() => actions?.current?.retry(message)}
+                >
+                  <RotateCcw size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button message-action"
+                  aria-label="Edit message"
+                  title="Edit"
+                  onClick={() => actions?.current?.edit(message)}
+                >
+                  <Pencil size={13} />
+                </button>
+              </>
+            ) : null}
             {message.text ? (
               <CopyButton
                 className="message-copy"
@@ -615,6 +648,7 @@ const MessageView = memo(
   },
   (before, after) =>
     before.meta === after.meta &&
+    before.editable === after.editable &&
     before.message.id === after.message.id &&
     before.message.text === after.message.text &&
     before.message.queued === after.message.queued &&
@@ -1012,7 +1046,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // ↑ / ↓ in the composer walk through what you sent in this thread. `index` is the position
   // in that list; `text` is what was filled in, so typing over it hands the arrows back.
   const recalled = useRef<{ thread: string; index: number; text: string } | null>(null)
-  // The message being edited (recalled after a stopped or failed turn); sending replaces it.
+  // The message being edited (Edit under it, or ↑ after a stopped or failed turn); sending
+  // replaces it.
   const [editing, setEditing] = useState<string | null>(null)
   // Recall and editing belong to one thread; switching threads ends them.
   useEffect(() => {
@@ -2164,7 +2199,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // ↑ in an empty composer brings back your previous messages (↓ goes forward, then back to an
   // empty composer), like a shell or Claude Code. The arrows only do this on the first / last
   // line and while the recalled text is untouched, so editing a draft is never hijacked. The
-  // most recent message after a stopped or failed turn opens in edit mode.
+  // most recent message after a stopped or failed turn opens in edit mode (Edit under the message
+  // does that after a finished turn too).
   function recall(step: -1 | 1) {
     const element = composer.current
     if (!element || !thread || isActive(thread.status)) return false
@@ -2174,32 +2210,85 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const current = recalled.current?.thread === thread.id ? recalled.current : null
     const fresh = !element.value && !pending[thread.id]?.length
     if (current ? element.value !== current.text : !fresh || step > 0) return false
-    const sent = thread.messages.filter(
-      (message) =>
-        message.role === 'user' && !message.report && (message.text || message.attachments?.length),
-    )
+    const sent = sentMessages(thread)
     const index = (current?.index ?? sent.length) + step
     if (index < 0) return true
     const message = sent[index]
     recalled.current = message ? { thread: thread.id, index, text: message.text } : null
-    setDraft(message?.text ?? '')
-    // Images go back as already-uploaded attachments.
-    setPending((list) => ({
-      ...list,
-      [thread.id]: (message?.attachments ?? []).map((item) => ({
-        key: `recalled:${item.id}`,
-        name: item.name,
-        previewUrl: `${apiBaseFor(thread.id)}/uploads/${encodeURIComponent(item.id)}`,
-        status: 'ready' as const,
-        id: item.id,
-      })),
-    }))
-    setEditing(message && editableMessage(thread)?.id === message.id ? message.id : null)
+    fillComposer(thread, message)
+    // ↑ opens edit mode only after a stopped or failed turn; after a finished one it recalls the
+    // text for a new message (the Edit button under the message replaces a finished turn).
+    const stopped = thread.status === 'interrupted' || thread.status === 'failed'
+    setEditing(message && stopped && editableMessage(thread)?.id === message.id ? message.id : null)
     requestAnimationFrame(() =>
       element.setSelectionRange(element.value.length, element.value.length),
     )
     return true
   }
+  // What you sent in a thread, oldest first: what ↑ / ↓ walk through.
+  const sentMessages = (current: Thread) =>
+    current.messages.filter(
+      (message) =>
+        message.role === 'user' && !message.report && (message.text || message.attachments?.length),
+    )
+  // Puts a sent message's text and images back in the composer (or clears it).
+  function fillComposer(current: Thread, message: Message | undefined) {
+    setDraft(message?.text ?? '')
+    // Images go back as already-uploaded attachments.
+    setPending((list) => ({
+      ...list,
+      [current.id]: (message?.attachments ?? []).map((item) => ({
+        key: `recalled:${item.id}`,
+        name: item.name,
+        previewUrl: `${apiBaseFor(current.id)}/uploads/${encodeURIComponent(item.id)}`,
+        status: 'ready' as const,
+        id: item.id,
+      })),
+    }))
+  }
+  // Edit under your last message: open it in the composer in edit mode; sending replaces its turn.
+  function startEdit(message: Message) {
+    const element = composer.current
+    if (!thread || !element || isActive(thread.status)) return
+    if (editableMessage(thread)?.id !== message.id) return
+    const sent = sentMessages(thread)
+    recalled.current = {
+      thread: thread.id,
+      index: sent.findIndex((item) => item.id === message.id),
+      text: message.text,
+    }
+    fillComposer(thread, message)
+    setEditing(message.id)
+    element.focus()
+    requestAnimationFrame(() =>
+      element.setSelectionRange(element.value.length, element.value.length),
+    )
+  }
+  // Retry under your last message: run it again as it was, in place of its turn.
+  async function retry(message: Message) {
+    if (!thread || busy || !connected || isActive(thread.status)) return
+    if (editableMessage(thread)?.id !== message.id) return
+    const id = thread.id
+    setBusy(true)
+    setError('')
+    stickToBottom.current = true
+    try {
+      await api(threadApi(id, 'edit'), 'POST', {
+        messageId: message.id,
+        text: message.text,
+        attachments: (message.attachments ?? []).map((item) => ({ id: item.id, name: item.name })),
+      })
+      revealThread(id)
+      // A message being edited in the composer has just been replaced.
+      if (editing === message.id) cancelEdit()
+    } catch (error) {
+      setError((error as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const messageActions = useRef<MessageActions | null>(null)
+  messageActions.current = { retry: (message) => void retry(message), edit: startEdit }
   function cancelEdit() {
     recalled.current = null
     setEditing(null)
@@ -2676,8 +2765,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     element.placeholder = text
     element.style.height = `${Math.min(height, composerMaxHeight)}px`
   }
+  // The message that can be edited or retried (your last, once its turn has ended).
+  const editableId = thread ? editableMessage(thread)?.id : undefined
   // The edit bar shows only while the recalled message is still the one that can be edited.
-  const editingMessage = Boolean(thread && editing && editableMessage(thread)?.id === editing)
+  const editingMessage = Boolean(editing && editableId === editing)
   const composerPlaceholder = !thread
     ? ''
     : active
@@ -3511,7 +3602,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
                               <span className="agent-switch-rule" aria-hidden />
                             </div>
                           ) : null}
-                          {turn.user ? <MessageView message={turn.user} /> : null}
+                          {turn.user ? (
+                            <MessageView
+                              message={turn.user}
+                              editable={turn.user.id === editableId}
+                              actions={messageActions}
+                            />
+                          ) : null}
                           {turn.done && turn.work.length ? (
                             <div className={`turn-fold ${openTurns.has(turn.key) ? 'open' : ''}`}>
                               <button
@@ -3717,7 +3814,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         <div className="composer-editing">
                           <Pencil size={12} />
                           <span>
-                            Editing your last message · it replaces the stopped turn{' '}
+                            Editing your last message · it replaces that turn{' '}
                             <small>(files it changed stay changed)</small>
                           </span>
                           <button

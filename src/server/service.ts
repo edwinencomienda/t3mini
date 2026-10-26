@@ -889,8 +889,9 @@ export class AgentService {
     if (firstMessage && thread.provider === 'codex') void this.autoTitle(id)
     return { accepted: true }
   }
-  // Replaces the last message of a stopped or failed turn and runs it again. The agent's memory
-  // is rewound to before that turn (see TurnCheckpoint); files it changed stay changed.
+  // Replaces your last message (once its turn has ended: finished, stopped, or failed) and runs
+  // it again; Retry sends it unchanged. The agent's memory is rewound to before that turn (see
+  // TurnCheckpoint); files it changed stay changed.
   async edit(id: string, input: unknown) {
     const { messageId } = z.object({ messageId: z.string().min(1).max(200) }).parse(input)
     const { text, attachments: requested } = promptSchema.parse(input)
@@ -899,7 +900,7 @@ export class AgentService {
       throw new HttpError(409, 'Stop the agent before editing a message.')
     const target = editableMessage(thread)
     if (!target || target.id !== messageId)
-      throw new HttpError(409, 'Only your last message of a stopped or failed turn can be edited.')
+      throw new HttpError(409, 'Only your last message can be edited or retried.')
     let attachments
     try {
       attachments = await this.uploads.resolve(requested)

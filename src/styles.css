@@ -788,7 +788,8 @@ kbd {
 .message-actions {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  /* The buttons carry their own padding, so they sit side by side; only the time gets space. */
+  gap: 0;
   margin-top: 0.2rem;
   opacity: 0;
   transition: opacity 0.15s;
@@ -806,7 +807,11 @@ kbd {
   font-size: 11px;
   color: var(--faint);
 }
-.message-copy {
+.message-actions time {
+  margin-inline: 0.25rem;
+}
+.message-copy,
+.message-action {
   width: 1.6rem;
   height: 1.6rem;
   color: var(--muted-foreground);
