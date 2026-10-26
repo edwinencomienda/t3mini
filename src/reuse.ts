@@ -29,7 +29,8 @@ export function reuseItems<T extends object>(
   let same = previous.length === next.length
   const merged = next.map((item, index) => {
     const old = byKey.get(key(item))
-    const kept = old && json(old) === JSON.stringify(item) ? old : item
+    // The same object (a patched thread keeps its unchanged messages) needs no comparing.
+    const kept = old && (old === item || json(old) === JSON.stringify(item)) ? old : item
     if (kept !== previous[index]) same = false
     return kept
   })

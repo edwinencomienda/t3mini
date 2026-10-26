@@ -553,7 +553,11 @@ export class AgentService {
       this.listeners.delete(listener)
     }
   }
+  // Counts notifications, so work shared between listeners (each open tab's live update) knows
+  // when the state may have changed.
+  version = 0
   private notify() {
+    this.version++
     for (const listener of this.listeners) listener()
   }
   private changed() {

@@ -147,6 +147,8 @@ import {
   type WorkItem,
 } from '../timeline'
 import { reuseItems, reuseThread } from '../reuse'
+import { RecentMap } from '../recent-map'
+import { applyThreadPatch, type ThreadPatch } from '../thread-patch'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
 import { ContextMenu, menuPosition, type MenuItem, type MenuPosition } from './ContextMenu'
 import { playSound, unlockSound } from '../sound'
@@ -284,6 +286,7 @@ const markdownPlugins = [remarkGfm]
 // can be reused. Least recently used first out, capped by count and total text.
 const parsedMarkdown = new Map<string, ReactNode>()
 let parsedChars = 0
+let lastParsed: string | undefined
 const maxParsed = 3000
 const maxParsedChars = 4_000_000
 function parseMarkdown(text: string) {
@@ -298,6 +301,11 @@ function parseMarkdown(text: string) {
     remarkPlugins: markdownPlugins,
     components: markdownComponents,
   })
+  // A streaming reply grows by appends: drop the version it grew from, or every partial reply
+  // (hundreds per answer) would fill the cache and push out finished ones.
+  if (lastParsed && text.startsWith(lastParsed) && parsedMarkdown.delete(lastParsed))
+    parsedChars -= lastParsed.length
+  lastParsed = text
   parsedMarkdown.set(text, parsed)
   parsedChars += text.length
   for (const [oldest] of parsedMarkdown) {
@@ -1035,7 +1043,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const filePicker = useRef<HTMLInputElement>(null)
   // Last known state of each visited thread and each project's git branch, shown instantly on
   // switching so the layout doesn't blank out and pop back in while fresh data loads.
-  const threadCache = useRef(new Map<string, Thread>())
+  const threadCache = useRef(new RecentMap<string, Thread>(30))
   const notice = useRef<string | undefined>(undefined)
   // Threads this window is deleting. The live update that drops one often arrives before the
   // delete call returns; the "deleted elsewhere" handling skips these, so deleting the open
@@ -1237,7 +1245,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const connect = () => {
       latest = { projects: [] }
       events = new EventSource(
-        `/api/events${activeId && !remoteActive ? `?thread=${encodeURIComponent(activeId)}` : ''}`,
+        // patch=1: the open thread arrives whole once, then only what changed (thread-patch.ts).
+        `/api/events?patch=1${activeId && !remoteActive ? `&thread=${encodeURIComponent(activeId)}` : ''}`,
       )
       events.onopen = () => {
         attempts = 0
@@ -1256,6 +1265,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           threads?: ThreadSummary[]
           projects?: ProjectSummary[]
           thread?: Thread | null
+          threadPatch?: ThreadPatch
           processes?: ProcessInfo[]
           browsers?: BrowserInfo[]
           ui?: UiSettings
@@ -1291,6 +1301,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
           if (data.persistenceError) setError(data.persistenceError)
           return
         }
+        if (data.threadPatch) {
+          // A patch applies to the thread this stream last sent; if that's missing (it can't
+          // be, but just in case), start over and get the whole thread again.
+          if (latest.thread?.id !== data.threadPatch.id) {
+            events?.close()
+            connect()
+            return
+          }
+          data.thread = applyThreadPatch(latest.thread, data.threadPatch)
+        }
         if (data.thread !== undefined) latest.thread = data.thread
         if (
           activeId &&
@@ -1307,6 +1327,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
             ? reuseThread(threadCache.current.get(data.thread.id), data.thread)
             : null
           if (next) threadCache.current.set(next.id, next)
+          // The next patch builds on this one, so its unchanged messages keep these objects.
+          latest.thread = next
           setThread(next)
         }
         if (data.persistenceError) setError(data.persistenceError)

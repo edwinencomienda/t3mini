@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { isActive } from '../types'
 import { getService, HttpError } from './service'
+import { ThreadDiff } from '../thread-patch'
 import { pickProjectFolder } from './folder-picker'
 import { getModels } from './models'
 import { dirname, join } from 'node:path'
@@ -63,14 +64,22 @@ export function isHttpError(error: unknown): error is HttpError {
 // (the whole snapshot on connect). While another thread streams, a tab gets its thread list but
 // not its own open thread again, and nothing at all when none of its parts changed. Missing keys
 // mean "unchanged". `sent` is the connection's memory: each part as last sent.
-export function changedParts(sent: Map<string, string>, snapshot: Record<string, unknown>) {
+// extra: parts sent as they are, every time (already diffed, like the open thread's patch).
+export function changedParts(
+  sent: Map<string, string>,
+  snapshot: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+  stringify: (value: unknown) => string = (value) => JSON.stringify(value ?? null),
+) {
   const parts: string[] = []
   for (const [key, value] of Object.entries(snapshot)) {
-    const json = JSON.stringify(value ?? null)
+    const json = stringify(value)
     if (sent.get(key) === json) continue
     sent.set(key, json)
     parts.push(`${JSON.stringify(key)}:${json}`)
   }
+  for (const [key, value] of Object.entries(extra))
+    parts.push(`${JSON.stringify(key)}:${JSON.stringify(value ?? null)}`)
   return parts.length ? `{${parts.join(',')}}` : undefined
 }
 // One saved video or sound, whole or the byte range asked for ("bytes=START-END", "bytes=START-",
@@ -128,6 +137,40 @@ function devServerPorts(processes: { status: string; url?: string; urls?: string
     .filter(Boolean)
 }
 const watchedPreviews = new WeakSet<object>()
+// Live updates: every open tab handles the same notification, so they share one snapshot per
+// thread and serialize each object once (not once per tab). Kept for one notification only: a
+// new one (service.version) or the next microtask starts over.
+let shared:
+  | {
+      version: number
+      snapshots: Map<string, ReturnType<Service['snapshot']>>
+      json: WeakMap<object, string>
+    }
+  | undefined
+type Service = Awaited<ReturnType<typeof getService>>
+function sharedUpdate(service: Service) {
+  if (!shared || shared.version !== service.version) {
+    const current = { version: service.version, snapshots: new Map(), json: new WeakMap() }
+    shared = current
+    queueMicrotask(() => {
+      if (shared === current) shared = undefined
+    })
+  }
+  return shared
+}
+function sharedSnapshot(service: Service, id: string | undefined) {
+  const update = sharedUpdate(service)
+  let snapshot = update.snapshots.get(id ?? '')
+  if (!snapshot) update.snapshots.set(id ?? '', (snapshot = service.snapshot(id)))
+  return snapshot
+}
+function sharedJson(service: Service, value: unknown) {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value ?? null)
+  const cache = sharedUpdate(service).json
+  let json = cache.get(value)
+  if (json === undefined) cache.set(value, (json = JSON.stringify(value)))
+  return json
+}
 export async function handleApi(request: Request) {
   try {
     checkRequest(request)
@@ -501,18 +544,29 @@ export async function handleApi(request: Request) {
     if (parts[0] === 'events' && request.method === 'GET') {
       const id = url.searchParams.get('thread') || undefined
       if (id) service.get(id)
+      // patch=1: the open thread comes whole once, then as patches (src/thread-patch.ts). Tabs
+      // that don't ask (a hub running an older t3mini) get the whole thread when it changes.
+      const patches = url.searchParams.get('patch') === '1'
       let cleanup = () => {}
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           const encode = new TextEncoder()
           const sent = new Map<string, string>()
+          const diff = new ThreadDiff((value) => sharedJson(service, value))
           const push = () => {
             try {
-              const changes = changedParts(sent, {
-                ...service.snapshot(id),
-                // A newer t3mini installed (app-update.ts), on the Mac only.
-                ...(remote ? {} : { appUpdate: latestAppUpdate() }),
-              })
+              const { thread, ...snapshot } = sharedSnapshot(service, id)
+              const changes = changedParts(
+                sent,
+                {
+                  ...snapshot,
+                  ...(patches ? {} : { thread }),
+                  // A newer t3mini installed (app-update.ts), on the Mac only.
+                  ...(remote ? {} : { appUpdate: latestAppUpdate() }),
+                },
+                patches ? diff.next(thread) : undefined,
+                (value) => sharedJson(service, value),
+              )
               if (changes) controller.enqueue(encode.encode(`data: ${changes}\n\n`))
             } catch {
               cleanup()
