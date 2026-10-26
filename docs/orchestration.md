@@ -1,6 +1,6 @@
 # Orchestration: lead and helper threads
 
-One thread (the **lead**) can start other threads (**helpers**) to work in parallel, and the helpers report back to it when they finish. Claude and Codex can both lead, and a lead can hand work to either.
+One thread (the **lead**) can start other threads (**helpers**) to work in parallel, and the helpers report back to it when they finish. Claude and Codex can both lead, and a lead can hand work to either. For work that should happen in the thread's own folder, without a separate thread and worktree, see sub-agents ([delegation.md](delegation.md)).
 
 ## Using it
 

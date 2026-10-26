@@ -11,6 +11,41 @@ import { turnText } from './shared-thread'
 const maxChars = 24_000
 const names: Record<Provider, string> = { claude: 'Claude', codex: 'Codex' }
 
+// The newest turns that fit in maxChars, oldest first, and how many older ones were left out.
+function recentTurns(turns: ReturnType<typeof buildTurns>, max = maxChars) {
+  const picked: string[] = []
+  let used = 0
+  let first = turns.length
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const text = turnText(turns[index]!, index + 1)
+    if (picked.length && used + text.length > max) break
+    picked.unshift(text)
+    used += text.length
+    first = index
+  }
+  return { text: picked.join('\n\n'), older: first }
+}
+
+// A sub-agent's view of the thread it works for (delegate_task with context "thread"): the
+// recent turns, so it knows what the conversation is about. Empty for a thread with no turns.
+export function conversationRecap(thread: Thread) {
+  const messages = thread.messages.filter((message) => !message.unsent)
+  if (!messages.some((message) => message.text.trim())) return ''
+  const { text, older } = recentTurns(
+    buildTurns({ messages, activities: [], status: 'completed' }),
+    16_000,
+  )
+  return (
+    '[For context, the conversation in the thread you work for' +
+    (older
+      ? ` (its latest turns; ${older} older left out; read_thread with id ${thread.id} reads them)`
+      : '') +
+    ':]\n\n' +
+    text +
+    '\n\n[End of context]'
+  )
+}
+
 // The messages the agent missed: after `after` (all when it's absent or no longer in the
 // thread, e.g. edited away) and before the message starting this turn. Unsent ones never went
 // to any agent.
@@ -43,16 +78,7 @@ export function handoffRecap(thread: Thread, startId?: string): string {
   const who = others.length
     ? others.join(' and ')
     : names[thread.provider === 'claude' ? 'codex' : 'claude']
-  const picked: string[] = []
-  let used = 0
-  let first = turns.length
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const text = turnText(turns[index]!, index + 1)
-    if (picked.length && used + text.length > maxChars) break
-    picked.unshift(text)
-    used += text.length
-    first = index
-  }
+  const { text, older: first } = recentTurns(turns)
   const older =
     first > 0
       ? `\n\n(${first} older turn${first === 1 ? '' : 's'} left out. To read the whole ` +
@@ -63,7 +89,7 @@ export function handoffRecap(thread: Thread, startId?: string): string {
     `[Recap: this thread was switched to you from ${who}. You weren't part of the turns below, ` +
     `so here is what happened in them. Any file changes are already on disk. Use it as ` +
     `context; the user's new message follows the recap.]\n\n` +
-    `${picked.join('\n\n')}${older}\n\n[End of recap]\n\n`
+    `${text}${older}\n\n[End of recap]\n\n`
   )
 }
 

@@ -11,6 +11,7 @@ import { showStatus } from './show-status'
 import { askUser } from './ask-user'
 import { readThread } from './read-thread'
 import { threadTools } from './threads'
+import { delegateTools } from './delegate'
 import { browserTools } from './browser'
 import { ToolError, type ToolContext, type ToolDefinition } from './types'
 import type { Provider } from '../../types'
@@ -28,6 +29,7 @@ export const tools: ToolDefinition<any>[] = [
   renameThread,
   readThread,
   ...threadTools,
+  ...delegateTools,
   ...processTools,
   ...browserTools,
 ]
@@ -55,6 +57,10 @@ export const toolInstructions = [
   '- start_thread starts helper threads (other agents, Claude or Codex, each in its own git ' +
     'worktree) when the user wants work split up or run in parallel; they report back here when ' +
     'they finish. message_thread, list_threads, stop_thread, and delete_thread manage them.',
+  '- delegate_task hands a task to a sub-agent (by default the same agent as you; the other ' +
+    'one, Claude or Codex, only when the user asks) working in this folder: wait for its answer, ' +
+    'or start several in the background (wait: false) and they report back as they finish. Use ' +
+    'it for work worth splitting off: research, reviews, tests, independent parts of a feature.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +

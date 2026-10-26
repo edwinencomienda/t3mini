@@ -28,6 +28,10 @@ function extras(message: Message) {
       parts.push(`showed a diagram${block.title ? `: ${block.title}` : ''}`)
     else if (block.type === 'html')
       parts.push(`showed a page${block.title ? `: ${block.title}` : ''}`)
+    else if (block.type === 'delegation')
+      parts.push(
+        `sub-agent "${block.title}" (${block.agent}, ${block.status}${block.files?.length ? `, changed ${block.files.join(', ')}` : ''})`,
+      )
     else if (block.type === 'status')
       parts.push(`status: ${block.title} (${block.status})${block.url ? ` ${block.url}` : ''}`)
     else

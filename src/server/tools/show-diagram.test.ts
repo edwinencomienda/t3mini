@@ -13,6 +13,7 @@ const context = () => {
     saveImage: vi.fn(),
     processes: {} as never,
     threads: {} as never,
+    delegates: {} as never,
     browser: {} as never,
     saveHtml: async () => ({ id: 'x.html' }),
     renderHtml: vi.fn(),

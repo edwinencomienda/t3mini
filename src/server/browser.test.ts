@@ -200,6 +200,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     ask: vi.fn(),
     processes: {} as never,
     threads: {} as never,
+    delegates: {} as never,
     rename: vi.fn(),
     browser: {
       page: () => browsers.page(thread),

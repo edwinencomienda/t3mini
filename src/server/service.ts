@@ -21,7 +21,7 @@ import {
   type Thread,
   type ThreadSummary,
 } from '../types'
-import type { Block } from '../blocks'
+import type { Block, DelegationBlock } from '../blocks'
 import { newStatusBlock, stopRunningCards, updateStatusCard } from './status-cards'
 import {
   ProjectStore,
@@ -34,7 +34,20 @@ import {
 import { UploadError, Uploads, attachmentSchema, isImageId } from './uploads'
 import { BrowserStats } from './browser-stats'
 import { describeThread, projectLabel, threadIdFrom } from './shared-thread'
-import { ToolError, type ThreadControl } from './tools/types'
+import { ToolError, type DelegateControl, type ThreadControl } from './tools/types'
+import {
+  agentLabel,
+  changedBetween,
+  folderState,
+  ownChanges,
+  delegationBrief,
+  delegationCard,
+  delegationResult,
+  findDelegationCard,
+  lastReply,
+  maxRunningDelegates,
+  replaceDelegationCard,
+} from './delegations'
 import { parseDiff, type DiffFile, type DiffResult } from '../diff'
 import { openInVSCode, vscodeAvailable } from './editor'
 import { githubBranchUrl, githubPullUrl, githubRepoUrl, pullRequestFor } from './github'
@@ -66,7 +79,7 @@ import {
 import { runCodex } from './providers/codex'
 import { runClaude } from './providers/claude'
 import { providerExecutable } from './cli-updates'
-import { handoffRecap, switchAgent } from './handoff'
+import { conversationRecap, handoffRecap, switchAgent } from './handoff'
 import {
   rewindRefused,
   type PromptImage,
@@ -156,8 +169,10 @@ const helperBrief = (lead: Thread, task: string) =>
   `\n\n${task}`
 const agentName = (provider: Provider) => (provider === 'claude' ? 'Claude' : 'Codex')
 // Where a thread works: its worktree when it has one, otherwise the project folder.
+// A sub-agent works in its lead's folder (workIn), never one of its own.
 export const workdir = (thread: Thread) =>
-  thread.worktree ? worktreeFolder(thread.worktree) : (thread.chatFolder ?? thread.cwd)
+  thread.workIn ??
+  (thread.worktree ? worktreeFolder(thread.worktree) : (thread.chatFolder ?? thread.cwd))
 // What a thread's tools may do with processes: only its own project's, started inside the folder
 // it works in (its worktree, for a worktree thread).
 function projectProcesses(manager: ProcessManager, thread: Thread) {
@@ -245,6 +260,10 @@ type Run = {
 export class AgentService {
   private runs = new Map<string, Run>()
   private settingsUpdates = new Set<string>()
+  // delegate_task calls waiting for their sub-agent's run to end, by sub-agent.
+  private delegateWaits = new Map<string, () => void>()
+  // Each running sub-agent's folder as it was when it started (see folderState).
+  private delegateBaselines = new Map<string, Promise<Map<string, string> | null>>()
   private listeners = new Set<() => void>()
   // Stopped runs still exiting, by thread (see stop and windDown).
   private winding = new Map<string, Promise<void>>()
@@ -287,10 +306,44 @@ export class AgentService {
       throw error
     }
   }
+  // The sidebar's threads: sub-agents aren't listed (they show as cards in their lead), but a
+  // lead whose sub-agent waits for you shows as waiting.
+  // A lead with sub-agents at work shows as working (so restarts and the installer wait for
+  // them too).
   list() {
-    return [...this.store.threads.values()]
-      .map(summary)
+    const waiting = new Map<string, ThreadSummary['waitingFor']>()
+    const working = new Set<string>()
+    for (const thread of this.store.threads.values()) {
+      if (!thread.delegateOf) continue
+      if (isActive(thread.status) || this.runs.has(thread.id)) working.add(thread.delegateOf)
+      if (thread.status === 'waiting')
+        waiting.set(
+          thread.delegateOf,
+          thread.approvals.some((item) => item.questions?.length) ? 'question' : 'approval',
+        )
+    }
+    return this.listed()
+      .map((thread) => {
+        let item = summary(thread)
+        if (working.has(thread.id) && !isActive(item.status)) item = { ...item, status: 'working' }
+        const delegated = waiting.get(thread.id)
+        if (delegated && !item.waitingFor)
+          item = { ...item, status: 'waiting', waitingFor: delegated }
+        return item
+      })
       .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+  }
+  private listed() {
+    return [...this.store.threads.values()].filter((thread) => !thread.delegateOf)
+  }
+  // Every thread with an agent at work, sub-agents included (restarts and agent updates wait
+  // for these).
+  busy(provider?: Provider) {
+    return [...this.store.threads.values()].some(
+      (thread) =>
+        (isActive(thread.status) || this.runs.has(thread.id)) &&
+        (!provider || thread.provider === provider),
+    )
   }
   // Saved projects plus any folder that has threads, ordered by your most recent message
   // (or when the project was added), not by agent activity.
@@ -309,7 +362,7 @@ export class AgentService {
         ...(project.avatar ? { avatar: project.avatar } : {}),
         ...(project.image ? { image: project.image } : {}),
       })
-    for (const thread of this.store.threads.values()) {
+    for (const thread of this.listed()) {
       const sentAt = lastMessageAt(thread)
       const project = projects.get(thread.cwd) ?? {
         path: thread.cwd,
@@ -326,7 +379,7 @@ export class AgentService {
     }
     for (const project of projects.values()) if (this.icons.known(project.path)) project.icon = true
     // The chats folder shows as "No project".
-    for (const thread of this.store.threads.values()) {
+    for (const thread of this.listed()) {
       const project = thread.chat ? projects.get(thread.cwd) : undefined
       if (project) Object.assign(project, { chats: true, name: 'No project' })
     }
@@ -1016,6 +1069,8 @@ export class AgentService {
   private async execute(thread: Thread, prompt: string, images: PromptImage[], run: Run) {
     const touch = () => {
       thread.updatedAt = new Date().toISOString()
+      // A sub-agent's card in its lead follows along.
+      if (thread.delegateOf) this.syncDelegation(thread)
       this.changed()
     }
     const working = () => {
@@ -1181,6 +1236,7 @@ export class AgentService {
         rename: async (title) => (await this.rename(thread.id, { title })).title,
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
         threads: this.threadControl(thread),
+        delegates: this.delegateControl(thread, run, attach),
         // ask_user: the same question card and answers as Claude's own AskUserQuestion.
         ask: ({ title, questions }) =>
           context.ask!({ id: `ask:${crypto.randomUUID()}`, title, questions }),
@@ -1215,6 +1271,7 @@ export class AgentService {
           run.approvals.set(approval.id, (answer) => resolve(answer !== false))
           touch()
           if (thread.parentId) void this.reportToLead(thread, 'waiting')
+          if (thread.delegateOf) void this.delegationWaiting(thread)
         }),
       // A question waits like an approval, but resolves with your answers (null if skipped).
       ask: ({ id, title, questions }) =>
@@ -1228,6 +1285,7 @@ export class AgentService {
           run.approvals.set(id, (answer) => resolve(typeof answer === 'object' ? answer : null))
           touch()
           if (thread.parentId) void this.reportToLead(thread, 'waiting')
+          if (thread.delegateOf) void this.delegationWaiting(thread)
         }),
       todos: (todos) => {
         thread.todos = todos.length ? todos : undefined
@@ -1254,7 +1312,8 @@ export class AgentService {
     }
     try {
       // A chat gets its own folder on its first turn, named from its first message.
-      if (thread.chat && !thread.chatFolder) {
+      // (Not for a sub-agent: it works in its lead's folder.)
+      if (thread.chat && !thread.chatFolder && !thread.workIn) {
         const first = thread.messages.find((message) => message.role === 'user')
         thread.chatFolder = await createChatFolder(
           thread.cwd,
@@ -1266,7 +1325,7 @@ export class AgentService {
         context.tools.cwd = context.cwd
       }
       // A worktree thread gets its worktree on its first turn (and must still have it later).
-      if (thread.useWorktree || thread.worktree) {
+      if ((thread.useWorktree || thread.worktree) && !thread.workIn) {
         await this.prepareWorktree(thread, touch)
         context.cwd = workdir(thread)
         context.tools.cwd = context.cwd
@@ -1348,6 +1407,9 @@ export class AgentService {
         (thread.status === 'completed' || thread.status === 'failed')
       )
         void this.reportToLead(thread, thread.status)
+      // A sub-agent's run ended (no follow-up started): its card settles, and whoever waits on
+      // it (the lead's delegate_task call, or the lead itself for a background one) hears.
+      if (thread.delegateOf && !this.runs.has(thread.id)) void this.delegationEnded(thread)
       // Tell every tab first, then save: the save doesn't change what they show.
       this.notify()
       try {
@@ -1572,6 +1634,11 @@ export class AgentService {
         answer: clipped,
       },
     }
+    await this.deliverReport(lead, message)
+  }
+  // A report (from a helper or a sub-agent) arrives in the lead like a message you'd send:
+  // joining its running turn, or starting the next one, up to maxAutoTurns in a row.
+  private async deliverReport(lead: Thread, message: Message) {
     const running = await this.windDown(lead.id)
     if (running) {
       await this.steer(lead, running, message, []).catch(() => {})
@@ -1592,6 +1659,247 @@ export class AgentService {
       this.changed()
     })
   }
+  // Sub-agents (delegate_task, see delegations.ts): what a thread may do with its own.
+  private delegateControl(lead: Thread, run: Run, attach: (block: Block) => void): DelegateControl {
+    const own = () => [...this.store.threads.values()].filter((item) => item.delegateOf === lead.id)
+    const busy = (item: Thread) => isActive(item.status) || this.runs.has(item.id)
+    const find = (reference: string) => {
+      const id = threadIdFrom(reference)
+      const found = id ? this.store.threads.get(id) : undefined
+      if (!found || found.delegateOf !== lead.id)
+        throw new ToolError('That isn’t one of your sub-agents (see list_delegations for ids).')
+      return found
+    }
+    const refuse = (error: unknown): never => {
+      throw new ToolError(error instanceof Error ? error.message : 'That didn’t work.')
+    }
+    return {
+      start: async (input) => {
+        if (lead.delegateOf) throw new ToolError('Sub-agents can’t start sub-agents of their own.')
+        const wait = input.wait !== false
+        const access = input.access ?? 'edit'
+        const others = own().filter((item) => busy(item))
+        // Files the running sub-agents have changed, for the new one to stay clear of.
+        const busyFiles = [
+          ...new Set(
+            others.flatMap((item) => findDelegationCard(lead.messages, item.id)?.block.files ?? []),
+          ),
+        ]
+        const folder = workdir(lead)
+        let delegate: Thread
+        if (input.continue) {
+          delegate = find(input.continue)
+          if (busy(delegate))
+            throw new ToolError(
+              `"${delegate.title}" is still working. Wait for it to report back, or stop it first.`,
+            )
+        } else {
+          if (others.length >= maxRunningDelegates)
+            throw new ToolError(
+              `${maxRunningDelegates} sub-agents are already running. Wait for one to finish, or stop one.`,
+            )
+          const provider = input.agent ?? lead.provider
+          // The same agent keeps this thread's model and effort; the other agent gets your last
+          // choices for it (or its defaults). A model given here wins.
+          const remembered = this.ui.settings.agent?.settings?.[provider]
+          const settings = input.model
+            ? { model: input.model, effort: input.effort ?? '', serviceTier: '' }
+            : provider === lead.provider
+              ? { model: lead.model, effort: lead.effort, serviceTier: lead.serviceTier ?? '' }
+              : {
+                  model: remembered?.model ?? '',
+                  effort: remembered?.effort ?? '',
+                  serviceTier: remembered?.serviceTier ?? '',
+                }
+          delegate = await this.create({
+            provider,
+            cwd: lead.cwd,
+            model: settings.model,
+            effort: settings.effort,
+            ...(settings.serviceTier ? { serviceTier: settings.serviceTier } : {}),
+            permissionMode: lead.permissionMode,
+          }).catch(refuse)
+          delegate.delegateOf = lead.id
+          delegate.workIn = folder
+          delete delegate.chat
+          delegate.title = input.title || input.task.replace(/\s+/g, ' ').slice(0, 60)
+          delegate.titleSource = 'custom'
+        }
+        delegate.delegate = { access, background: !wait }
+        const now = new Date().toISOString()
+        const card: DelegationBlock = {
+          type: 'delegation',
+          id: delegate.id,
+          title: delegate.title,
+          agent: delegate.provider,
+          access,
+          background: !wait,
+          status: 'running',
+          startedAt: now,
+        }
+        attach(card)
+        const recap = input.continue || input.context === 'none' ? '' : conversationRecap(lead)
+        const text = input.continue
+          ? input.task
+          : delegationBrief({ lead, task: input.task, access, folder, recap, busyFiles })
+        const finished = wait
+          ? new Promise<void>((resolve) => this.delegateWaits.set(delegate.id, resolve))
+          : undefined
+        // The folder before it starts, to find the files it changed (shell commands too).
+        const baseline = folderState(folder)
+        this.delegateBaselines.set(delegate.id, baseline)
+        await baseline
+        try {
+          await this.send(delegate.id, { text })
+        } catch (error) {
+          this.delegateWaits.delete(delegate.id)
+          replaceDelegationCard(lead.messages, {
+            ...card,
+            status: 'failed',
+            error: error instanceof Error ? error.message : 'It couldn’t start.',
+            endedAt: new Date().toISOString(),
+          })
+          if (!input.continue) await this.remove(delegate.id).catch(() => {})
+          this.changed()
+          refuse(error)
+        }
+        if (!finished)
+          return (
+            `Started sub-agent "${delegate.title}" (id ${delegate.id}) on ${agentLabel(delegate.provider)} ` +
+            'in the background. It reports back here when it finishes; keep working or end your turn.'
+          )
+        // Stopping this turn stops the sub-agent it waits on.
+        const stopIt = () => void this.stop(delegate.id).catch(() => {})
+        run.controller.signal.addEventListener('abort', stopIt, { once: true })
+        await finished
+        run.controller.signal.removeEventListener('abort', stopIt)
+        const final = findDelegationCard(lead.messages, delegate.id)?.block
+        return final ? delegationResult(delegate, final).text : 'The sub-agent ended.'
+      },
+      list: () => {
+        const all = own()
+        if (!all.length) return 'No sub-agents yet (delegate_task starts one).'
+        return all
+          .map((item) => {
+            const card = findDelegationCard(lead.messages, item.id)?.block
+            const status = busy(item)
+              ? item.status === 'waiting'
+                ? 'waiting for the user'
+                : 'working'
+              : (card?.status ?? item.status)
+            const reply = lastReply(item)
+            return [
+              `- "${item.title}" (id ${item.id}) · ${agentLabel(item.provider)} · ${status}`,
+              card?.files?.length ? `\n  Changed: ${card.files.join(', ')}` : '',
+              reply ? `\n  Latest reply: ${reply.replace(/\s+/g, ' ').slice(0, 300)}` : '',
+            ].join('')
+          })
+          .join('\n')
+      },
+      stop: async (reference) => {
+        const target = find(reference)
+        if (!busy(target)) return `"${target.title}" isn’t running.`
+        await this.stop(target.id).catch(refuse)
+        return `Stopped "${target.title}". Files it changed stay changed.`
+      },
+    }
+  }
+  // Brings a sub-agent's card in its lead up to date with the sub-agent's thread.
+  private syncDelegation(delegate: Thread) {
+    const lead = delegate.delegateOf ? this.store.threads.get(delegate.delegateOf) : undefined
+    const found = lead && findDelegationCard(lead.messages, delegate.id)
+    if (!lead || !found) return undefined
+    // Files another running sub-agent of the same lead also changed.
+    const otherFiles = new Set(
+      [...this.store.threads.values()]
+        .filter(
+          (item) =>
+            item.delegateOf === lead.id &&
+            item.id !== delegate.id &&
+            (isActive(item.status) || this.runs.has(item.id)),
+        )
+        .flatMap((item) => findDelegationCard(lead.messages, item.id)?.block.files ?? []),
+    )
+    const next = delegationCard(
+      delegate,
+      found.block,
+      (files) => files.filter((file) => otherFiles.has(file)),
+      new Date().toISOString(),
+    )
+    replaceDelegationCard(lead.messages, next)
+    return next
+  }
+  // A sub-agent's run ended: settle its card, then wake whoever waits for it (the lead's
+  // delegate_task call), or tell the lead with a report for a background one. A stop isn't
+  // reported (you or the lead did it).
+  private async delegationEnded(delegate: Thread) {
+    // Files changed in the folder while it ran, beyond its Edit/Write steps.
+    const baseline = this.delegateBaselines.get(delegate.id)
+    this.delegateBaselines.delete(delegate.id)
+    const lead = delegate.delegateOf ? this.store.threads.get(delegate.delegateOf) : undefined
+    const found = lead && findDelegationCard(lead.messages, delegate.id)
+    if (baseline && found) {
+      // Alone: waited for by its lead, with no other sub-agent of the lead running meanwhile.
+      const start = found.block.startedAt
+      const others = lead.messages.flatMap((message) =>
+        (message.blocks ?? []).filter(
+          (block): block is DelegationBlock =>
+            block.type === 'delegation' &&
+            block.id !== delegate.id &&
+            (!block.endedAt || block.endedAt > start),
+        ),
+      )
+      const alone = !delegate.delegate?.background && !others.length
+      const changed = ownChanges(
+        changedBetween(await baseline, await folderState(workdir(delegate))),
+        delegate.activities,
+        alone,
+      )
+      if (changed.length)
+        replaceDelegationCard(lead.messages, {
+          ...found.block,
+          files: [...new Set([...(found.block.files ?? []), ...changed])],
+        })
+    }
+    const card = this.syncDelegation(delegate)
+    this.changed()
+    const waiter = this.delegateWaits.get(delegate.id)
+    if (waiter) {
+      this.delegateWaits.delete(delegate.id)
+      waiter()
+      return
+    }
+    if (card && delegate.delegate?.background && card.status !== 'stopped')
+      await this.reportDelegation(delegate, card)
+  }
+  // A background sub-agent needs the user: its lead hears about it too.
+  private async delegationWaiting(delegate: Thread) {
+    const card = this.syncDelegation(delegate)
+    if (card && delegate.delegate?.background) await this.reportDelegation(delegate, card)
+  }
+  private async reportDelegation(delegate: Thread, card: DelegationBlock) {
+    const lead = delegate.delegateOf ? this.store.threads.get(delegate.delegateOf) : undefined
+    if (!lead) return
+    const result = delegationResult(delegate, card)
+    const status =
+      card.status === 'waiting' ? 'waiting' : card.status === 'failed' ? 'failed' : 'completed'
+    await this.deliverReport(lead, {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text: result.report,
+      createdAt: new Date().toISOString(),
+      report: {
+        delegate: true,
+        threadId: delegate.id,
+        title: delegate.title,
+        status,
+        answer:
+          result.details.length > 6_000
+            ? `${result.details.slice(0, 6_000)}\n… (cut)`
+            : result.details || '(No reply.)',
+      },
+    })
+  }
   // read_thread: another thread, for an agent to pick up from. Only a thread whose link or id
   // appears in the user's own messages in this thread, so an agent can't browse conversations
   // on its own (or be steered into it by a page or file it read). Any project.
@@ -1604,7 +1912,9 @@ export class AgentService {
     const family =
       id === current.id ||
       this.store.threads.get(id)?.parentId === current.id ||
-      current.parentId === id
+      current.parentId === id ||
+      this.store.threads.get(id)?.delegateOf === current.id ||
+      current.delegateOf === id
     const shared =
       family ||
       current.messages.some(
@@ -1959,6 +2269,15 @@ export class AgentService {
     const thread = this.get(id)
     if (isActive(thread.status) || (await this.windDown(id)) || this.settingsUpdates.has(id))
       throw new HttpError(409, 'Stop the agent before deleting this thread.')
+    // Its sub-agents go with it (stopped first; files they changed stay).
+    const delegates = [...this.store.threads.values()].filter((item) => item.delegateOf === id)
+    for (const item of delegates)
+      if (isActive(item.status) || this.runs.has(item.id)) await this.stop(item.id).catch(() => {})
+    await Promise.all(delegates.map((item) => this.windDown(item.id)))
+    for (const item of delegates) {
+      this.store.threads.delete(item.id)
+      void this.browsers.close(item.id)
+    }
     this.store.threads.delete(id)
     try {
       await this.store.save()

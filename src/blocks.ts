@@ -47,4 +47,32 @@ export type StatusBlock = {
   startedAt: string
   endedAt?: string
 }
-export type Block = ImageBlock | DiagramBlock | HtmlBlock | VideoBlock | AudioBlock | StatusBlock
+// A sub-agent's card (delegate_task): another agent (Claude or Codex) working on a task for this
+// thread, in its folder. It lives in the reply that started it and is updated in place as the
+// sub-agent works (server/delegations.ts); its full log is the sub-agent's own thread (id), a
+// thread that isn't listed in the sidebar.
+export type DelegationState = 'running' | 'waiting' | 'done' | 'failed' | 'stopped'
+export type DelegationBlock = {
+  type: 'delegation'
+  id: string
+  title: string
+  agent: 'claude' | 'codex'
+  access: 'read-only' | 'edit'
+  // Started without waiting: it reports back with a message when it finishes.
+  background: boolean
+  status: DelegationState
+  // While it works: its current step; while it waits: what it waits on.
+  step?: string
+  todos?: { done: number; total: number }
+  // Files it changed (from its Edit/Write steps), and those another running sub-agent of the
+  // same thread changed too.
+  files?: string[]
+  overlaps?: string[]
+  // Its final answer (shortened), or why it failed.
+  answer?: string
+  error?: string
+  startedAt: string
+  endedAt?: string
+}
+export type Block =
+  ImageBlock | DiagramBlock | HtmlBlock | VideoBlock | AudioBlock | StatusBlock | DelegationBlock

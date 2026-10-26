@@ -1,4 +1,4 @@
-import type { Block, StatusBlock } from './blocks'
+import type { Block, DelegationBlock, StatusBlock } from './blocks'
 import type { Activity, Message, Status, Todo } from './types'
 
 // How a thread's conversation is laid out, one turn at a time: your message, the agent's work
@@ -32,7 +32,7 @@ export type Turn = {
   blocks: Block[]
   // While the turn runs: its status cards (show_status), kept in view under the working line
   // even though the work is folded. Once it's done they're part of `blocks`, above the answer.
-  cards: StatusBlock[]
+  cards: (StatusBlock | DelegationBlock)[]
   done: boolean
   steps: number
   // The agent's to-do checklist for this turn: live while it runs, then the one saved on the
@@ -55,7 +55,7 @@ const running = (status: Status) =>
   status === 'starting' || status === 'working' || status === 'waiting'
 
 const noBlocks: Block[] = []
-const noCards: StatusBlock[] = []
+const noCards: (StatusBlock | DelegationBlock)[] = []
 
 export function buildTurns(thread: ThreadState): Turn[] {
   const turns: Turn[] = []
@@ -134,7 +134,10 @@ export function buildTurns(thread: ThreadState): Turn[] {
     if (!turn.done) {
       const cards = turn.work.flatMap((item) =>
         item.kind === 'note'
-          ? (item.message.blocks ?? []).filter((block) => block.type === 'status')
+          ? (item.message.blocks ?? []).filter(
+              (block): block is StatusBlock | DelegationBlock =>
+                block.type === 'status' || block.type === 'delegation',
+            )
           : [],
       )
       if (cards.length) turn.cards = cards

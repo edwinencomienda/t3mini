@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { isActive } from '../types'
 import { getService, HttpError } from './service'
 import { ThreadDiff } from '../thread-patch'
 import { pickProjectFolder } from './folder-picker'
@@ -369,9 +368,7 @@ export async function handleApi(request: Request) {
         })
       if (parts[1] && !parts[2] && request.method === 'POST') {
         const provider = z.enum(['codex', 'claude']).parse(parts[1])
-        const busy = service
-          .list()
-          .some((thread) => thread.provider === provider && isActive(thread.status))
+        const busy = service.busy(provider)
         return Response.json(await updateProvider(provider, busy))
       }
     }
@@ -385,7 +382,7 @@ export async function handleApi(request: Request) {
           .object({ when: z.enum(['now', 'idle', 'cancel']) })
           .parse(await request.json())
         if (!(await appUpdate()).ready) throw new HttpError(409, 'No update is waiting.')
-        const busy = () => service.list().some((thread) => isActive(thread.status))
+        const busy = () => service.busy()
         if (when === 'now') {
           restartWhenIdle(false, busy)
           await restartApp()

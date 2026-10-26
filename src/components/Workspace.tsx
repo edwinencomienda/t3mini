@@ -23,6 +23,7 @@ import {
   FolderPlus,
   FolderGit2,
   Workflow,
+  Bot,
   FileUp,
   FileDiff,
   FileText,
@@ -89,9 +90,10 @@ import { ProviderUpdates } from './ProviderUpdates'
 import { AppUpdate, type Update as AppUpdateState } from './AppUpdate'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
-import type { Block } from '../blocks'
+import type { Block, DelegationBlock } from '../blocks'
 import { ProcessIndicator } from './Processes'
 import { BrowserChip } from './BrowserChip'
+import { SubAgentChip } from './DelegationCard'
 import { BackgroundMusic } from './BackgroundMusic'
 import { ProjectAvatar, useProjectIcons } from './ProjectAvatar'
 import { applyShared, registerShared, shareSetting } from '../shared-settings'
@@ -349,11 +351,14 @@ function ReportCard({ message, report }: { message: Message; report: HelperRepor
   return (
     <div className={`report-card ${report.status}`}>
       <div className="report-head">
-        <Workflow size={13} aria-hidden />
+        {report.delegate ? <Bot size={13} aria-hidden /> : <Workflow size={13} aria-hidden />}
         <Link to="/threads/$threadId" params={{ threadId: report.threadId }}>
           {report.title}
         </Link>
-        <span className="report-status">{reportLabels[report.status]}</span>
+        <span className="report-status">
+          {report.delegate ? 'Sub-agent · ' : ''}
+          {reportLabels[report.status]}
+        </span>
         {report.branch ? (
           <span className="report-branch">
             <GitBranch size={11} aria-hidden />
@@ -511,6 +516,13 @@ const noBlocks: Block[] = []
 // What the Retry and Edit buttons under your last message do. Workspace passes a ref that never
 // changes, so MessageView's memo isn't defeated by new callbacks on every live update.
 type MessageActions = { retry: (message: Message) => void; edit: (message: Message) => void }
+// The same blocks, one by one. Live updates keep unchanged blocks as the same objects (reuse.ts),
+// so a card that changed after its turn ended (a sub-agent finishing) still re-renders.
+function sameBlocks(before: Block[] | undefined, after: Block[] | undefined) {
+  if (before === after) return true
+  if ((before?.length ?? 0) !== (after?.length ?? 0)) return false
+  return (before ?? []).every((block, index) => block === after![index])
+}
 const MessageView = memo(
   // meta: the time and copy row under the message (left off the agent's in-between notes).
   // blocks: tool content to show instead of the message's own (a finished turn gathers its
@@ -655,9 +667,8 @@ const MessageView = memo(
     before.message.unsent === after.message.unsent &&
     before.message.createdAt === after.message.createdAt &&
     (before.message.attachments?.length ?? 0) === (after.message.attachments?.length ?? 0) &&
-    (before.blocks ?? before.message.blocks)?.length ===
-      (after.blocks ?? after.message.blocks)?.length &&
-    before.leading?.length === after.leading?.length,
+    sameBlocks(before.blocks ?? before.message.blocks, after.blocks ?? after.message.blocks) &&
+    sameBlocks(before.leading, after.leading),
 )
 // What deleting threads reports: worktrees kept because they had uncommitted changes.
 type DeleteResult = { keptWorktrees?: string[] }
@@ -2819,6 +2830,25 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // Rebuilt only when the thread changes (not on every render), so the turn pieces handed to
   // memoized views keep their identity.
   const turns = useMemo(() => (thread ? buildTurns(thread) : []), [thread])
+  // This thread's sub-agents still at work, for the chip under the composer. The same array
+  // while they don't change, so the chip doesn't re-render as replies stream.
+  const liveSubAgentsJson = useMemo(
+    () =>
+      JSON.stringify(
+        (thread?.messages ?? []).flatMap((message) =>
+          (message.blocks ?? []).filter(
+            (block) =>
+              block.type === 'delegation' &&
+              (block.status === 'running' || block.status === 'waiting'),
+          ),
+        ),
+      ),
+    [thread?.messages],
+  )
+  const liveSubAgents = useMemo(
+    () => JSON.parse(liveSubAgentsJson) as DelegationBlock[],
+    [liveSubAgentsJson],
+  )
   // "Worked for 24s · done 2:00 PM" under the thread once its latest turn has ended.
   const lastTurn = turns.at(-1)
   const finished =
@@ -3436,19 +3466,28 @@ export function Workspace({ threadId }: { threadId?: string }) {
                     <span className="topbar-separator" aria-hidden>
                       /
                     </span>
-                    {/* A helper thread: its lead, one step up the breadcrumb. */}
-                    {thread.parentId ? (
+                    {/* A helper thread or a sub-agent: its lead, one step up the breadcrumb. */}
+                    {thread.parentId || thread.delegateOf ? (
                       <>
                         <Link
                           className="topbar-lead"
                           to="/threads/$threadId"
-                          params={{ threadId: thread.parentId }}
-                          title="The lead thread that started this helper"
+                          params={{ threadId: (thread.parentId ?? thread.delegateOf)! }}
+                          title={
+                            thread.delegateOf
+                              ? 'The thread this sub-agent works for'
+                              : 'The lead thread that started this helper'
+                          }
                         >
-                          <Workflow size={13} aria-hidden />
+                          {thread.delegateOf ? (
+                            <Bot size={13} aria-hidden />
+                          ) : (
+                            <Workflow size={13} aria-hidden />
+                          )}
                           <span>
-                            {threads.find((item) => item.id === thread.parentId)?.title ??
-                              'Lead thread'}
+                            {threads.find(
+                              (item) => item.id === (thread.parentId ?? thread.delegateOf),
+                            )?.title ?? 'Lead thread'}
                           </span>
                         </Link>
                         <span className="topbar-separator" aria-hidden>
@@ -4085,6 +4124,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           project={thread.cwd}
                           remote={Boolean(bootstrap?.remote)}
                         />
+                        <SubAgentChip live={liveSubAgents} />
                       </span>
                     </div>
                   ) : null}

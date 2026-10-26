@@ -41,6 +41,8 @@ export type Message = {
   endsReply?: boolean
 }
 export type HelperReport = {
+  // From a sub-agent (delegate_task) rather than a helper thread.
+  delegate?: boolean
   threadId: string
   title: string
   status: 'completed' | 'failed' | 'waiting'
@@ -142,6 +144,12 @@ export type Thread = {
   useWorktree?: boolean
   // A helper thread: the lead thread that started it (start_thread), which it reports back to.
   parentId?: string
+  // A sub-agent (delegate_task): the thread it works for. It isn't listed in the sidebar, works
+  // in its lead's folder (workIn, never its own worktree or chat folder), and its progress shows
+  // on a card in the lead (server/delegations.ts).
+  delegateOf?: string
+  workIn?: string
+  delegate?: { access: 'read-only' | 'edit'; background: boolean }
   // Lead threads: turns started by helper reports since your last message (capped, so reports
   // and replies can't loop forever).
   autoTurns?: number

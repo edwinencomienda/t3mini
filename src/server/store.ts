@@ -6,6 +6,7 @@ import type { Project, Thread, UiSettings } from '../types'
 import { readUiSettings } from './ui-settings'
 import { isActive } from '../types'
 import { legacyPermission } from '../agent-settings'
+import { stopLeftoverCards } from './delegations'
 
 export class ThreadStore {
   threads = new Map<string, Thread>()
@@ -32,6 +33,8 @@ export class ThreadStore {
             activity.status === 'running' ? { ...activity, status: 'failed' } : activity,
           )
         }
+        // Sub-agent cards still marked running: nothing survived the restart.
+        stopLeftoverCards(thread, new Date().toISOString())
         this.threads.set(thread.id, thread)
       }
     } catch (error) {

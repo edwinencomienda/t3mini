@@ -9,6 +9,7 @@ const context = (showStatusCard: ToolContext['showStatus']): ToolContext => ({
   saveImage: vi.fn(),
   processes: {} as never,
   threads: {} as never,
+  delegates: {} as never,
   browser: {} as never,
   saveHtml: async () => ({ id: 'x.html' }),
   renderHtml: vi.fn(),

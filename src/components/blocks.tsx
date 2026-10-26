@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { StatusCard } from './StatusCard'
+import { DelegationCard } from './DelegationCard'
 import { useApiBase } from '../hub'
 import { ExternalLink, Music } from 'lucide-react'
 import type { AudioBlock, Block, ImageBlock, VideoBlock } from '../blocks'
@@ -166,6 +167,10 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
             return <AudioView key={block.id} block={block} />
           case 'status':
             return <StatusCard key={`status:${block.id}`} block={block} />
+          case 'delegation':
+            return (
+              <DelegationCard key={`delegation:${block.id}:${block.startedAt}`} block={block} />
+            )
           default:
             // A block type this version doesn't know yet: skip it rather than break the chat.
             return <span key={index} hidden />

@@ -39,6 +39,25 @@ export type ThreadControl = {
   stop: (reference: string) => Promise<string>
   remove: (reference: string) => Promise<string>
 }
+// Sub-agents (delegate_task): another agent working on a task for this thread, in its folder.
+// Each refuses with a ToolError. See ../delegations.ts.
+export type DelegateInput = {
+  task: string
+  title?: string
+  agent?: 'claude' | 'codex'
+  wait?: boolean
+  access?: 'read-only' | 'edit'
+  context?: 'none' | 'thread'
+  model?: string
+  effort?: string
+  continue?: string
+}
+export type DelegateControl = {
+  // Waiting: resolves with the sub-agent's result when it finishes. Background: right away.
+  start: (input: DelegateInput) => Promise<string>
+  list: () => string
+  stop: (reference: string) => Promise<string>
+}
 // What step summaries may look up while the call is still in progress.
 export type StepHints = { refName?: (ref: string) => string | undefined }
 
@@ -84,6 +103,8 @@ export type ToolContext = {
   rename: (title: string) => Promise<string>
   // Helper threads this thread started (orchestration tools in threads.ts).
   threads: ThreadControl
+  // Sub-agents working for this thread (delegate.ts).
+  delegates: DelegateControl
   // This thread's browser (browser_* tools).
   browser: ThreadBrowser
   // Shows questions on the question card and waits for the answers (question → answer), or

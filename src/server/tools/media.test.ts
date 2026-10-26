@@ -53,6 +53,7 @@ const setup = async () => {
     ask: vi.fn(),
     processes: {} as never,
     threads: {} as never,
+    delegates: {} as never,
     browser: {} as never,
     rename: vi.fn(),
   }

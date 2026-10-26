@@ -28,6 +28,7 @@ const context = (uploads: Uploads, render: ToolContext['renderHtml'] = async () 
     saveImage: vi.fn(),
     processes: {} as never,
     threads: {} as never,
+    delegates: {} as never,
     browser: {} as never,
     saveHtml: (html) => uploads.saveHtml(html),
     renderHtml: vi.fn(render),
