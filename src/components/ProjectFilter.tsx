@@ -23,18 +23,25 @@ export function ProjectFilter({
   projectIcons: boolean
   onChange: (path: string) => void
 }) {
-  const names = paths.map(projectName).join('\n')
+  // Most recently used first (your latest message in any of its threads), like the New thread
+  // list; the sidebar's groups keep their fixed order, but here you're looking for one.
+  const lastActive = new Map(projects.map((project) => [project.path, project.lastActiveAt]))
+  const recent = [...paths].sort((a, b) =>
+    (lastActive.get(b) ?? '').localeCompare(lastActive.get(a) ?? ''),
+  )
+  const order = recent.join('\n')
+  const names = recent.map(projectName).join('\n')
   const items = useMemo(
     () =>
       Combobox.createItems(
         [
           { path: '', name: 'All projects' },
-          ...paths.map((path) => ({ path, name: projectName(path) })),
+          ...recent.map((path) => ({ path, name: projectName(path) })),
         ] satisfies Choice[],
         { getValue: (choice) => choice.path, getLabel: (choice) => choice.name },
       ),
-    // Rebuilt only when the projects or their names change, not on every sidebar render.
-    [paths.join('\n'), names],
+    // Rebuilt only when the projects, their order, or their names change, not on every render.
+    [order, names],
   )
   const icon = (path: string) =>
     !path ? (

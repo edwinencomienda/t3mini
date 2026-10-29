@@ -65,7 +65,7 @@ import {
   providerNames,
   SettingsMenu,
 } from './AgentSettingsControls'
-import { VSCodeIcon } from './ProviderIcon'
+import { ProviderIcon, VSCodeIcon } from './ProviderIcon'
 import { defaultPermission, type AgentSettings } from '../agent-settings'
 import { loadPreferences, rememberChoice, settingsFor } from '../preferences'
 import {
@@ -448,6 +448,12 @@ const ThreadRow = memo(function ThreadRow({
         {time}
       </span>
     )
+  const providerName = item.provider === 'claude' ? 'Claude Code' : 'Codex'
+  const title = (
+    <span className="thread-title-line">
+      <span className="thread-title">{item.title}</span>
+    </span>
+  )
   return (
     // The ⋮ button sits beside the link (a button can't live inside a link).
     <div className="thread-row-wrap">
@@ -493,18 +499,21 @@ const ThreadRow = memo(function ThreadRow({
               <span>{projectName}</span>
               {item.machine ? <MachineTag name={item.machine} /> : null}
             </span>
-            <span className="thread-title">{item.title}</span>
+            {title}
             {snippet ? <span className="thread-snippet">{snippet}</span> : null}
           </span>
         ) : snippet ? (
           <span className="thread-lines">
-            <span className="thread-title">{item.title}</span>
+            {title}
             <span className="thread-snippet">{snippet}</span>
           </span>
         ) : (
-          <span className="thread-title">{item.title}</span>
+          title
         )}
         {status}
+        <span className="thread-provider" aria-label={providerName} title={providerName}>
+          <ProviderIcon provider={item.provider} size={13} />
+        </span>
       </ThreadPreviewTrigger>
       <button
         type="button"

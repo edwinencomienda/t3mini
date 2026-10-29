@@ -415,6 +415,17 @@ kbd {
 .thread-row[aria-disabled='true'] {
   cursor: progress;
 }
+.thread-title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+.thread-provider {
+  flex-shrink: 0;
+  color: var(--faint);
+}
 .thread-title {
   flex: 1;
   min-width: 0;
@@ -424,6 +435,8 @@ kbd {
 }
 .thread-time {
   flex-shrink: 0;
+  min-width: 1.5rem;
+  text-align: right;
   font-size: 11px;
   color: var(--faint);
   font-variant-numeric: tabular-nums;
@@ -2977,11 +2990,11 @@ body.resizing {
   flex: 1;
   min-width: 0;
 }
-.thread-lines .thread-title {
+.thread-lines .thread-title-line {
   flex: none;
   margin-top: 0.3rem;
 }
-.thread-lines .thread-title:first-child {
+.thread-lines .thread-title-line:first-child {
   margin-top: 0;
 }
 /* Searching: where the query was found inside the conversation, under the title. */
@@ -3035,6 +3048,7 @@ body.resizing {
 }
 /* Two-line rows (project, then title) grow to fit, and keep the time on the first line. */
 .thread-row:has(.thread-lines) {
+  position: relative;
   align-items: flex-start;
   height: auto;
   padding-top: 0.5rem;
@@ -3048,6 +3062,15 @@ body.resizing {
 }
 .thread-row:has(.thread-lines) > .thread-time {
   margin-top: 0.1rem;
+}
+.thread-row:has(.thread-lines) > .thread-provider {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.55rem;
+}
+/* Search snippets add a line below the title; keep the provider beside the title. */
+.thread-row:has(.thread-snippet) > .thread-provider {
+  bottom: calc(0.55rem + 0.15rem + 12px * 1.35);
 }
 
 /* Picker option badges (e.g. Codex service tier) */
@@ -3783,7 +3806,7 @@ body.resizing {
 .thread-more {
   position: absolute;
   top: 50%;
-  right: 0.25rem;
+  right: 1.55rem;
   display: grid;
   place-items: center;
   width: 1.5rem;
@@ -3792,6 +3815,12 @@ body.resizing {
   color: var(--muted-foreground);
   transform: translateY(-50%);
   opacity: 0;
+}
+/* In taller rows the time and menu sit on top; the provider is beside the title below. */
+.thread-row-wrap:has(.thread-lines) .thread-more {
+  top: 0.25rem;
+  right: 0.25rem;
+  transform: none;
 }
 .thread-more:hover,
 .thread-more[aria-expanded='true'] {
@@ -3818,9 +3847,7 @@ body.resizing {
   /* Touch screens hide the time for the ⋮ button, but keep the status in view beside it. */
   .thread-row-wrap .thread-time:is(.working, .waiting, .unread) {
     visibility: visible;
-  }
-  .thread-row-wrap .thread-row {
-    padding-right: 2rem;
+    margin-right: 1.5rem;
   }
 }
 
