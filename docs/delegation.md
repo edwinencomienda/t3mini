@@ -35,12 +35,13 @@ Ask for it in plain words: "Use a sub-agent to research how the API paginates", 
 
 ## Sub-agents and helper threads
 
-|          | Sub-agent (`delegate_task`)            | Helper thread (`start_thread`, [orchestration.md](orchestration.md)) |
-| -------- | -------------------------------------- | -------------------------------------------------------------------- |
-| Lives    | Inside its thread, as a card           | Its own thread in the sidebar                                        |
-| Folder   | The **same folder** as its thread      | Its **own worktree** and branch                                      |
-| Result   | Tool result (waiting) or a report      | A report                                                             |
-| Best for | Work that should land in this checkout | Parallel work you'll merge later                                     |
+|          | Sub-agent (`delegate_task`)               | Helper thread (`start_thread`, [orchestration.md](orchestration.md)) |
+| -------- | ----------------------------------------- | -------------------------------------------------------------------- |
+| Lives    | Inside its thread, as a card              | Its own thread in the sidebar                                        |
+| Folder   | The **same folder** as its thread         | Its **own worktree** and branch                                      |
+| Result   | Tool result (waiting) or a report         | A report                                                             |
+| Best for | Work that should land in this checkout    | Parallel work you'll merge later                                     |
+| Used     | By default, whenever an agent splits work | Only when you ask for threads, worktrees, or branches                |
 
 ## Shared folder
 
@@ -49,7 +50,7 @@ Sub-agents and their thread all work in one folder, so:
 - Each sub-agent's brief says other agents may be editing too: change only what its task needs, and don't revert or reformat others' changes. A new one is told which files the running ones have changed.
 - **Changed files** come from its Edit/Write steps and, in a git project, from comparing `git status` (and each changed file's modified time) at its start and its end, so files changed by shell commands count too. When it may not have been alone (in the background, or with other sub-agents running), only files its own steps mention are credited to it.
 - A file two running sub-agents both changed is flagged on the card ("Also changed by another sub-agent") and in the result, so the thread's agent can check for conflicts.
-- Work that must not touch the same files belongs in helper threads, which get their own worktrees.
+- Parts that would edit the same files run one after another. If you want them fully isolated, ask for helper threads, which get their own worktrees.
 
 ## Limits
 

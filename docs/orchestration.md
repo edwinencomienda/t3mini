@@ -2,9 +2,11 @@
 
 One thread (the **lead**) can start other threads (**helpers**) to work in parallel, and the helpers report back to it when they finish. Claude and Codex can both lead, and a lead can hand work to either. For work that should happen in the thread's own folder, without a separate thread and worktree, see sub-agents ([delegation.md](delegation.md)).
 
+**Agents only start helper threads when you ask for them** (threads, helper threads, worktrees, or separate branches). When an agent decides on its own to split up work or run parts in parallel, it uses sub-agents (`delegate_task`), which are lighter: no new thread, worktree, or branch to merge. The tool descriptions and t3 mini's tool note (`src/server/tools/threads.ts`, `delegate.ts`, `index.ts`) say so.
+
 ## Using it
 
-Ask a thread to split the work, for example: "Start two helpers: one adds dark mode, one fixes the login bug. Tell me when both are done." The lead uses its tools:
+Ask a thread for helper threads, for example: "Start two helper threads: one adds dark mode, one fixes the login bug. Tell me when both are done." The lead uses its tools:
 
 | Tool             | What it does                                                                                                             | Asks first?             |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------- |

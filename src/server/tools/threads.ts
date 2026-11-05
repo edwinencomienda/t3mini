@@ -17,14 +17,16 @@ export const startThread = defineTool({
   name: 'start_thread',
   label: 'Start thread',
   description:
-    'Start a helper thread: another agent working on a task in parallel, in the same project. ' +
-    'Use it when the user asks you to split work across agents, run tasks in parallel, or hand ' +
-    'something to Claude or Codex. Each helper is a normal t3 mini thread the user can open, and ' +
-    'works in its own git worktree (its own checkout and t3m/… branch; in a project that isn’t a ' +
-    'git repository, the project folder), so helpers never overwrite each other or the user’s folder. Write the task so it stands ' +
-    'alone: the helper can’t see this conversation. It runs in the background; when it finishes, ' +
-    'its final answer (and its branch) arrives here as a message, so end your turn instead of ' +
-    'waiting or polling. Helpers can’t start helpers of their own. At most 5 run at once.',
+    'Start a helper thread: a separate t3 mini thread in the sidebar, with its own git worktree ' +
+    'and t3m/… branch (in a project that isn’t a git repository, the project folder). Only use ' +
+    'it when the user explicitly asks for threads, helper threads, worktrees, or separate ' +
+    'branches. To split off work, run parts in parallel, research, review, test, or hand ' +
+    'something to Claude or Codex, use delegate_task instead (sub-agents): it is the default ' +
+    'and is lighter, with no new thread, worktree, or branch to merge. Write the task so it ' +
+    'stands alone: the helper can’t see this conversation. It runs in the background; when it ' +
+    'finishes, its final answer (and its branch) arrives here as a message, so end your turn ' +
+    'instead of waiting or polling. Helpers can’t start helpers of their own. At most 5 run ' +
+    'at once.',
   input: {
     task: z
       .string()

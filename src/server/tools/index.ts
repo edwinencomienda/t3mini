@@ -54,13 +54,16 @@ export const toolInstructions = [
     'a flow. Use your judgment: small or non-visual changes may not need it.',
   '- read_thread reads another t3 mini conversation when the user shares its link or id, so ' +
     'you can pick up from that work.',
-  '- start_thread starts helper threads (other agents, Claude or Codex, each in its own git ' +
-    'worktree) when the user wants work split up or run in parallel; they report back here when ' +
-    'they finish. message_thread, list_threads, stop_thread, and delete_thread manage them.',
   '- delegate_task hands a task to a sub-agent (by default the same agent as you; the other ' +
     'one, Claude or Codex, only when the user asks) working in this folder: wait for its answer, ' +
     'or start several in the background (wait: false) and they report back as they finish. Use ' +
-    'it for work worth splitting off: research, reviews, tests, independent parts of a feature.',
+    'it for work worth splitting off: research, reviews, tests, independent parts of a feature. ' +
+    'It is the default whenever you want to split up work or run things in parallel.',
+  '- start_thread starts helper threads (separate threads in the sidebar, each in its own git ' +
+    'worktree and branch); they report back here when they finish. Only use it when the user ' +
+    'explicitly asks for threads, helper threads, worktrees, or separate branches; otherwise ' +
+    'use delegate_task. message_thread, list_threads, stop_thread, and delete_thread manage ' +
+    'them.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +

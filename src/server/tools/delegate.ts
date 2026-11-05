@@ -19,17 +19,19 @@ export const delegateTask = defineTool({
   label: 'Delegate',
   description:
     'Hand a task to a sub-agent: another agent that works in this same folder, with its own ' +
-    'context, and reports its result back to you. Use it for work worth splitting off: ' +
+    'context, and reports its result back to you. This is the default way to split off work ' +
+    'or run things in parallel; prefer it over start_thread, which is only for when the user ' +
+    'explicitly asks for separate threads or worktrees. Use it for work worth splitting off: ' +
     'research, a review, tests, a self-contained part of a feature, or several independent ' +
     'parts at once (start each with wait: false, then they report back as they finish). ' +
     'By default the sub-agent is the same agent as you; set agent to the other one (Claude or ' +
     'Codex) only when the user asks for it. wait: true (default) returns its answer here; ' +
     'wait: false returns at once and its result arrives as a message later, so keep working or ' +
-    'end your turn. Sub-agents share this folder: give parallel ones separate files or areas ' +
-    '(for work that must not touch the same files, use start_thread, which gets its own ' +
-    'worktree). Write the task so it stands alone; context: "thread" (default) also gives it a ' +
-    'recap of this conversation. To follow up with the same sub-agent (it keeps its memory), ' +
-    'pass continue with its id. Sub-agents can’t start sub-agents. At most 5 run at once.',
+    'end your turn. Sub-agents share this folder: give parallel ones separate files or areas, ' +
+    'and run parts that would edit the same files one after another. Write the task so it ' +
+    'stands alone; context: "thread" (default) also gives it a recap of this conversation. To ' +
+    'follow up with the same sub-agent (it keeps its memory), pass continue with its id. ' +
+    'Sub-agents can’t start sub-agents. At most 5 run at once.',
   input: {
     task: z.string().trim().min(1).max(20_000).describe('What the sub-agent should do.'),
     title: z
