@@ -87,6 +87,9 @@ final class LiveDictation {
         }
         self.engine = engine
         active = true
+        SoundEffects.recording = true
+        // Like the web: two soft rising notes when it starts listening.
+        SoundEffects.playCue(start: true)
         started = Date()
         elapsed = 0
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -140,6 +143,9 @@ final class LiveDictation {
         active = false
         level = 0
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        SoundEffects.recording = false
+        // And falling ones when it stops.
+        SoundEffects.playCue(start: false)
     }
 
     private func close() {

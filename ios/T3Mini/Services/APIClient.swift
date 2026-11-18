@@ -108,6 +108,17 @@ final class APIClient: Sendable {
     }
 
     /// A saved image (an attachment, or one a tool showed), by its generated id.
+    /// A saved video or sound (show_video, play_audio: GET /api/media/:id), downloaded with this
+    /// phone's session to a temporary file. The caller moves it somewhere to keep.
+    func downloadMedia(_ id: String) async throws -> URL {
+        let url = URL(string: "api/media/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL
+        let (file, response) = try await session.download(for: authorized(URLRequest(url: url)))
+        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
+        if http.statusCode == 401 { throw APIError.unpaired }
+        guard (200..<300).contains(http.statusCode) else { throw APIError.badResponse }
+        return file
+    }
+
     func image(_ id: String) async throws -> Data {
         try await imageAt(URL(string: "api/uploads/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL)
     }
@@ -194,6 +205,10 @@ final class APIClient: Sendable {
         struct Result: Decodable { let pullRequest: PullRequest? }
         let result: Result = try await call("threads/\(id.urlPathEscaped)/pull-request")
         return result.pullRequest
+    }
+
+    func diff(_ id: String) async throws -> DiffResult {
+        try await call("threads/\(id.urlPathEscaped)/diff")
     }
 
     func git(_ id: String) async throws -> GitInfo {

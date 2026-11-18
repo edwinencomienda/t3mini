@@ -42,6 +42,10 @@ struct MarkdownText: View, Equatable {
                 .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 3) }
         case .code(let code, let language):
             CodeBlock(code: code, language: language)
+        case .diagram(let source):
+            // Like the web: drawn as a diagram card; if it isn't valid Mermaid, the card shows
+            // the problem and the code.
+            DiagramCard(source: source, title: nil)
         case .table(let table):
             MarkdownTable(table: table)
         case .rule:
@@ -203,6 +207,8 @@ enum MarkdownBlock: Equatable {
     case quote(String)
     /// The code and its fence's language ("swift" in ```swift), or "".
     case code(String, language: String)
+    /// A finished ```mermaid block: drawn as a diagram (an unclosed one, still streaming, stays code).
+    case diagram(String)
     case table(Table)
     case rule
 
@@ -235,7 +241,9 @@ enum MarkdownBlock: Equatable {
             index += 1
             if line.hasPrefix("```") {
                 if let lines = code {
-                    blocks.append(.code(lines.joined(separator: "\n"), language: language))
+                    let body = lines.joined(separator: "\n")
+                    blocks.append(language.lowercased() == "mermaid" && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  ? .diagram(body) : .code(body, language: language))
                     code = nil
                 } else {
                     flush()

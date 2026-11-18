@@ -78,6 +78,9 @@ struct NewThreadSheet: View {
 
 struct SettingsSheet: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(SoundEffects.finishKey) private var finishSound = true
+    @AppStorage(SoundEffects.finishNameKey) private var finishName = SoundEffects.Finish.chime.rawValue
+    @AppStorage(SoundEffects.dictationKey) private var dictationSounds = true
     @Environment(\.dismiss) private var dismiss
     @State private var confirming = false
 
@@ -109,6 +112,23 @@ struct SettingsSheet: View {
                     default:
                         Text(model.pushProblem ?? "Get a notification when a thread finishes, fails, or needs you. It says only what happened; the thread's name shows when you open it.")
                     }
+                }
+                Section {
+                    Toggle("When an agent finishes", isOn: $finishSound)
+                    if finishSound {
+                        Picker("Sound", selection: $finishName) {
+                            ForEach(SoundEffects.Finish.allCases) { Text($0.label).tag($0.rawValue) }
+                        }
+                        .onChange(of: finishName) { _, name in
+                            SoundEffects.playFinish(SoundEffects.Finish(rawValue: name), force: true)
+                        }
+                    }
+                    Toggle("Dictation sounds", isOn: $dictationSounds)
+                        .onChange(of: dictationSounds) { _, on in if on { SoundEffects.playCue(start: true, force: true) } }
+                } header: {
+                    Text("Sounds")
+                } footer: {
+                    Text("The same sounds as on your computer. They follow the silent switch.")
                 }
                 Section {
                     Button("Disconnect this iPhone", role: .destructive) { confirming = true }

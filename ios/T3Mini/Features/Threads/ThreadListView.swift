@@ -113,6 +113,12 @@ struct ThreadListView: View {
             showingSettings = false
             if path != [id] { path = [id] }
         }
+        // A sub-agent's or helper's thread, opened from a card: on top of the current thread.
+        .onChange(of: model.pushThread) { _, id in
+            guard let id else { return }
+            model.pushThread = nil
+            if path.last != id { path.append(id) }
+        }
         #if DEBUG
         // Debug builds only: T3MINI_REOPEN=<thread id> opens it, goes back, and opens it again
         // (for checking where a reopened thread lands, in the simulator).
@@ -145,6 +151,7 @@ struct ThreadListView: View {
 
     private var filtered: [ThreadSummary] {
         let query = search.trimmingCharacters(in: .whitespaces)
+        guard onlyProject != nil || !query.isEmpty else { return model.listedThreads }
         return model.listedThreads.filter { thread in
             (onlyProject == nil || thread.cwd == onlyProject)
                 && (query.isEmpty || thread.title.localizedCaseInsensitiveContains(query)
@@ -159,31 +166,48 @@ struct ThreadListView: View {
     }
 
     @ViewBuilder private func rows(_ section: ThreadSection, now: Date) -> some View {
-        // One lookup table per redraw instead of a search through every project for every row.
-        let projects = Dictionary(model.projects.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        // Lookups the model keeps up to date (not rebuilt on every redraw).
+        let projects = model.projectsByPath
+        let helpers = model.helpersByLead
         ForEach(section.threads) { thread in
-            let project = projects[thread.cwd]
-            // A button with its own pressed look (a soft rounded highlight) instead of the
-            // list's full-width grey flash.
-            Button { path.append(thread.id) } label: {
+            row(thread, project: projects[thread.cwd], showProject: section.showProject, nested: false, now: now)
+            // Helper threads (start_thread) under their lead, like the web sidebar.
+            ForEach(helpers[thread.id] ?? []) { helper in
+                row(helper, project: projects[helper.cwd], showProject: false, nested: true, now: now)
+            }
+        }
+    }
+
+    private func row(_ thread: ThreadSummary, project: ProjectSummary?, showProject: Bool, nested: Bool, now: Date) -> some View {
+        // A button with its own pressed look (a soft rounded highlight) instead of the list's
+        // full-width grey flash.
+        Button { path.append(thread.id) } label: {
+            HStack(alignment: .center, spacing: 8) {
+                if nested {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Helper thread")
+                }
                 ThreadRow(thread: thread,
                           projectName: project?.displayName ?? (thread.cwd as NSString).lastPathComponent,
                           project: project, avatar: project.flatMap { model.cachedAvatar($0) },
-                          showProject: section.showProject, now: now)
+                          showProject: showProject, now: now)
                     .equatable()
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 11)
-                    .contentShape(.rect(cornerRadius: 16))
-                    // Pressed and held: the row lifts as a rounded card.
-                    .contentShape(.contextMenuPreview, .rect(cornerRadius: 16))
             }
-            .buttonStyle(ThreadRowButtonStyle())
-            .contextMenu { actions(for: thread) }
-            // Space instead of lines between rows: easier to read, calmer to look at.
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 6))
+            .padding(.leading, nested ? 26 : 12)
+            .padding(.trailing, 12)
+            .padding(.vertical, nested ? 8 : 11)
+            .contentShape(.rect(cornerRadius: 16))
+            // Pressed and held: the row lifts as a rounded card.
+            .contentShape(.contextMenuPreview, .rect(cornerRadius: 16))
         }
+        .buttonStyle(ThreadRowButtonStyle())
+        .contextMenu { actions(for: thread) }
+        // Space instead of lines between rows: easier to read, calmer to look at.
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 6))
     }
 }
 
@@ -268,10 +292,12 @@ struct ThreadSection: Identifiable {
         switch groupBy {
         case "project":
             let byPath = Dictionary(grouping: threads, by: \.cwd)
+            let byProject = Dictionary(projects.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             let order = projects.sorted { ($0.addedAt ?? "") < ($1.addedAt ?? "") }.map(\.path)
-            let paths = order.filter { byPath[$0] != nil } + byPath.keys.filter { !order.contains($0) }.sorted()
+            let known = Set(order)
+            let paths = order.filter { byPath[$0] != nil } + byPath.keys.filter { !known.contains($0) }.sorted()
             return paths.map { path in
-                let project = projects.first { $0.path == path }
+                let project = byProject[path]
                 return ThreadSection(id: "p:" + path,
                                      header: .project(project, name: project?.displayName ?? (path as NSString).lastPathComponent),
                                      threads: byPath[path] ?? [])

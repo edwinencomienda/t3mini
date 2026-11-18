@@ -27,6 +27,14 @@ struct Turn: Identifiable, Hashable {
     var done = true
     var startedAt: String?
     var endedAt: String?
+    /// The turn's to-do checklist: live while it runs, saved with your message once it ended.
+    var todos: [Todo]?
+    /// While it runs: status and sub-agent cards from its notes, kept in view while the work
+    /// is folded (they're the progress you're following).
+    var cards: [Block] = []
+
+    /// Items the checklist ended with undone (0 without one).
+    var unfinished: Int { todos?.filter { $0.status != "completed" }.count ?? 0 }
     /// How the latest run ended, when it ended early (stopped or failed): "Stopped after 12s".
     var outcome: ThreadStatus?
 
@@ -61,6 +69,8 @@ struct Turn: Identifiable, Hashable {
         let notes = work.count - steps
         if steps > 0 { parts.append("\(steps) step\(steps == 1 ? "" : "s")") }
         else if notes > 0 { parts.append("\(notes) message\(notes == 1 ? "" : "s")") }
+        // Ended with its checklist unfinished: "2 of 6 left".
+        if unfinished > 0, let total = todos?.count { parts.append("\(unfinished) of \(total) left") }
         return parts.joined(separator: " · ")
     }
 
@@ -86,7 +96,7 @@ struct Turn: Identifiable, Hashable {
     }
 
     static func build(messages: [Message], activities: [Activity], running: Bool, completedAt: String?,
-                      status: ThreadStatus = .completed) -> [Turn] {
+                      status: ThreadStatus = .completed, todos threadTodos: [Todo]? = nil) -> [Turn] {
         var turns: [Turn] = []
         for message in messages {
             if message.role == .user && message.report == nil || turns.isEmpty {
@@ -108,9 +118,29 @@ struct Turn: Identifiable, Hashable {
             }
             turns[last].work = work.sorted { time(of: $0) < time(of: $1) }
         }
+        // The checklist, like the web (src/timeline.ts): the live one for the current run (only
+        // if this run wrote one), otherwise the one saved with the turn's message.
+        let wroteTodos = activities.contains { $0.todo == true }
+        for index in turns.indices {
+            let isLast = index == turns.count - 1
+            let saved = isLast && running ? nil : turns[index].user?.todos
+            let live = isLast && wroteTodos ? threadTodos : nil
+            if let saved, !saved.isEmpty { turns[index].todos = saved }
+            else if let live, !live.isEmpty { turns[index].todos = live }
+        }
         for index in turns.indices {
             let isLast = index == turns.count - 1
             turns[index].done = !(isLast && running)
+            if !turns[index].done {
+                turns[index].cards = turns[index].work.flatMap { item -> [Block] in
+                    guard case .note(let message) = item else { return [] }
+                    return (message.blocks ?? []).filter {
+                        if case .status = $0 { return true }
+                        if case .delegation = $0 { return true }
+                        return false
+                    }
+                }
+            }
             guard turns[index].done else { continue }
             // The final answer: the last note with something to read.
             if let answerIndex = turns[index].work.lastIndex(where: {

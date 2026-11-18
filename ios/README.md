@@ -20,12 +20,11 @@ the message box, and New thread; switching agents mid-thread too), the branch in
 sending photos (+, resized to JPEG ≤ 2048 px like the web app), replies grouped into turns like
 the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line, with the web app's animated Claude/Codex characters: thinking or working while it runs, celebrating for a few seconds when it finishes; the same GIFs from `public/mascots`, off with Reduce Motion or Settings → Appearance → Animations on the computer), a
 copy button and the time under each message, and live dictation (the mic: words appear in the
-message box as you talk, the words still being worked out muted; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
+message box as you talk, the words still being worked out muted, with the web's soft rising and falling notes when it starts and stops; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
 `encoding=linear16&sample_rate=16000`, relayed to the computer's Deepgram key; shown only when
 it's set up), and Mermaid diagrams (`show_diagram`, drawn on the phone; tap for full screen
 with pinch to zoom). Images open full screen with smooth pinch, pan, and double-tap zoom.
-Not yet: video and sound (they say "open on your computer"),
-diffs, editing messages, the camera.
+Agent tools as on the web: the to-do checklist (`update_checklist`; live while the agent works, and kept in view when a turn ends with items left, "2 of 6 left" in its fold line), full status cards (`show_status`: kind, stages, commits, error, link, duration), sub-agent cards (`delegate_task`: agent, access, step, to-do progress, files changed and overlaps, answer or error, and Open its thread), helper threads nested under their lead in the list, video and sound (`show_video`, `play_audio`: downloaded with the session from `/api/media/:id`, played in iOS's own player), and ` ```mermaid ` blocks in replies drawn as diagrams once the block is closed. The web app's sounds, synthesized the same way (`SoundEffects.swift`, no audio files): a chime, marimba, or pop when an agent finishes while the app is open (then the notification banner stays silent, so it isn't played twice), and the dictation notes; Settings → Sounds turns each off and picks the finish sound, and they follow the silent switch. The project's uncommitted changes from ⋯ → Changes (`GET /api/threads/:id/diff`, like the web's Changes panel): files with + / − counts, tap one for its colored lines. Not yet: the agent browser's live preview, running processes, editing messages, the camera.
 
 ## Connect it
 
@@ -45,7 +44,7 @@ reply that changed is parsed again; a turn that didn't change is skipped (`TurnV
 `Equatable`); images are shrunk to screen size straight from the file (`ImageDecode`, ImageIO
 thumbnails) and kept decoded, with the full image loaded only in the viewer; the full-screen
 viewer zooms with UIKit's scroll view (`ZoomableImage`), not per-frame SwiftUI redraws;
-diagrams are drawn once by one hidden web view (`DiagramRenderer`) and remembered; and only
+diagrams are drawn once by one hidden web view (`DiagramRenderer`) and remembered; the thread list's sorting, helper grouping, and project lookups are kept by the model and rebuilt only when threads or projects change (not on every redraw), and parsed timestamps are remembered (`RelativeTime.parse`); and only
 the latest 20 turns are drawn (Show earlier messages adds more). Opening a thread, the conversation stays hidden until it's at its end (`land()` in `ChatView.swift`: scroll to the bottom and show it the moment it's within 2 points of the end, usually the first frame; a second at most), the way T3 Code's
 mobile feed does it, so you never see it lay out and scroll down. After that it stays pinned to
 the end while images, diagrams, and replies grow, until you scroll up.

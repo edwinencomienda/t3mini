@@ -14,8 +14,27 @@ final class AppModel {
     }
 
     private(set) var connection: Connection?
-    private(set) var threads: [ThreadSummary] = []
-    private(set) var projects: [ProjectSummary] = []
+    private(set) var threads: [ThreadSummary] = [] {
+        didSet { indexThreads() }
+    }
+    private(set) var projects: [ProjectSummary] = [] {
+        didSet { projectsByPath = Dictionary(projects.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+    /// Kept up to date with the lists above, so the thread list (redrawn on every live update,
+    /// even mid-scroll) doesn't sort, search, or group again each time.
+    private(set) var listedThreads: [ThreadSummary] = []
+    /// Helper threads by their lead, newest first.
+    private(set) var helpersByLead: [String: [ThreadSummary]] = [:]
+    private(set) var projectsByPath: [String: ProjectSummary] = [:]
+
+    private func indexThreads() {
+        let newest: (ThreadSummary, ThreadSummary) -> Bool = {
+            ($0.lastMessageAt ?? $0.updatedAt) > ($1.lastMessageAt ?? $1.updatedAt)
+        }
+        listedThreads = threads.filter { $0.parentId == nil }.sorted(by: newest)
+        helpersByLead = Dictionary(grouping: threads.filter { $0.parentId != nil }, by: { $0.parentId! })
+            .mapValues { $0.sorted(by: newest) }
+    }
     private(set) var ui: UiSettings?
     private(set) var link: LinkState = .connecting
     /// The thread on screen, whole, kept current by patches.
@@ -36,6 +55,34 @@ final class AppModel {
 
     /// A thread to open from outside the list (debug launch), picked up by the list's navigation.
     var pendingOpen: String?
+    /// A thread to open on top of the current one (a sub-agent's or helper's thread); back
+    /// returns to where you were.
+    var pushThread: String?
+    /// Videos and sounds already downloaded this session, by id.
+    private var mediaFiles: [String: URL] = [:]
+
+    /// A video or sound as a local file AVPlayer can play: downloaded once with this phone's
+    /// session (the player can't send it), kept in Caches for the session. Ids are the
+    /// server's (a uuid and the file type), checked before use as a file name.
+    func mediaFile(_ id: String) async throws -> URL {
+        if let file = mediaFiles[id], FileManager.default.fileExists(atPath: file.path) { return file }
+        guard let client else { throw APIError.unpaired }
+        let ext = (id as NSString).pathExtension.lowercased()
+        guard !ext.isEmpty, ext.count <= 5, ext.allSatisfy({ $0.isLetter || $0.isNumber }) else { throw APIError.badResponse }
+        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "t3mini-media", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = folder.appending(path: DiskCache.hash(id) + "." + ext)
+        if !FileManager.default.fileExists(atPath: target.path) {
+            var temp: URL?
+            try await run { temp = try await client.downloadMedia(id) }
+            guard let temp else { throw APIError.badResponse }
+            try? FileManager.default.removeItem(at: target)
+            try FileManager.default.moveItem(at: temp, to: target)
+        }
+        mediaFiles[id] = target
+        return target
+    }
 
     private var client: APIClient?
     private var streamTask: Task<Void, Never>?
@@ -48,18 +95,13 @@ final class AppModel {
     var isPaired: Bool { connection != nil }
 
     /// Threads for the list: newest activity first, sub-threads hidden like the sidebar.
-    var listedThreads: [ThreadSummary] {
-        threads
-            .filter { $0.parentId == nil }
-            .sorted { ($0.lastMessageAt ?? $0.updatedAt) > ($1.lastMessageAt ?? $1.updatedAt) }
-    }
 
     func project(for thread: ThreadSummary) -> ProjectSummary? {
         projects.first { $0.path == thread.cwd }
     }
 
     func projectName(for cwd: String) -> String {
-        projects.first { $0.path == cwd }?.displayName ?? (cwd as NSString).lastPathComponent
+        projectsByPath[cwd]?.displayName ?? (cwd as NSString).lastPathComponent
     }
 
     // MARK: Images
@@ -206,7 +248,7 @@ final class AppModel {
     }
 
     func project(at path: String) -> ProjectSummary? {
-        projects.first { $0.path == path }
+        projectsByPath[path]
     }
 
     // MARK: Opened threads
@@ -372,6 +414,7 @@ final class AppModel {
         do {
             let bootstrap = try await client.bootstrap()
             if bootstrap.threads != threads {
+                announceFinished(bootstrap.threads)
                 threads = bootstrap.threads
                 LiveActivities.shared.sync(threads)
             }
@@ -455,6 +498,18 @@ final class AppModel {
     func stop() async throws {
         guard let client, let id = openThreadId else { return }
         try await run { try await client.stop(id) }
+    }
+
+    /// A thread went from working to done while the app is open: the finish sound, like the
+    /// web's chime (in the background, the notification plays its own).
+    private func announceFinished(_ next: [ThreadSummary]) {
+        guard !threads.isEmpty, UIApplication.shared.applicationState == .active else { return }
+        let before = Dictionary(threads.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
+        let finished = next.contains { thread in
+            guard thread.parentId == nil, thread.status == .completed, let was = before[thread.id] else { return false }
+            return was.isRunning || was == .waiting
+        }
+        if finished { SoundEffects.playFinish() }
     }
 
     // MARK: Thread actions (press and hold in the list)
@@ -546,6 +601,14 @@ final class AppModel {
         (try? await client?.pullRequest(threadId)) ?? nil
     }
 
+    func diff(of threadId: String) async throws -> DiffResult {
+        guard let client else { throw APIError.unpaired }
+        var result: DiffResult?
+        try await run { result = try await client.diff(threadId) }
+        guard let result else { throw APIError.badResponse }
+        return result
+    }
+
     func branch(of threadId: String) async -> GitInfo? {
         try? await client?.git(threadId)
     }
@@ -607,6 +670,7 @@ final class AppModel {
         // Only real changes: @Observable redraws whatever reads a property on every assignment, and
         // while an agent works the thread list arrives several times a second.
         if let threads = update.threads, threads != self.threads {
+            announceFinished(threads)
             self.threads = threads
             LiveActivities.shared.sync(threads)
         }

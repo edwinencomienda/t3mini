@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Tool content under a reply: images, status cards, sub-agent cards, and a short note for the
-/// kinds the app can't draw yet (diagrams, HTML pages, video, audio).
+/// Tool content under a reply: images, pages, diagrams, status and sub-agent cards, video and
+/// sound (ToolCards.swift), and a short note for any kind the app doesn't know yet.
 struct BlockView: View {
     let block: Block
 
@@ -13,11 +13,14 @@ struct BlockView: View {
             HtmlPageCard(id: id, title: title, libraries: libraries)
         case .diagram(let source, let title):
             DiagramCard(source: source, title: title)
-        case .status(let title, let status, let detail, let url):
-            CardRow(icon: icon(for: status), tint: tint(for: status), title: title, detail: detail, link: url)
-        case .delegation(let title, let status, let step):
-            CardRow(icon: status == "running" ? "person.2.wave.2" : icon(for: status), tint: tint(for: status),
-                    title: "Sub-agent: \(title)", detail: step, link: nil)
+        case .status(let info):
+            StatusCard(info: info)
+        case .delegation(let info):
+            DelegationCard(info: info)
+        case .video(let id, let caption):
+            MediaCard(id: id, caption: caption, kind: .video)
+        case .audio(let id, let caption):
+            MediaCard(id: id, caption: caption, kind: .audio)
         case .other(let type, let title):
             CardRow(icon: "desktopcomputer", tint: .secondary,
                     title: title ?? label(for: type),

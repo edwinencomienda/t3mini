@@ -88,7 +88,9 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.async {
             let visible = MainActor.assumeIsolated { self.visibleThread() }
-            done(id != nil && id == visible ? [] : [.banner, .sound, .list])
+            // The app plays its own finish sound while it's open (SoundEffects): no second one.
+            let ownSound = MainActor.assumeIsolated { SoundEffects.finishOn }
+            done(id != nil && id == visible ? [] : ownSound ? [.banner, .list] : [.banner, .sound, .list])
         }
     }
 

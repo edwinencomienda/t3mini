@@ -151,13 +151,25 @@ struct TurnView: View, Equatable {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    if open { workList }
+                    if open {
+                        if let todos = turn.todos { TodoCard(todos: todos, ended: true) }
+                        workList
+                    } else if turn.unfinished > 0, let todos = turn.todos {
+                        // Ended with items left: the checklist stays in view.
+                        TodoCard(todos: todos, ended: true)
+                    }
                     Divider()
                 }
             } else if !turn.done {
                 // Like the web app: the work so far stays folded behind the working line
                 // ("N steps ›" opens it).
-                if open { workList }
+                if open {
+                    workList
+                } else {
+                    // Folded: the checklist and status / sub-agent cards stay in view, live.
+                    if let todos = turn.todos { TodoCard(todos: todos) }
+                    ForEach(Array(turn.cards.enumerated()), id: \.offset) { _, card in BlockView(block: card) }
+                }
                 if live {
                     let line = turn.liveLine(starting: starting, stepsOpen: open)
                     LiveLine(text: line.text, note: line.note, since: line.since, steps: turn.steps,

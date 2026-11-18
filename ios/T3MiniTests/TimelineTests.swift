@@ -161,4 +161,36 @@ struct TimelineTests {
             #expect(Bundle.main.url(forResource: name, withExtension: "gif", subdirectory: "mascots") != nil, "\(name)")
         }
     }
+
+    @Test func checklistLikeTheWeb() {
+        let todos = [Todo(id: "1", text: "Read", status: "completed"), Todo(id: "2", text: "Write", status: "in_progress"),
+                     Todo(id: "3", text: "Test", status: "pending")]
+        let todoStep = Activity(id: "t", label: "Todo", status: "completed", todo: true, startedAt: "2026-11-18T10:00:01.000Z")
+        let user = Message(id: "u1", role: .user, text: "go", createdAt: "2026-11-18T10:00:00.000Z")
+        // Running: the live checklist (this run wrote one).
+        let running = Turn.build(messages: [user], activities: [todoStep], running: true, completedAt: nil, todos: todos)
+        #expect(running[0].todos?.count == 3)
+        // Ended, saved with the message, two left: the fold says so.
+        var saved = user
+        saved.todos = todos
+        let reply = Message(id: "a1", role: .assistant, text: "Partly done", createdAt: "2026-11-18T10:00:30.000Z")
+        let ended = Turn.build(messages: [saved, reply], activities: [todoStep], running: false,
+                               completedAt: "2026-11-18T10:00:30.000Z", todos: todos)
+        #expect(ended[0].unfinished == 2)
+        #expect(ended[0].foldLabel == "Worked for 30s · 2 of 3 left")
+        // No checklist written this run: none shown.
+        #expect(Turn.build(messages: [user], activities: [], running: true, completedAt: nil, todos: todos)[0].todos == nil)
+    }
+
+    @Test func soundsRenderLikeTheWeb() {
+        for sound in SoundEffects.Finish.allCases {
+            let samples = Synth.finish(sound)
+            #expect(samples.count > 4_000)
+            #expect(samples.map(abs).max()! > 0.02 && samples.map(abs).max()! < 1) // audible, never clipping
+        }
+        let cue = Synth.cue(start: true)
+        #expect(Double(cue.count) / Synth.rate < 0.4) // short, out of the way while speaking
+        let wav = Synth.wav(cue)
+        #expect(wav.prefix(4) == Data("RIFF".utf8) && wav.count == 44 + cue.count * 2)
+    }
 }

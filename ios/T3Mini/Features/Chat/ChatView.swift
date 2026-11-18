@@ -32,6 +32,7 @@ struct ChatView: View {
     /// The screen's width, to size the title pill so it never runs into the buttons.
     @State private var width: CGFloat = 0
     @State private var showingDetails = false
+    @State private var showingChanges = false
     static let turnPage = 20
 
     private var thread: ChatThread? { model.openThread?.id == threadId ? model.openThread : nil }
@@ -119,7 +120,9 @@ struct ChatView: View {
             // Hidden only while landing (and only once there's a thread to show).
             .opacity(landed || thread == nil ? 1 : 0)
             .onChange(of: thread == nil, initial: true) { _, missing in
-                if !missing { land() }
+                guard !missing else { return }
+                // Back from a sub-agent's or helper's thread: this one is drawn again.
+                if landed { if pinned { position.scrollTo(edge: .bottom) } } else { land() }
             }
             // Landed: at the very end (within 2 points) with something laid out, so it shows now.
             // The true end includes the space under the message box and header (the content
@@ -259,6 +262,10 @@ struct ChatView: View {
             // Like Claude's: working spinner, a new thread in this project, and more.
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Menu {
+                    Button { showingChanges = true } label: {
+                        Label("Changes", systemImage: "plus.forwardslash.minus")
+                    }
+                    .disabled(thread == nil)
                     Button { editingSettings = true } label: {
                         Label("Agent settings", systemImage: "slider.horizontal.3")
                     }
@@ -289,6 +296,7 @@ struct ChatView: View {
         .task(id: "\(threadId)|\(thread?.info.status.isRunning == true)") {
             if thread?.info.status.isRunning != true { branch = await model.branch(of: threadId) }
         }
+        .sheet(isPresented: $showingChanges) { ChangesView(threadId: threadId) }
         .sheet(isPresented: $showingDetails) {
             if let thread {
                 ThreadDetailsSheet(thread: thread, branch: branchName) {
@@ -369,7 +377,7 @@ struct ChatView: View {
     private func turns(of thread: ChatThread) -> [Turn] {
         Turn.build(messages: visibleMessages(thread) + sending, activities: thread.activities,
                    running: thread.info.status.isRunning || thread.info.status == .waiting || !sending.isEmpty,
-                   completedAt: thread.info.completedAt, status: thread.info.status)
+                   completedAt: thread.info.completedAt, status: thread.info.status, todos: thread.info.todos)
     }
 
     private func visibleMessages(_ thread: ChatThread) -> [Message] {

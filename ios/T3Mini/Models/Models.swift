@@ -110,6 +110,8 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var queued: Bool?
     var unsent: Bool?
     var report: HelperReport?
+    /// Your message's turn's to-do checklist, saved when the turn ended.
+    var todos: [Todo]?
 
     enum Role: String, Codable, Sendable { case user, assistant }
 }
@@ -165,6 +167,8 @@ struct ThreadInfo: Codable, Hashable, Sendable {
     var status: ThreadStatus
     var approvals: [Approval]
     var error: String?
+    /// The agent's latest to-do checklist (live while it runs).
+    var todos: [Todo]?
 
     /// A worktree thread works on its own branch (server/worktrees.ts).
     struct Worktree: Codable, Hashable, Sendable { var branch: String }
@@ -201,6 +205,52 @@ extension ChatThread: Codable {
     }
 }
 
+/// The agent's to-do checklist (update_checklist; Claude's TodoWrite, Codex's plan).
+struct Todo: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    var text: String
+    var activeText: String?
+    /// "pending", "in_progress", or "completed".
+    var status: String
+}
+
+/// A live status card (show_status): a push, pull request, deploy, release, or other long step.
+struct StatusInfo: Codable, Hashable, Sendable {
+    struct Commit: Codable, Hashable, Sendable { var sha: String; var message: String }
+    var kind: String?
+    var status: String
+    var title: String
+    var detail: String?
+    var stages: [String]?
+    var stage: String?
+    var commits: [Commit]?
+    /// Always https (checked by the tool, and again before opening).
+    var url: String?
+    var urlLabel: String?
+    var error: String?
+    var startedAt: String?
+    var endedAt: String?
+}
+
+/// A sub-agent's card (delegate_task); `id` is its own (hidden) thread.
+struct DelegationInfo: Codable, Hashable, Sendable {
+    struct Progress: Codable, Hashable, Sendable { var done: Int; var total: Int }
+    var id: String?
+    var title: String
+    var agent: Provider?
+    var access: String?
+    var background: Bool?
+    var status: String
+    var step: String?
+    var todos: Progress?
+    var files: [String]?
+    var overlaps: [String]?
+    var answer: String?
+    var error: String?
+    var startedAt: String?
+    var endedAt: String?
+}
+
 /// Content a tool added to a reply (src/blocks.ts). Types the app doesn't draw yet still decode,
 /// as `.other`, so they can say "open on your computer" instead of vanishing or failing the thread.
 enum Block: Codable, Hashable, Sendable {
@@ -209,43 +259,49 @@ enum Block: Codable, Hashable, Sendable {
     case html(id: String, title: String?, libraries: [String])
     /// A Mermaid diagram from show_diagram: its source (drawn on the phone) and title.
     case diagram(source: String, title: String?)
-    case status(title: String, status: String, detail: String?, url: String?)
-    case delegation(title: String, status: String, step: String?)
+    case status(StatusInfo)
+    case delegation(DelegationInfo)
+    /// show_video / play_audio: a saved file served at /api/media/<id>.
+    case video(id: String, caption: String?)
+    case audio(id: String, caption: String?)
     case other(type: String, title: String?)
 
-    private enum Keys: String, CodingKey { case type, id, caption, title, status, detail, url, step, source, libraries }
+    private enum Keys: String, CodingKey { case type, id, caption, title, source, libraries }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         let type = (try? c.decode(String.self, forKey: .type)) ?? ""
-        let string = { (key: Keys) in try? c.decodeIfPresent(String.self, forKey: key) }
+        let string = { (key: Keys) in (try? c.decodeIfPresent(String.self, forKey: key)) ?? nil }
         switch type {
-        case "image":
-            guard let id = string(.id) ?? nil else { self = .other(type: type, title: nil); return }
-            self = .image(id: id, caption: string(.caption) ?? nil)
+        case "image", "video", "audio":
+            guard let id = string(.id) else { self = .other(type: type, title: nil); return }
+            let caption = string(.caption)
+            self = type == "image" ? .image(id: id, caption: caption)
+                : type == "video" ? .video(id: id, caption: caption) : .audio(id: id, caption: caption)
         case "html":
-            guard let id = string(.id) ?? nil else { self = .other(type: type, title: nil); return }
-            self = .html(id: id, title: string(.title) ?? nil,
+            guard let id = string(.id) else { self = .other(type: type, title: nil); return }
+            self = .html(id: id, title: string(.title),
                          libraries: (try? c.decodeIfPresent([String].self, forKey: .libraries)) ?? [])
         case "diagram":
-            guard let source = string(.source) ?? nil, !source.isEmpty else { self = .other(type: type, title: nil); return }
-            self = .diagram(source: source, title: string(.title) ?? nil)
+            guard let source = string(.source), !source.isEmpty else { self = .other(type: type, title: nil); return }
+            self = .diagram(source: source, title: string(.title))
         case "status":
-            self = .status(title: (string(.title) ?? nil) ?? "Status", status: (string(.status) ?? nil) ?? "running",
-                           detail: string(.detail) ?? nil, url: string(.url) ?? nil)
+            guard let info = try? StatusInfo(from: decoder) else { self = .other(type: type, title: string(.title)); return }
+            self = .status(info)
         case "delegation":
-            self = .delegation(title: (string(.title) ?? nil) ?? "Sub-agent", status: (string(.status) ?? nil) ?? "running",
-                               step: string(.step) ?? nil)
+            guard let info = try? DelegationInfo(from: decoder) else { self = .other(type: type, title: string(.title)); return }
+            self = .delegation(info)
         default:
-            self = .other(type: type, title: (string(.title) ?? nil) ?? (string(.caption) ?? nil))
+            self = .other(type: type, title: string(.title) ?? string(.caption))
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
-        case .image(let id, let caption):
-            try c.encode("image", forKey: .type)
+        case .image(let id, let caption), .video(let id, let caption), .audio(let id, let caption):
+            let type = if case .image = self { "image" } else if case .video = self { "video" } else { "audio" }
+            try c.encode(type, forKey: .type)
             try c.encode(id, forKey: .id)
             try c.encodeIfPresent(caption, forKey: .caption)
         case .html(let id, let title, let libraries):
@@ -257,17 +313,12 @@ enum Block: Codable, Hashable, Sendable {
             try c.encode("diagram", forKey: .type)
             try c.encode(source, forKey: .source)
             try c.encodeIfPresent(title, forKey: .title)
-        case .status(let title, let status, let detail, let url):
+        case .status(let info):
             try c.encode("status", forKey: .type)
-            try c.encode(title, forKey: .title)
-            try c.encode(status, forKey: .status)
-            try c.encodeIfPresent(detail, forKey: .detail)
-            try c.encodeIfPresent(url, forKey: .url)
-        case .delegation(let title, let status, let step):
+            try info.encode(to: encoder)
+        case .delegation(let info):
             try c.encode("delegation", forKey: .type)
-            try c.encode(title, forKey: .title)
-            try c.encode(status, forKey: .status)
-            try c.encodeIfPresent(step, forKey: .step)
+            try info.encode(to: encoder)
         case .other(let type, let title):
             try c.encode(type, forKey: .type)
             try c.encodeIfPresent(title, forKey: .title)
@@ -355,6 +406,40 @@ struct AgentChoice: Hashable, Sendable {
 struct PullRequest: Codable, Hashable, Sendable {
     var number: Int
     var url: String
+}
+
+/// The project's uncommitted changes (GET /api/threads/:id/diff; src/diff.ts).
+struct DiffLine: Codable, Hashable, Sendable {
+    /// "add", "del", or "ctx".
+    var type: String
+    var old: Int?
+    var new: Int?
+    var text: String
+}
+
+struct DiffHunk: Codable, Hashable, Sendable {
+    var header: String
+    var lines: [DiffLine]
+}
+
+struct DiffFile: Codable, Hashable, Sendable, Identifiable {
+    var path: String
+    var oldPath: String?
+    /// "added", "deleted", "modified", or "renamed".
+    var status: String
+    var additions: Int
+    var deletions: Int
+    var binary: Bool
+    var tooLarge: Bool?
+    var hunks: [DiffHunk]
+    var id: String { path }
+}
+
+struct DiffResult: Codable, Hashable, Sendable {
+    var repo: Bool
+    var files: [DiffFile]
+    var truncated: Bool
+    var totalFiles: Int
 }
 
 /// The thread's branch (GET /api/threads/:id/git).

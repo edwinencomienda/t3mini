@@ -98,7 +98,19 @@ enum RelativeTime {
     }()
     nonisolated(unsafe) private static let plain = ISO8601DateFormatter()
 
+    /// Parsed dates, remembered: the same timestamps are read again on every live update (list
+    /// rows, the chat's turns), and parsing is the slow part. NSCache is safe from any thread.
+    nonisolated(unsafe) private static let parsed: NSCache<NSString, NSDate> = {
+        let cache = NSCache<NSString, NSDate>()
+        cache.countLimit = 20_000
+        return cache
+    }()
+
     nonisolated static func parse(_ iso: String) -> Date? {
-        withFraction.date(from: iso) ?? plain.date(from: iso)
+        let key = iso as NSString
+        if let hit = parsed.object(forKey: key) { return hit as Date }
+        guard let date = withFraction.date(from: iso) ?? plain.date(from: iso) else { return nil }
+        parsed.setObject(date as NSDate, forKey: key)
+        return date
     }
 }
