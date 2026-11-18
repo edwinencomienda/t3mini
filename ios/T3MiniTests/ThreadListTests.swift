@@ -71,4 +71,18 @@ struct ThreadListTests {
         #expect(SVGIcon.isSVG(Data("<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>".utf8)))
         #expect(!SVGIcon.isSVG(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])))
     }
+
+    /// The in-app banner: only for a thread that finished, failed, or started waiting for you.
+    @Test func bannerEvents() {
+        typealias Event = ThreadBanner.Event
+        #expect(Event(was: .working, now: .completed, waitingFor: nil) == .done)
+        #expect(Event(was: .waiting, now: .completed, waitingFor: nil) == .done)
+        #expect(Event(was: .working, now: .failed, waitingFor: nil) == .failed)
+        #expect(Event(was: .working, now: .waiting, waitingFor: "question") == .question)
+        #expect(Event(was: .starting, now: .waiting, waitingFor: "approval") == .approval)
+        #expect(Event(was: .working, now: .interrupted, waitingFor: nil) == nil)
+        #expect(Event(was: .idle, now: .working, waitingFor: nil) == nil)
+        #expect(Event(was: .completed, now: .completed, waitingFor: nil) == nil)
+        #expect(Event(was: .idle, now: .completed, waitingFor: nil) == nil)
+    }
 }

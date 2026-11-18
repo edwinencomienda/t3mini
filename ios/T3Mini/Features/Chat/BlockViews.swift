@@ -99,6 +99,9 @@ struct RemoteImage: View {
     /// Long side, in pixels, for the conversation: the screen's width at its scale, which is
     /// sharp at any size the chat shows (a tap opens the full image).
     static let chatPixels = 1400
+    #if DEBUG
+    @MainActor static var openedForCheck = false
+    #endif
 
     var body: some View {
         // Decoded before (this thread or another visit): no spinner, no jump.
@@ -136,6 +139,15 @@ struct RemoteImage: View {
             do {
                 image = try await model.decodedImage(id, maxPixel: Self.chatPixels)
                 failed = image == nil
+                #if DEBUG
+                // Debug builds only: T3MINI_OPEN_IMAGE=1 opens the first picture that loads in the
+                // viewer (for checking it in the simulator).
+                if image != nil, !Self.openedForCheck, ProcessInfo.processInfo.environment["T3MINI_OPEN_IMAGE"] != nil {
+                    Self.openedForCheck = true
+                    try? await Task.sleep(for: .seconds(1))
+                    showing = true
+                }
+                #endif
             } catch {
                 failed = image == nil
             }
@@ -146,30 +158,84 @@ struct RemoteImage: View {
     }
 }
 
-/// Full screen: pinch to zoom, drag to pan, double-tap to zoom in or out, Done to close. Opens
-/// at once with the conversation's copy, then swaps in the full-size picture.
+/// Full screen, like Photos: every image in the thread, swipe left and right between them (as
+/// ← / → on the web), pinch to zoom, drag to pan, double-tap to zoom in or out, swipe down or
+/// Done to close. Opens at once with the conversation's copy, then swaps in the full-size picture.
 private struct ImageViewer: View {
     let id: String
     let preview: UIImage
     let caption: String?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var current: String = ""
+    @State private var drag: CGFloat = 0
+
+    var body: some View {
+        let gallery = model.threadImages(around: id, caption: caption)
+        let index = gallery.firstIndex { $0.id == current } ?? 0
+        NavigationStack {
+            TabView(selection: $current) {
+                ForEach(gallery, id: \.id) { item in
+                    ImagePage(id: item.id, preview: item.id == id ? preview : nil,
+                              onDrag: { drag = $0 }, onDismiss: { dismiss() })
+                        .tag(item.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
+            .background(Color.black.opacity(1 - drag).ignoresSafeArea())
+            // See-through, so the conversation shows as a picture is swiped away.
+            .containerBackground(.clear, for: .navigation)
+            .toolbar {
+                if gallery.count > 1 {
+                    ToolbarItem(placement: .principal) {
+                        Text("\(index + 1) of \(gallery.count)").font(.subheadline.weight(.semibold)).monospacedDigit()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+            // The picture's caption under it (a toolbar squeezed it into a small pill).
+            .safeAreaInset(edge: .bottom) {
+                if let caption = gallery.indices.contains(index) ? gallery[index].caption : nil, !caption.isEmpty {
+                    Text(caption)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 8)
+                        .opacity(drag > 0 ? 0 : 1)
+                }
+            }
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(drag > 0 ? .hidden : .visible, for: .navigationBar)
+            .preferredColorScheme(.dark)
+        }
+        .presentationBackground(.clear)
+        .onAppear { if current.isEmpty { current = id } }
+    }
+}
+
+/// One picture in the viewer: the conversation's copy at once (if it's been seen), then the
+/// full-size one.
+private struct ImagePage: View {
+    let id: String
+    let preview: UIImage?
+    let onDrag: (CGFloat) -> Void
+    let onDismiss: () -> Void
+    @Environment(AppModel.self) private var model
     @State private var full: UIImage?
 
     var body: some View {
-        NavigationStack {
-            ZoomableImage(image: full ?? model.cachedDecodedImage(id, maxPixel: nil) ?? preview)
-                .ignoresSafeArea()
-                .background(.black)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                    if let caption {
-                        ToolbarItem(placement: .bottomBar) { Text(caption).font(.footnote).lineLimit(2) }
-                    }
-                }
-                .toolbarBackground(.visible, for: .navigationBar)
-                .preferredColorScheme(.dark)
-                .task(id: id) { full = try? await model.decodedImage(id, maxPixel: nil) }
+        let shown = full ?? model.cachedDecodedImage(id, maxPixel: nil)
+            ?? preview ?? model.cachedDecodedImage(id, maxPixel: RemoteImage.chatPixels)
+        Group {
+            if let shown {
+                ZoomableImage(image: shown, onDrag: onDrag, onDismiss: onDismiss)
+            } else {
+                ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+        .task(id: id) { full = try? await model.decodedImage(id, maxPixel: nil) }
     }
 }

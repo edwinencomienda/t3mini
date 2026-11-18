@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import Observation
+import UserNotifications
 
 /// Everything the screens show, kept up to date by one live-update stream to the paired computer.
 @MainActor
@@ -337,6 +338,9 @@ final class AppModel {
             self.pendingOpen = id
         }
         notifications.visibleThread = { [weak self] in self?.openThreadId }
+        // While the live connection is up, the app shows its own banner for these (at once,
+        // with the thread's name), so iOS's would be a second one.
+        notifications.ownBanners = { [weak self] in self?.link == .live }
         // Live Activities: their push tokens go to the computer, which keeps them current.
         LiveActivities.shared.register = { [weak self] token, thread in
             guard let client = self?.client else { return }
@@ -557,16 +561,96 @@ final class AppModel {
         try await run { try await client.stop(id) }
     }
 
-    /// A thread went from working to done while the app is open: the finish sound, like the
-    /// web's chime (in the background, the notification plays its own).
+    /// A thread changed while the app is open: the finish sound when one is done, like the web's
+    /// chime (in the background, the notification plays its own), and a banner at the top for
+    /// a thread you aren't in that finished, failed, or needs you, like a message in iMessage.
     private func announceFinished(_ next: [ThreadSummary]) {
         guard !threads.isEmpty, UIApplication.shared.applicationState == .active else { return }
         let before = Dictionary(threads.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
-        let finished = next.contains { thread in
-            guard thread.parentId == nil, thread.status == .completed, let was = before[thread.id] else { return false }
-            return was.isRunning || was == .waiting
+        var finished = false
+        var latest: ThreadBanner?
+        for thread in next where thread.parentId == nil {
+            guard let was = before[thread.id],
+                  let event = ThreadBanner.Event(was: was, now: thread.status, waitingFor: thread.waitingFor)
+            else { continue }
+            if event == .done { finished = true }
+            guard thread.id != openThreadId else { continue }
+            let project = projectsByPath[thread.cwd]?.displayName ?? (thread.cwd as NSString).lastPathComponent
+            latest = ThreadBanner(threadId: thread.id, title: thread.title, project: project, cwd: thread.cwd, event: event)
         }
         if finished { SoundEffects.playFinish() }
+        if let latest { showBanner(latest) }
+    }
+
+    // MARK: Image viewer
+
+    /// The open thread's images in order (yours, then the agent's, message by message), for
+    /// swiping between them in the viewer. Just the one tapped when it isn't in the thread.
+    func threadImages(around id: String, caption: String?) -> [(id: String, caption: String?)] {
+        var images: [(id: String, caption: String?)] = []
+        var seen = Set<String>()
+        for message in openThread?.messages ?? [] {
+            for attachment in message.attachments ?? [] where attachment.mimeType.hasPrefix("image/") {
+                if seen.insert(attachment.id).inserted { images.append((attachment.id, nil)) }
+            }
+            for block in message.blocks ?? [] {
+                if case .image(let image, let text) = block, seen.insert(image).inserted { images.append((image, text)) }
+            }
+        }
+        return seen.contains(id) ? images : [(id, caption)]
+    }
+
+    // MARK: In-app banners
+
+    /// The banner at the top (ThreadBannerView); gone after a few seconds.
+    private(set) var banner: ThreadBanner?
+    private var bannerTimer: Task<Void, Never>?
+
+    /// Like a message in iMessage: iOS's own notification banner (the same one a push shows, tap
+    /// to open the thread), posted by the app from its live updates. The app's look-alike banner
+    /// only when notifications are off for t3 mini.
+    private func showBanner(_ next: ThreadBanner) {
+        Task {
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            let allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
+            if allowed && settings.alertSetting == .enabled {
+                await Notifications.postLocal(next)
+            } else {
+                showOwnBanner(next)
+            }
+        }
+    }
+
+    private func showOwnBanner(_ next: ThreadBanner) {
+        banner = next
+        UINotificationFeedbackGenerator().notificationOccurred(next.event == .failed ? .error : next.event == .done ? .success : .warning)
+        bannerTimer?.cancel()
+        bannerTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self, self.banner?.id == next.id else { return }
+            self.banner = nil
+        }
+    }
+
+    #if DEBUG
+    /// Debug builds only: shows a banner for the first listed thread (T3MINI_PREVIEW_BANNER).
+    func previewBanner() {
+        guard let thread = listedThreads.first(where: { $0.id != openThreadId }) else { return }
+        let project = projectsByPath[thread.cwd]?.displayName ?? (thread.cwd as NSString).lastPathComponent
+        showBanner(ThreadBanner(threadId: thread.id, title: thread.title, project: project, cwd: thread.cwd, event: .done))
+    }
+    #endif
+
+    func dismissBanner() {
+        bannerTimer?.cancel()
+        banner = nil
+    }
+
+    /// Tapped: off to that thread.
+    func openBanner() {
+        guard let banner else { return }
+        dismissBanner()
+        pendingOpen = banner.threadId
     }
 
     // MARK: Thread actions (press and hold in the list)

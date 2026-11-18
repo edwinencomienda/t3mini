@@ -22,3 +22,37 @@ extension View {
             .background(Color.appBackground.ignoresSafeArea())
     }
 }
+
+/// Settings → Appearance: System (follows iOS), Light, or Dark. Kept on this iPhone (the computer's
+/// theme can differ). Set on the app's window, so sheets, menus, and alerts follow it at once.
+enum AppTheme: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    static let key = "t3mini.theme"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    private var style: UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+
+    @MainActor
+    static func apply(_ raw: String) {
+        let style = (AppTheme(rawValue: raw) ?? .system).style
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows { window.overrideUserInterfaceStyle = style }
+        }
+    }
+}

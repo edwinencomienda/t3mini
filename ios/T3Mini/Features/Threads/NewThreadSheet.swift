@@ -52,10 +52,10 @@ struct NewThreadSheet: View {
         }
     }
 
-    /// Saved projects, most recent first, with "No project" last.
+    /// "No project" first, then saved projects, most recent first.
     private var projects: [ProjectSummary] {
         model.projects.sorted { a, b in
-            if (a.chats == true) != (b.chats == true) { return b.chats == true }
+            if (a.chats == true) != (b.chats == true) { return a.chats == true }
             return (a.lastActiveAt ?? "") > (b.lastActiveAt ?? "")
         }
     }
@@ -81,6 +81,7 @@ struct SettingsSheet: View {
     @AppStorage(SoundEffects.finishKey) private var finishSound = true
     @AppStorage(SoundEffects.finishNameKey) private var finishName = SoundEffects.Finish.chime.rawValue
     @AppStorage(SoundEffects.dictationKey) private var dictationSounds = true
+    @AppStorage(AppTheme.key) private var theme = AppTheme.system.rawValue
     @Environment(\.dismiss) private var dismiss
     @State private var confirming = false
 
@@ -92,6 +93,18 @@ struct SettingsSheet: View {
                         LabeledContent("Computer", value: connection.displayHost)
                         LabeledContent("Paired", value: connection.pairedAt.formatted(date: .abbreviated, time: .shortened))
                     }
+                }
+                Section {
+                    Picker("Theme", selection: $theme) {
+                        ForEach(AppTheme.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("System follows your iPhone's light and dark setting.")
                 }
                 Section {
                     Toggle("Notify me", isOn: Binding(

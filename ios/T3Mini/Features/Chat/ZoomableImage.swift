@@ -6,15 +6,26 @@ import UIKit
 /// (a SwiftUI scaleEffect driven by gestures redraws the view on every finger move).
 struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
+    /// Swipe down (not zoomed in): 0…1 as it's dragged, for fading the backdrop.
+    var onDrag: (CGFloat) -> Void = { _ in }
+    /// Swiped down far or fast enough: close.
+    var onDismiss: () -> Void = {}
 
     func makeUIView(context: Context) -> ZoomingImageView { ZoomingImageView(image: image) }
 
-    func updateUIView(_ view: ZoomingImageView, context: Context) { view.show(image) }
+    func updateUIView(_ view: ZoomingImageView, context: Context) {
+        view.show(image)
+        view.onDrag = onDrag
+        view.onDismiss = onDismiss
+    }
 }
 
-final class ZoomingImageView: UIScrollView, UIScrollViewDelegate {
+final class ZoomingImageView: UIScrollView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let imageView = UIImageView()
     private var fittedFor: CGSize = .zero
+    var onDrag: (CGFloat) -> Void = { _ in }
+    var onDismiss: () -> Void = {}
+    private lazy var dismissPan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
 
     init(image: UIImage) {
         super.init(frame: .zero)
@@ -31,6 +42,8 @@ final class ZoomingImageView: UIScrollView, UIScrollViewDelegate {
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
         doubleTap.numberOfTapsRequired = 2
         addGestureRecognizer(doubleTap)
+        dismissPan.delegate = self
+        addGestureRecognizer(dismissPan)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -69,6 +82,45 @@ final class ZoomingImageView: UIScrollView, UIScrollViewDelegate {
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    // MARK: Swipe down to close, like Photos
+
+    /// Only at the whole-picture size, and only a mostly downward drag (sideways goes to the next
+    /// image, and zoomed in, dragging pans).
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture === dismissPan else { return super.gestureRecognizerShouldBegin(gesture) }
+        guard zoomScale <= minimumZoomScale + 0.01 else { return false }
+        let velocity = dismissPan.velocity(in: self)
+        return velocity.y > 0 && velocity.y > abs(velocity.x) * 1.2
+    }
+
+    func gestureRecognizer(_ gesture: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        other === panGestureRecognizer
+    }
+
+    @objc private func panned(_ gesture: UIPanGestureRecognizer) {
+        let move = gesture.translation(in: superview)
+        let progress = min(1, max(0, move.y) / 300)
+        switch gesture.state {
+        case .changed:
+            transform = CGAffineTransform(translationX: move.x, y: move.y)
+                .scaledBy(x: 1 - progress * 0.25, y: 1 - progress * 0.25)
+            onDrag(progress)
+        case .ended, .cancelled:
+            let velocity = gesture.velocity(in: superview).y
+            if gesture.state == .ended && (move.y > 110 || velocity > 900) {
+                onDismiss()
+            } else {
+                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0) {
+                    self.transform = .identity
+                }
+                onDrag(0)
+            }
+        default:
+            break
+        }
+    }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
 

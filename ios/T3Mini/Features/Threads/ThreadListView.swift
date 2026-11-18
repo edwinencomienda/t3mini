@@ -132,6 +132,10 @@ struct ThreadListView: View {
         // Debug builds only: T3MINI_REOPEN=<thread id> opens it, goes back, and opens it again
         // (for checking where a reopened thread lands, in the simulator).
         .task {
+            if ProcessInfo.processInfo.environment["T3MINI_PREVIEW_BANNER"] != nil {
+                try? await Task.sleep(for: .seconds(5))
+                model.previewBanner()
+            }
             if ProcessInfo.processInfo.environment["T3MINI_PREVIEW_UNDO"] != nil {
                 try? await Task.sleep(for: .seconds(4))
                 if let thread = model.listedThreads.first { model.previewUndo(thread) }

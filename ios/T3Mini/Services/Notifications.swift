@@ -28,6 +28,24 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         if let onOpenThread { onOpenThread(id) } else { pendingThread = id }
     }
     var visibleThread: () -> String? = { nil }
+    /// The app posts its own notification for thread events while it's open and live
+    /// (`postLocal`), so the computer's push for the same event isn't shown twice.
+    var ownBanners: () -> Bool = { false }
+
+    /// A thread event while the app is open: iOS's own banner, the same as a push (title, then
+    /// what happened and where), replacing an earlier one for the same thread.
+    static func postLocal(_ banner: ThreadBanner) async {
+        let content = UNMutableNotificationContent()
+        content.title = banner.title.isEmpty ? "Thread" : banner.title
+        content.body = "\(banner.event.label) · \(banner.project)"
+        content.threadIdentifier = banner.threadId
+        content.userInfo = ["url": "/threads/" + (banner.threadId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? banner.threadId),
+                            "local": true]
+        // A finished thread already plays the app's own finish sound.
+        if !(banner.event == .done && SoundEffects.finishOn) { content.sound = .default }
+        let request = UNNotificationRequest(identifier: "local-" + banner.threadId, content: content, trigger: nil)
+        try? await UNUserNotificationCenter.current().add(request)
+    }
     private(set) var token: String?
 
     /// Builds from Xcode or run-on-device.sh use Apple's sandbox; TestFlight and the App Store
@@ -84,13 +102,25 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let id = Self.threadId(from: notification.request.content.userInfo["url"])
+        let local = notification.request.content.userInfo["local"] as? Bool == true
         // Called exactly once, on the main queue, as iOS requires.
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.async {
             let visible = MainActor.assumeIsolated { self.visibleThread() }
             // The app plays its own finish sound while it's open (SoundEffects): no second one.
             let ownSound = MainActor.assumeIsolated { SoundEffects.finishOn }
-            done(id != nil && id == visible ? [] : ownSound ? [.banner, .list] : [.banner, .sound, .list])
+            let ownBanner = MainActor.assumeIsolated { self.ownBanners() }
+            if id != nil && id == visible {
+                done([])
+            } else if local {
+                // The app's own, from its live updates: shown like any notification.
+                done([.banner, .list, .sound])
+            } else if id != nil && ownBanner {
+                // The computer's push for an event the app already showed.
+                done([])
+            } else {
+                done(ownSound ? [.banner, .list] : [.banner, .sound, .list])
+            }
         }
     }
 

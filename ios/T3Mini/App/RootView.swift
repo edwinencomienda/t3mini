@@ -13,6 +13,15 @@ struct RootView: View {
                 PairView()
             }
         }
+        // Another thread finished, failed, or needs you: a banner at the top (tap to go there).
+        .overlay(alignment: .top) {
+            if model.isPaired, let banner = model.banner {
+                ThreadBannerView(banner: banner)
+                    .id(banner.id)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.4, bounce: 0.25), value: model.banner?.id)
         // t3mini://thread/<id>: a tapped Live Activity opens its thread.
         .onOpenURL { url in
             if model.isPaired, let id = ThreadLink.threadId(from: url) { model.pendingOpen = id }

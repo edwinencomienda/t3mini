@@ -4,11 +4,14 @@ import SwiftUI
 struct T3MiniApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @AppStorage(AppTheme.key) private var theme = AppTheme.system.rawValue
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
+                .onAppear { AppTheme.apply(theme) }
+                .onChange(of: theme) { _, theme in AppTheme.apply(theme) }
                 #if DEBUG
                 .task { await pairFromLaunchEnvironment() }
                 #endif
