@@ -118,10 +118,16 @@ struct MessageMeta: View {
 /// it runs), the pictures it showed, and its answer.
 struct TurnView: View, Equatable {
     let turn: Turn
+    /// The turn the agent is on now (and not waiting for your approval): its working line.
+    var live = false
+    var starting = false
+    var provider: Provider = .claude
     @State private var open = false
 
     // A live update redraws the thread; a turn that didn't change is skipped.
-    nonisolated static func == (a: TurnView, b: TurnView) -> Bool { a.turn == b.turn }
+    nonisolated static func == (a: TurnView, b: TurnView) -> Bool {
+        a.turn == b.turn && a.live == b.live && a.starting == b.starting && a.provider == b.provider
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -149,7 +155,17 @@ struct TurnView: View, Equatable {
                     Divider()
                 }
             } else if !turn.done {
-                workList
+                // Like the web app: the work so far stays folded behind the working line
+                // ("N steps ›" opens it).
+                if open { workList }
+                if live {
+                    let line = turn.liveLine(starting: starting, stepsOpen: open)
+                    LiveLine(text: line.text, note: line.note, since: line.since, steps: turn.steps,
+                             hasWork: !turn.work.isEmpty, open: $open, provider: provider,
+                             mood: line.working ? .working : .thinking)
+                } else if !turn.work.isEmpty {
+                    StepsToggle(steps: turn.steps, open: $open)
+                }
             }
             ForEach(Array(turn.blocks.enumerated()), id: \.offset) { _, block in BlockView(block: block) }
             if let answer = turn.answer { MessageBubble(message: answer).id(answer.id) }
@@ -194,5 +210,80 @@ struct StepRow: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
         }
+    }
+}
+
+/// "∴ Checking the tests 42s  6 steps ›": what the agent is doing right now, for how long, and a
+/// toggle for the steps so far. Like the web app's LiveLine.
+struct LiveLine: View {
+    let text: String
+    /// The agent's own words (its latest note) rather than a step.
+    let note: Bool
+    let since: String?
+    let steps: Int
+    let hasWork: Bool
+    @Binding var open: Bool
+    var provider: Provider = .claude
+    var mood: Mascot.Mood = .working
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            // The web app's character (thinking or working), else a plain spinner.
+            if Self.mascotsOn(model: model, reduceMotion: reduceMotion) {
+                Mascot(provider: provider, mood: mood, size: 34)
+                    .padding(.vertical, -6)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(text)
+                .font(.footnote)
+                .italic(note)
+                .foregroundStyle(.secondary)
+                .lineLimit(note ? 2 : 1)
+                .truncationMode(note ? .tail : .middle)
+            Spacer(minLength: 6)
+            if let start = since.flatMap(RelativeTime.parse) {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(Self.counter(context.date.timeIntervalSince(start)))
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            if hasWork { StepsToggle(steps: steps, open: $open) }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// "42s", "3m 5s", like the web app's working line.
+    static func counter(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        return total < 60 ? "\(total)s" : "\(total / 60)m \(total % 60)s"
+    }
+}
+
+/// "6 steps ›" ("Details ›" with only notes): shows or hides the work so far.
+struct StepsToggle: View {
+    let steps: Int
+    @Binding var open: Bool
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy) { open.toggle() }
+        } label: {
+            HStack(spacing: 3) {
+                Text(steps > 0 ? "\(steps) step\(steps == 1 ? "" : "s")" : "Details")
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(open ? "Hide the steps so far" : "Show the steps so far")
     }
 }

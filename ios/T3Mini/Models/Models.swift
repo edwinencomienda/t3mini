@@ -73,6 +73,8 @@ struct UiSettings: Codable, Equatable, Sendable {
     var agent: Agent?
     /// Settings → Project icons on the computer (off: letters only).
     var projectIcons: Bool?
+    /// Settings → Appearance → Animations on the computer (the working characters).
+    var animations: Bool?
     /// The sidebar's Group by on the computer: "project", "date", or "none".
     var groupBy: String?
 }

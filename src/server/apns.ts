@@ -76,6 +76,11 @@ export type ApnsMessage = {
   topic: string
   // Collapses notifications about the same thread into one.
   collapseId?: string
+  // 'liveactivity' updates a Live Activity on the lock screen (live-activities.ts); its topic
+  // is the bundle id + '.push-type.liveactivity'. Default: an alert.
+  pushType?: 'alert' | 'liveactivity'
+  // 10 delivers at once; 5 lets the phone save power (Apple budgets priority-10 activity updates).
+  priority?: 5 | 10
   payload: object
 }
 // What the app is told: delivered, gone (drop the token), or failed.
@@ -126,8 +131,8 @@ export function createApnsSender(): ApnsSender {
           ':path': `/3/device/${message.token}`,
           authorization: `bearer ${tokenFor(config)}`,
           'apns-topic': message.topic,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
+          'apns-push-type': message.pushType ?? 'alert',
+          'apns-priority': String(message.priority ?? 10),
           'apns-expiration': String(Math.floor(Date.now() / 1000) + 24 * 60 * 60),
           ...(message.collapseId ? { 'apns-collapse-id': message.collapseId.slice(0, 64) } : {}),
         })

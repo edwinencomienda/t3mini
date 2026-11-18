@@ -13,6 +13,20 @@ struct ChatView: View {
     @State private var shownTurns = ChatView.turnPage
     /// Near the bottom: new replies are followed, and the jump-to-latest button hides.
     @State private var atBottom = true
+    /// Following the bottom: anything that grows below (an image or diagram loading, a reply
+    /// streaming) keeps the view at the end. Only your own scrolling turns it off (scrolling up)
+    /// or on (back down, or ↓).
+    @State private var pinned = true
+    @State private var userScrolling = false
+    /// Opening a thread: the conversation stays hidden until it's at its end, like T3 Code's
+    /// mobile feed, so you never see it lay out and scroll down (usually that's the first frame).
+    @State private var landed = false
+    @State private var endDistance: CGFloat = .infinity
+    /// Where the conversation is scrolled, held by the scroll view itself (iOS 18). Asking it for
+    /// the bottom edge is applied during layout, so it works even in the first frame of a thread
+    /// that's already loaded (a ScrollViewReader jump then could land mid-thread).
+    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var landing: Task<Void, Never>?
     @State private var startingThread = false
     @State private var problem: String?
     /// The screen's width, to size the title pill so it never runs into the buttons.
@@ -24,7 +38,7 @@ struct ChatView: View {
     private var summary: ThreadSummary? { model.threads.first { $0.id == threadId } }
 
     var body: some View {
-        ScrollViewReader { proxy in
+        ScrollViewReader { _ in
             ScrollView {
                 // A plain VStack, not Lazy: turns are tall and vary a lot, and a lazy stack's height
                 // guesses left the scroll stopping short of the bottom. Only the latest turns are
@@ -46,18 +60,29 @@ struct ChatView: View {
                             .foregroundStyle(.secondary)
                         }
                         ForEach(all.suffix(shownTurns)) { turn in
-                            TurnView(turn: turn).equatable()
+                            TurnView(turn: turn,
+                                     live: turn.id == all.last?.id && (thread.info.status.isRunning || !sending.isEmpty)
+                                        && thread.info.approvals.isEmpty,
+                                     starting: thread.info.status == .starting || !thread.info.status.isRunning,
+                                     provider: thread.info.provider)
+                                .equatable()
                         }
-                        if thread.info.status.isRunning {
-                            WorkingRow(activity: thread.activities.last { $0.status == "running" } ?? thread.activities.last,
-                                       since: all.last?.startedAt)
+                        // While it runs, the working line is part of the latest turn (TurnView).
+                        if thread.info.status.isRunning || !sending.isEmpty {
+                            EmptyView()
                         } else if thread.info.status != .waiting, let last = all.last, last.user != nil,
                                   let finished = last.finishLabel() {
-                            // "Worked for 24s · done 2:00 PM", like the web app.
-                            Text(finished)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            // "Worked for 24s · done 2:00 PM", like the web app, with the
+                            // character celebrating for a few seconds when it just finished.
+                            HStack(spacing: 8) {
+                                if thread.info.status == .completed, let at = thread.info.completedAt {
+                                    Celebration(provider: thread.info.provider, at: at)
+                                }
+                                Text(finished)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         if let error = thread.info.error, thread.info.status == .failed {
                             Label(error, systemImage: "exclamationmark.triangle")
@@ -85,17 +110,71 @@ struct ChatView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
+            .scrollPosition($position)
             .defaultScrollAnchor(.bottom)
+            // When content changes size (an image or page finishing loading above the text, a
+            // reply growing): following the end, the scroll view itself keeps the bottom edge in
+            // place during that layout; reading further up, it keeps what you're looking at still.
+            .defaultScrollAnchor(pinned ? .bottom : .top, for: .sizeChanges)
+            // Hidden only while landing (and only once there's a thread to show).
+            .opacity(landed || thread == nil ? 1 : 0)
+            .onChange(of: thread == nil, initial: true) { _, missing in
+                if !missing { land() }
+            }
+            // Landed: at the very end (within 2 points) with something laid out, so it shows now.
+            // The true end includes the space under the message box and header (the content
+            // insets): without it, the last lines hidden behind the message box counted as "at
+            // the end".
+            // While landing, how far from the end it is (constant once landed, so scrolling
+            // doesn't redraw the view). At the end: shown, if it's still there a beat later (the
+            // header and message box measuring in can move it for a frame).
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                landed ? 0 : Self.distanceFromEnd(geometry)
+            } action: { _, distance in
+                endDistance = distance
+                guard !landed, distance <= 2, thread != nil else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(50))
+                    if endDistance <= 2, thread != nil { landed = true }
+                }
+            }
+            // The message box or header was measured (or changed size, or the keyboard moved):
+            // the insets changed and the scroll view kept its top in place. Back to the end if
+            // you're following it. Reopening a thread lays it out before they're known.
+            .onScrollGeometryChange(for: [CGFloat].self) { geometry in
+                [geometry.contentInsets.top, geometry.contentInsets.bottom, geometry.containerSize.height]
+            } action: { _, _ in
+                guard pinned, !userScrolling else { return }
+                position.scrollTo(edge: .bottom)
+            }
             .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.visibleRect.maxY >= geometry.contentSize.height - 120
+                Self.distanceFromEnd(geometry) <= 120
             } action: { _, near in
                 atBottom = near
+                if userScrolling { pinned = near }
             }
-            // Follows new content only when you're at the bottom (or just sent something), so
+            .onScrollPhaseChange { _, phase in
+                userScrolling = phase == .interacting || phase == .decelerating
+                // A scroll that came to rest at the end follows the bottom again.
+                if phase == .idle && atBottom { pinned = true }
+            }
+            // Content grew or shrank (an image, diagram, or page finished loading; a reply
+            // streamed): stay at the end if you were there. Without animation, so it doesn't drift.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                guard pinned, !userScrolling, abs(new - old) > 0.5 else { return }
+                // Backup for the anchor above.
+                position.scrollTo(edge: .bottom)
+                // Still landing: back to the end.
+                if !landed { land() }
+            }
+            // Something new arrived: follow it if you're at the end (or just sent something), so
             // reading back up isn't interrupted.
             .onChange(of: scrollKey) { _, _ in
-                guard atBottom || thread?.messages.last?.role == .user else { return }
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomId, anchor: .bottom) }
+                if thread?.messages.last?.role == .user || !sending.isEmpty { pinned = true }
+                guard pinned else { return }
+                // Still landing (hidden): straight there, no animation.
+                if !landed { position.scrollTo(edge: .bottom); return }
+                withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(edge: .bottom) }
             }
             .safeAreaInset(edge: .bottom) {
                 composer
@@ -104,7 +183,8 @@ struct ChatView: View {
                     .overlay(alignment: .top) {
                         if !atBottom {
                             Button {
-                                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(bottomId, anchor: .bottom) }
+                                pinned = true
+                                withAnimation(.easeOut(duration: 0.25)) { position.scrollTo(edge: .bottom) }
                             } label: {
                                 Image(systemName: "arrow.down")
                                     .font(.system(size: 15, weight: .semibold))
@@ -227,6 +307,26 @@ struct ChatView: View {
 
     private let bottomId = "bottom"
 
+    /// Puts the conversation at its end; it shows the moment it's there (the end check below),
+    /// like T3 Code's feed, so a thread that's ready shows at once. Shown after a second at most.
+    /// How far the conversation is from its true end, counting the space under the message box.
+    nonisolated static func distanceFromEnd(_ geometry: ScrollGeometry) -> CGFloat {
+        geometry.contentSize.height + geometry.contentInsets.bottom - geometry.visibleRect.maxY
+    }
+
+    private func land() {
+        guard !landed else { return }
+        position.scrollTo(edge: .bottom)
+        guard landing == nil else { return }
+        landing = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            if !landed {
+                position.scrollTo(edge: .bottom)
+                landed = true
+            }
+        }
+    }
+
     /// The screen minus the back button (~70 pt with margins) and the ⋯ ✎ group (~115 pt), plus
     /// the gap iOS wants between them. Leave too little and iOS hides ✎ (it collapses the right
     /// side to fit), so this errs on the roomy side.
@@ -260,12 +360,15 @@ struct ChatView: View {
     private var scrollKey: String {
         guard let thread else { return "" }
         let last = thread.messages.last
-        return "\(thread.messages.count)-\(last?.text.count ?? 0)-\(last?.blocks?.count ?? 0)-\(thread.activities.count)-\(thread.info.approvals.count)"
+        return "\(thread.messages.count)-\(sending.count)-\(last?.text.count ?? 0)-\(last?.blocks?.count ?? 0)-\(thread.activities.count)-\(thread.info.approvals.count)"
     }
 
+    /// Messages you just sent that the computer hasn't shown back yet (shown at once).
+    private var sending: [Message] { model.outgoing[threadId] ?? [] }
+
     private func turns(of thread: ChatThread) -> [Turn] {
-        Turn.build(messages: visibleMessages(thread), activities: thread.activities,
-                   running: thread.info.status.isRunning || thread.info.status == .waiting,
+        Turn.build(messages: visibleMessages(thread) + sending, activities: thread.activities,
+                   running: thread.info.status.isRunning || thread.info.status == .waiting || !sending.isEmpty,
                    completedAt: thread.info.completedAt, status: thread.info.status)
     }
 
@@ -294,40 +397,6 @@ struct ChatView: View {
                 }
             },
             stop: { try? await model.stop() })
-    }
-}
-
-/// "Working · Run · bun test" with a spinner, under the last message.
-struct WorkingRow: View {
-    let activity: Activity?
-    /// When the turn started: the counter at the end ("42s"), ticking each second on its own so
-    /// the conversation doesn't redraw.
-    var since: String?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(activity?.line ?? "Working…")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            if let start = since.flatMap(RelativeTime.parse) {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(Self.counter(context.date.timeIntervalSince(start)))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// "42s", "3m 5s", like the web app's working line.
-    static func counter(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds))
-        return total < 60 ? "\(total)s" : "\(total / 60)m \(total % 60)s"
     }
 }
 
@@ -389,5 +458,33 @@ private struct CappedWidthLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
+/// The character celebrating once when a turn has just finished (4 seconds after it ended, like
+/// the web app's Celebration), then gone.
+struct Celebration: View {
+    let provider: Provider
+    let at: String
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visible = false
+
+    var body: some View {
+        Group {
+            if visible && Self.mascotsOn(model: model, reduceMotion: reduceMotion) {
+                Mascot(provider: provider, mood: .celebrating, size: 34)
+                    .padding(.vertical, -6)
+                    .transition(.opacity)
+            }
+        }
+        .task(id: at) {
+            guard let ended = RelativeTime.parse(at) else { return }
+            let left = 4 - Date().timeIntervalSince(ended)
+            guard left > 0 else { visible = false; return }
+            visible = true
+            try? await Task.sleep(for: .seconds(left))
+            withAnimation(.easeOut(duration: 0.3)) { visible = false }
+        }
     }
 }

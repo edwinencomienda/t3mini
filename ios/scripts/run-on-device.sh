@@ -20,6 +20,23 @@ trap 'rm -rf "$tmp"' EXIT
 xcrun devicectl list devices --json-output "$tmp/devices.json" >/dev/null 2>&1 || {
   echo "Couldn't list devices (is Xcode installed?)." >&2; exit 1; }
 
+# A paired iPhone on the same Wi-Fi often shows as "unavailable" only because the wireless link
+# went idle. Asking for its details wakes it, so try that once before giving up on it.
+idle="$(python3 -I - "$tmp/devices.json" <<'PY'
+import json, sys
+for d in json.load(open(sys.argv[1]))["result"]["devices"]:
+    hw, conn = d.get("hardwareProperties", {}), d.get("connectionProperties", {})
+    if hw.get("platform") == "iOS" and hw.get("reality") == "physical" \
+            and conn.get("pairingState") == "paired" and conn.get("tunnelState") != "connected":
+        print(d.get("identifier", ""))
+PY
+)"
+if [ -n "$idle" ]; then
+  echo "▸ Waking the connection to the iPhone"
+  for id in $idle; do xcrun devicectl device info details --device "$id" >/dev/null 2>&1 || true; done
+  xcrun devicectl list devices --json-output "$tmp/devices.json" >/dev/null 2>&1 || true
+fi
+
 # Prints "<coredevice-id>\t<udid>\t<name>" for the chosen iPhone, or explains what's wrong.
 device="$(python3 -I - "$tmp/devices.json" "${1:-}" <<'PY'
 import json, sys

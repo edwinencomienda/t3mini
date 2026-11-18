@@ -18,7 +18,7 @@ cards, sending and steering, stop, Allow / Deny, answering the agent's questions
 thread in a project, tap the title pill for the thread's details (full title, status and times, agent and settings, folder, branch, open pull request), a new thread in the same project in one tap (✎ at the top right of a thread, same agent and settings; ⋯ has Agent settings and Stop), a ↓ button to jump back to the latest message, press and hold a thread in the list for New thread in this project, Rename, Regenerate title, Mark as read, Stop, and Delete, choosing the agent, model, reasoning, speed, and permission (the chip above
 the message box, and New thread; switching agents mid-thread too), the branch in the header,
 sending photos (+, resized to JPEG ≤ 2048 px like the web app), replies grouped into turns like
-the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line), a
+the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line, with the web app's animated Claude/Codex characters: thinking or working while it runs, celebrating for a few seconds when it finishes; the same GIFs from `public/mascots`, off with Reduce Motion or Settings → Appearance → Animations on the computer), a
 copy button and the time under each message, and live dictation (the mic: words appear in the
 message box as you talk, the words still being worked out muted; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
 `encoding=linear16&sample_rate=16000`, relayed to the computer's Deepgram key; shown only when
@@ -46,7 +46,9 @@ reply that changed is parsed again; a turn that didn't change is skipped (`TurnV
 thumbnails) and kept decoded, with the full image loaded only in the viewer; the full-screen
 viewer zooms with UIKit's scroll view (`ZoomableImage`), not per-frame SwiftUI redraws;
 diagrams are drawn once by one hidden web view (`DiagramRenderer`) and remembered; and only
-the latest 20 turns are drawn (Show earlier messages adds more).
+the latest 20 turns are drawn (Show earlier messages adds more). Opening a thread, the conversation stays hidden until it's at its end (`land()` in `ChatView.swift`: scroll to the bottom and show it the moment it's within 2 points of the end, usually the first frame; a second at most), the way T3 Code's
+mobile feed does it, so you never see it lay out and scroll down. After that it stays pinned to
+the end while images, diagrams, and replies grow, until you scroll up.
 
 ## Build
 
@@ -73,6 +75,20 @@ scripts/run-on-device.sh          # or: scripts/run-on-device.sh "Pro Max"
 
 ### Iterating on the app (for agents)
 
+**Quick checklist to install on the user's iPhone:**
+
+1. Once per machine: `bun install` at the repo root (the app bundles Mermaid from
+   `node_modules`), `Config/Signing.xcconfig` and `Config/AppStoreConnect.env` present (both
+   gitignored; ask the user if missing, never create them with real values yourself).
+2. Test: `cd ios && xcodebuild … test` (below). Fix failures before installing.
+3. Install: `ios/scripts/run-on-device.sh`, **outside the sandbox** (in Claude Code: Bash with
+   `dangerouslyDisableSandbox: true`). It ends with `✓ t3 mini is running on …`.
+4. Server changed too? Restart the dev server (no thread running first, see AGENTS.md).
+5. Tell the user what to check on the phone; ask for a screenshot when it's visual.
+
+No cable is needed: the phone installs over the same Wi-Fi. If the script still says the phone
+"isn't reachable" after its own wake-up step, see Troubleshooting below before asking the user.
+
 The fast loop after changing the app: test, then put it on the user's iPhone.
 
 ```sh
@@ -92,9 +108,12 @@ scripts/run-on-device.sh   # builds, signs, installs and opens it on the phone (
   script passes it to `xcodebuild -authenticationKeyPath …`. It only names where the key is; never
   copy the key itself into the repo. Without either, the build fails with "No Accounts" and "doesn't
   include the aps-environment entitlement".
-- **The phone must be reachable.** `xcrun devicectl list devices` shows it as `connected`. When it
-  says `unavailable` (locked, unplugged, asleep), the script stops and says so: ask the user to
-  unlock it and keep it plugged in, then run the script again.
+- **The phone must be reachable.** `xcrun devicectl list devices` shows it as `connected`. A cable
+  isn't needed: a paired phone on the same Wi-Fi works too. Over Wi-Fi it often shows
+  `unavailable` just because the wireless link went idle; the script first wakes it
+  (`xcrun devicectl device info details --device <id>`). If it still can't reach it (locked,
+  asleep, another network, a VPN), it stops and says so: ask the user to unlock the phone and keep
+  it awake, then run the script again.
 - **Reinstalling keeps the pairing** (the session is in the Keychain, which survives updates), so the
   user doesn't scan again. Threads, avatars and pages reload from the computer.
 - **You can't see the phone.** After installing, tell the user what changed and what to check, and
@@ -111,6 +130,40 @@ scripts/run-on-device.sh   # builds, signs, installs and opens it on the phone (
 - **Clean up after testing:** revoke test devices (`DELETE /api/remote/devices` with `{ "id" }`) and
   turn off access you switched on.
 
+### Troubleshooting installs and crashes
+
+- **"isn't reachable" / `unavailable` while the phone is on the same Wi-Fi.** The wireless link
+  went idle. The script wakes it once; to do it by hand, wake it and check it's back:
+
+  ```sh
+  xcrun devicectl list devices                                   # note the iPhone's identifier
+  xcrun devicectl device info details --device <identifier> | grep -E "Device State|Transport"
+  # expect "Device State: connected" and "Transport Type: localNetwork" (or wired), then rerun the script
+  ```
+
+  Still unavailable: the phone is locked or asleep, on another network, or behind a VPN. Ask the
+  user to unlock it and keep the screen on; don't tell them a cable is required.
+
+- **Find the phone on the network:** `dns-sd -B _apple-mobdev2._tcp local.` lists paired devices
+  the Mac can see over Wi-Fi (Ctrl-C to stop).
+- **The app crashed on the phone.** Pull the crash report instead of guessing:
+
+  ```sh
+  xcrun devicectl device info files --device <identifier> --domain-type systemCrashLogs | grep T3Mini
+  xcrun devicectl device copy from --device <identifier> --domain-type systemCrashLogs \
+    --source T3Mini-<date>.ips --destination /tmp/crash.ips
+  ```
+
+  The `.ips` file is a JSON header line, then JSON with `faultingThread` and `threads[].frames`.
+  `_dispatch_assert_queue_fail` / `swift_task_checkIsolated` in the trace means a closure the
+  compiler took as main-actor code ran on another thread (audio taps, URLSession and WebSocket
+  callbacks, notification delegates): mark it `@Sendable` or hop to the main actor inside it.
+
+- **New targets and capabilities** (an app extension, Live Activities, push) are provisioned
+  automatically on the next install through `Config/AppStoreConnect.env`; nothing to do in the
+  developer portal.
+- **`Couldn't find mermaid.min.js` / missing resource at build:** run `bun install` at the repo root.
+
 ### Testing in the simulator without typing (debug builds only)
 
 ```sh
@@ -118,7 +171,13 @@ SIMCTL_CHILD_T3MINI_PAIR_LINK='http://<Mac LAN address>:4316/pair?code=…' \
   xcrun simctl launch "iPhone 17" com.example.t3mini
 ```
 
-pairs with that link at launch (`T3MINI_OPEN_THREAD=<id>` also opens a thread). Use the **dev**
+pairs with that link at launch (`T3MINI_OPEN_THREAD=<id>` also opens a thread;
+`T3MINI_REOPEN=<id>` opens it, goes back to the list, and opens it again, for checking where a
+reopened thread lands: take `xcrun simctl io booted screenshot` after each step, and add a
+temporary `onScrollGeometryChange` print in `ChatView` to log content height, visible rect, and
+content insets). A session from an earlier run is kept, so later launches need only the thread
+variables. When the dev server's phone access is on Tailscale, a pairing link from
+`POST /api/remote/pair` works in the simulator as is, with no change to the user's phone. Use the **dev**
 server (port 4016, its gateway on 4316), turn on Local network access there, and get a link from
 `POST /api/remote/pair` (see `docs/phone-access.md` → Testing). Revoke the device and turn access
 off afterwards.

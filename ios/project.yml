@@ -20,12 +20,19 @@ targets:
     sources:
       - T3Mini
       - Shared
+      - LiveActivity
       # Mermaid for diagrams (show_diagram), from the web app's own install (`bun install` at
       # the repo root first); bundled, so the phone draws diagrams with no network.
       - path: ../node_modules/mermaid/dist/mermaid.min.js
         buildPhase: resources
+      # The working characters, the same GIFs as the web app (public/mascots).
+      - path: ../public/mascots
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: T3MiniNotify
+        embed: true
+      - target: T3MiniWidgets
         embed: true
     # Signing team and bundle id come from Config/Signing.xcconfig (gitignored, see README).
     configFiles:
@@ -44,6 +51,12 @@ targets:
       path: T3Mini/Info.plist
       properties:
         T3MiniSharedKeychain: $(AppIdentifierPrefix)$(T3MINI_BUNDLE_ID).shared
+        # A thread at work on the lock screen and in the Dynamic Island (T3MiniWidgets).
+        NSSupportsLiveActivities: true
+        # t3mini://thread/<id>: a tapped Live Activity opens its thread.
+        CFBundleURLTypes:
+          - CFBundleURLName: t3mini
+            CFBundleURLSchemes: [t3mini]
         # Only local addresses (a paired Mac on the local network) may use plain HTTP.
         # Tailscale addresses are HTTPS with a real certificate, so nothing else is relaxed.
         NSAppTransportSecurity:
@@ -91,6 +104,27 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(T3MINI_BUNDLE_ID).notify
+        DEVELOPMENT_TEAM: $(T3MINI_TEAM)
+        TARGETED_DEVICE_FAMILY: '1,2'
+
+  # Draws Live Activities: a thread at work on the lock screen and in the Dynamic Island
+  # (LiveActivity/ThreadActivity.swift; updated by src/server/live-activities.ts).
+  T3MiniWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [T3MiniWidgets, LiveActivity]
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    info:
+      path: T3MiniWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: t3 mini
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(T3MINI_BUNDLE_ID).widgets
         DEVELOPMENT_TEAM: $(T3MINI_TEAM)
         TARGETED_DEVICE_FAMILY: '1,2'
 

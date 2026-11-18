@@ -49,7 +49,8 @@ struct ProjectAvatar: View {
         .accessibilityHidden(true)
         // Reload when the choice changes on the computer (avatar, image, icon on/off). Already
         // decoded: shown at once, with no letter in between.
-        .task(id: avatarKey) {
+        // Also when the icon changed on the computer (checked in the background, avatarRevision).
+        .task(id: "\(avatarKey)|\(model.avatarRevision)") {
             guard let project else { image = nil; return }
             if let cached = model.cachedAvatar(project) { image = cached; return }
             image = await model.loadAvatar(project)

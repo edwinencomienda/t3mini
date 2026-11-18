@@ -20,8 +20,16 @@ final class AppModel {
     private(set) var link: LinkState = .connecting
     /// The thread on screen, whole, kept current by patches.
     private(set) var openThread: ChatThread? {
-        didSet { if let openThread { remember(openThread) } }
+        didSet {
+            if let openThread {
+                remember(openThread)
+                settleOutgoing(openThread)
+            }
+        }
     }
+    /// Messages you just sent, shown at once (optimistic) until the computer's own copy arrives,
+    /// by thread.
+    private(set) var outgoing: [String: [Message]] = [:]
     private(set) var openThreadId: String?
     /// The session ended (expired or removed on the computer): back to pairing.
     private(set) var unpairedNotice: String?
@@ -58,6 +66,13 @@ final class AppModel {
 
     /// Images by id, kept while the app runs (ids never change content: they're generated per upload).
     private let images = NSCache<NSString, NSData>()
+    /// The same on disk, per computer (DiskCache), so they outlive the app being closed.
+    private var disk: DiskCache?
+    /// Icons checked against the computer since launch (stale-while-revalidate: the saved copy
+    /// shows at once, then it's checked once in the background).
+    private var revalidated: Set<String> = []
+    /// Bumped when a project's icon changed on the computer, so avatars redraw.
+    private(set) var avatarRevision = 0
 
     func imageData(_ id: String) async throws -> Data {
         try await cachedImage("upload:" + id) { try await $0.image(id) }
@@ -95,18 +110,37 @@ final class AppModel {
          ui?.projectIcons == false ? "off" : "on"].joined(separator: "|")
     }
 
+    /// Decoded already, or saved on this phone: shown at once (icons are small, so this reads and
+    /// decodes right away instead of showing the letter first).
     func cachedAvatar(_ project: ProjectSummary) -> UIImage? {
-        avatarImages.object(forKey: avatarKey(project) as NSString)
+        let key = avatarKey(project) as NSString
+        if let image = avatarImages.object(forKey: key) { return image }
+        guard let dataKey = avatarDataKey(project), let data = images.object(forKey: dataKey as NSString) as Data? ?? disk?.read(dataKey),
+              let image = ImageDecode.decode(data, maxPixel: Self.avatarPixels)
+        else { return nil }
+        images.setObject(data as NSData, forKey: dataKey as NSString, cost: data.count)
+        avatarImages.setObject(image, forKey: key)
+        return image
     }
 
     func loadAvatar(_ project: ProjectSummary) async -> UIImage? {
         let key = avatarKey(project) as NSString
         if let image = avatarImages.object(forKey: key) { return image }
         guard let data = await projectAvatar(project),
-              let image = await Task.detached(operation: { UIImage(data: data)?.preparingForDisplay() }).value
+              let image = await Task.detached(operation: { ImageDecode.decode(data, maxPixel: Self.avatarPixels) }).value
         else { return nil }
         avatarImages.setObject(image, forKey: key)
         return image
+    }
+
+    /// Avatars are at most ~48 pt: decoded small.
+    nonisolated static let avatarPixels = 192
+
+    /// Where a project's avatar image comes from (cache key), or nil for its letter.
+    private func avatarDataKey(_ project: ProjectSummary) -> String? {
+        if project.avatar == "image", let image = project.image { return "upload:" + image }
+        guard project.avatar != "letter", project.icon == true, ui?.projectIcons != false else { return nil }
+        return "icon:" + project.path
     }
 
     /// The image a project's avatar shows, like the web app: an image chosen for it, else its own
@@ -116,15 +150,46 @@ final class AppModel {
             return try? await imageData(image)
         }
         guard project.avatar != "letter", project.icon == true, ui?.projectIcons != false else { return nil }
-        return try? await cachedImage("icon:" + project.path) { try await $0.projectIcon(project.path) }
+        let path = project.path
+        return try? await cachedImage("icon:" + path, revalidate: true) { try await $0.projectIcon(path) }
     }
 
-    private func cachedImage(_ key: String, load: (APIClient) async throws -> Data) async throws -> Data {
-        if let cached = images.object(forKey: key as NSString) { return cached as Data }
+    /// Memory, then this phone's disk, then the computer. Uploads never change, so a saved copy is
+    /// final. Icons can (`revalidate`): the saved copy is used at once and checked against the
+    /// computer once per launch in the background; if it changed, avatars redraw with the new one.
+    private func cachedImage(_ key: String, revalidate: Bool = false,
+                             load: @escaping (APIClient) async throws -> Data) async throws -> Data {
+        if let cached = images.object(forKey: key as NSString) as Data? {
+            if revalidate { refreshInBackground(key, load: load, current: cached) }
+            return cached
+        }
+        let disk = disk
+        if let saved = await Task.detached(operation: { disk?.read(key) }).value {
+            images.setObject(saved as NSData, forKey: key as NSString, cost: saved.count)
+            if revalidate { refreshInBackground(key, load: load, current: saved) }
+            return saved
+        }
         guard let client else { throw APIError.unpaired }
         let data = try await load(client)
-        images.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+        revalidated.insert(key)
+        store(key, data)
         return data
+    }
+
+    private func store(_ key: String, _ data: Data) {
+        images.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+        let disk = disk
+        Task.detached(priority: .utility) { disk?.write(key, data) }
+    }
+
+    private func refreshInBackground(_ key: String, load: @escaping (APIClient) async throws -> Data, current: Data) {
+        guard let client, revalidated.insert(key).inserted else { return }
+        Task {
+            guard let fresh = try? await load(client), fresh != current else { return }
+            store(key, fresh)
+            avatarImages.removeAllObjects()
+            avatarRevision += 1
+        }
     }
 
     /// Built pages by id and look, kept while the app runs (a page's HTML never changes).
@@ -180,6 +245,13 @@ final class AppModel {
             self.pendingOpen = id
         }
         notifications.visibleThread = { [weak self] in self?.openThreadId }
+        // Live Activities: their push tokens go to the computer, which keeps them current.
+        LiveActivities.shared.register = { [weak self] token, thread in
+            guard let client = self?.client else { return }
+            try? await client.registerActivity(token: token, thread: thread, environment: Notifications.environment,
+                                               topic: Bundle.main.bundleIdentifier ?? "")
+        }
+        LiveActivities.shared.resume()
         Task {
             if await notifications.authorization == .denied { push = .denied }
             await notifications.refresh()
@@ -262,11 +334,18 @@ final class AppModel {
         pages = [:]
         images.removeAllObjects()
         avatarImages.removeAllObjects()
+        // Unpaired: this computer's saved pictures go too.
+        disk?.removeAll()
+        disk = nil
+        revalidated = []
     }
 
     private func use(_ connection: Connection) {
         self.connection = connection
         client = APIClient(connection: connection)
+        let cache = DiskCache(scope: connection.server.absoluteString)
+        disk = cache
+        Task.detached(priority: .background) { cache.trim() }
         restartStream()
         startNotifications()
         // The bootstrap's extras (dictation available) aren't in live updates.
@@ -292,7 +371,10 @@ final class AppModel {
         guard let client else { return }
         do {
             let bootstrap = try await client.bootstrap()
-            if bootstrap.threads != threads { threads = bootstrap.threads }
+            if bootstrap.threads != threads {
+                threads = bootstrap.threads
+                LiveActivities.shared.sync(threads)
+            }
             if bootstrap.projects != projects { projects = bootstrap.projects }
             if bootstrap.ui != ui { ui = bootstrap.ui }
             if (bootstrap.dictation ?? false) != dictationAvailable { dictationAvailable = bootstrap.dictation ?? false }
@@ -306,8 +388,47 @@ final class AppModel {
 
     func send(_ text: String, attachments: [Attachment] = []) async throws {
         guard let client, let id = openThreadId else { return }
-        try await run { try await client.send(text, attachments: attachments, to: id) }
+        // In the conversation right away; the computer's copy replaces it when it arrives.
+        let local = Message(id: "local-" + UUID().uuidString, role: .user, text: text,
+                            createdAt: Self.isoNow(), attachments: attachments.isEmpty ? nil : attachments)
+        outgoing[id, default: []].append(local)
+        do {
+            try await run { try await client.send(text, attachments: attachments, to: id) }
+        } catch {
+            outgoing[id]?.removeAll { $0.id == local.id }
+            throw error
+        }
+        if let openThread, openThread.id == id { settleOutgoing(openThread) }
+        // On the lock screen while the agent works on it.
+        let info = openThread?.id == id ? openThread?.info : nil
+        let summary = threads.first { $0.id == id }
+        LiveActivities.shared.start(threadId: id, title: info?.title ?? summary?.title ?? "Thread",
+                                    project: projectName(for: info?.cwd ?? summary?.cwd ?? ""),
+                                    provider: info?.provider ?? summary?.provider ?? .claude)
     }
+
+    /// Drops the messages you sent once the computer's copy is in the thread (a message of yours
+    /// with the same text, from around then), or after a minute at most.
+    private func settleOutgoing(_ thread: ChatThread) {
+        guard let pending = outgoing[thread.id], !pending.isEmpty else { return }
+        let mine = thread.messages.filter { $0.role == .user && $0.report == nil }
+        let now = Date()
+        let left = pending.filter { local in
+            guard let sent = RelativeTime.parse(local.createdAt) else { return false }
+            if now.timeIntervalSince(sent) > 60 { return false }
+            return !mine.contains { real in
+                real.text == local.text && (RelativeTime.parse(real.createdAt).map { $0 > sent.addingTimeInterval(-30) } ?? false)
+            }
+        }
+        if left.count != pending.count { outgoing[thread.id] = left.isEmpty ? nil : left }
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    static func isoNow() -> String { isoFormatter.string(from: Date()) }
 
     func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
         guard let client else { throw APIError.unpaired }
@@ -485,7 +606,10 @@ final class AppModel {
     private func apply(_ update: LiveUpdate, threadId: String?, client: APIClient) async {
         // Only real changes: @Observable redraws whatever reads a property on every assignment, and
         // while an agent works the thread list arrives several times a second.
-        if let threads = update.threads, threads != self.threads { self.threads = threads }
+        if let threads = update.threads, threads != self.threads {
+            self.threads = threads
+            LiveActivities.shared.sync(threads)
+        }
         if let projects = update.projects, projects != self.projects { self.projects = projects }
         if let ui = update.ui, ui != self.ui { self.ui = ui }
         guard threadId == openThreadId else { return }

@@ -157,6 +157,12 @@ final class APIClient: Sendable {
         let _: Empty = try await call("push/app", method: "POST", body: body)
     }
 
+    /// A Live Activity's push token for a thread (src/server/live-activities.ts).
+    func registerActivity(token: String, thread: String, environment: String, topic: String) async throws {
+        let body = ["token": token, "thread": thread, "environment": environment, "topic": topic]
+        let _: Empty = try await call("push/activity", method: "POST", body: body)
+    }
+
     func unregisterPush(token: String) async throws {
         let _: Empty = try await call("push/app", method: "DELETE", body: ["token": token])
     }

@@ -113,6 +113,19 @@ struct ThreadListView: View {
             showingSettings = false
             if path != [id] { path = [id] }
         }
+        #if DEBUG
+        // Debug builds only: T3MINI_REOPEN=<thread id> opens it, goes back, and opens it again
+        // (for checking where a reopened thread lands, in the simulator).
+        .task {
+            guard let id = ProcessInfo.processInfo.environment["T3MINI_REOPEN"] else { return }
+            try? await Task.sleep(for: .seconds(4))
+            path = [id]
+            try? await Task.sleep(for: .seconds(4))
+            path = []
+            try? await Task.sleep(for: .seconds(2))
+            path = [id]
+        }
+        #endif
     }
 
     /// All projects, or one: the filter menu in the toolbar.

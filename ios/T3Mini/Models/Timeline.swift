@@ -141,6 +141,59 @@ struct Turn: Identifiable, Hashable {
     }
 }
 
+/// The working line while a turn runs, like the web app (src/timeline.ts → liveNote): the agent's
+/// latest note, but only finished text, so it doesn't change word by word while streaming. A note
+/// counts as finished once anything comes after it; the last one only up to its last finished
+/// paragraph (one followed by a blank line), never inside an open code block.
+enum LiveText {
+    static func latestNote(_ work: [Turn.Work]) -> String? {
+        for (index, item) in work.enumerated().reversed() {
+            guard case .note(let message) = item else { continue }
+            let text = index == work.count - 1 ? finishedText(message.text) : message.text
+            let line = noteLine(text)
+            if !line.isEmpty { return line }
+        }
+        return nil
+    }
+
+    static func finishedText(_ text: String) -> String {
+        guard let range = text.range(of: #"\n\s*\n"#, options: [.regularExpression, .backwards]) else { return "" }
+        var done = String(text[..<range.lowerBound])
+        // An unclosed code block: up to where it opened.
+        let fences = done.components(separatedBy: "\n").filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }
+        if fences.count % 2 == 1, let open = done.range(of: "```", options: .backwards) {
+            done = String(done[..<open.lowerBound])
+        }
+        return done
+    }
+
+    /// A note's last paragraph as plain words on one line (Markdown marks, links, bullets dropped).
+    static func noteLine(_ text: String) -> String {
+        let paragraphs = text.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("```") }
+        guard var paragraph = paragraphs.last else { return "" }
+        paragraph = paragraph.replacingOccurrences(of: #"!?\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+        paragraph = paragraph.replacingOccurrences(of: #"(?m)^\s*(?:[-*+>]|\d+[.)]|#{1,6})\s+"#, with: "", options: .regularExpression)
+        paragraph = paragraph.replacingOccurrences(of: #"(\*\*|__|`|~~)"#, with: "", options: .regularExpression)
+        return paragraph.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
+
+extension Turn {
+    /// What the working line says: the latest finished note, else the step running now, else
+    /// Thinking… (Starting… before the agent has begun), and when that started.
+    /// `working`: a step is running (the working character); otherwise it's thinking, like the web.
+    func liveLine(starting: Bool, stepsOpen: Bool) -> (text: String, note: Bool, since: String?, working: Bool) {
+        var running: Activity?
+        for item in work.reversed() {
+            if case .step(let activity) = item, activity.status == "running" { running = activity; break }
+        }
+        if !stepsOpen, let note = LiveText.latestNote(work) { return (note, true, startedAt, running != nil) }
+        if let running { return (running.line, false, running.startedAt ?? startedAt, true) }
+        return (starting ? "Starting…" : "Thinking…", false, startedAt, false)
+    }
+}
+
 /// "9:36 AM" today, "Yesterday 9:36 AM", else "11/16 9:36 AM", like the web app's message times.
 enum MessageTime {
     static func label(_ iso: String, now: Date = Date(), calendar: Calendar = .current) -> String {

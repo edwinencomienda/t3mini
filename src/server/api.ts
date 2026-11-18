@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { getService, HttpError } from './service'
+import { activitiesFor, getService, HttpError } from './service'
 import { ThreadDiff } from '../thread-patch'
 import { pickProjectFolder } from './folder-picker'
 import { getModels } from './models'
@@ -371,6 +371,7 @@ export async function handleApi(request: Request) {
         await access.revoke(id)
         // Its push notifications stop too (all paired devices' when revoking all).
         await pushFor().removeDevice(id)
+        await activitiesFor(await getService()).removeDevice(id)
         return Response.json(await status())
       }
     }
@@ -441,6 +442,27 @@ export async function handleApi(request: Request) {
             )
           if (result !== 'sent')
             throw new HttpError(502, 'Apple didn’t accept the message. Try again.')
+          return Response.json({ ok: true })
+        }
+      }
+      // A Live Activity the native app started for a thread (live-activities.ts): register its
+      // push token, or remove it. The device is the paired one asking (gateway requests only).
+      if (parts[1] === 'activity' && !parts[2]) {
+        const activities = activitiesFor(await getService())
+        const deviceId = remote ? request.headers.get('x-t3-device') || undefined : undefined
+        if (request.method === 'POST') {
+          try {
+            await activities.register(await request.json(), deviceId)
+          } catch (error) {
+            if (error instanceof z.ZodError) throw error
+            throw new HttpError(404, 'Thread not found.')
+          }
+          activities.queue()
+          return Response.json({ ok: true, configured: await push.apnsConfigured() })
+        }
+        if (request.method === 'DELETE') {
+          const { token } = z.object({ token: z.string().max(400) }).parse(await request.json())
+          await activities.unregister(token)
           return Response.json({ ok: true })
         }
       }

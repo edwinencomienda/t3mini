@@ -91,6 +91,7 @@ import { defaultPermission } from '../agent-settings'
 import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
 import { replaceHtmlBlock } from './html-pages'
 import { pushIn, watchThreads } from './push'
+import { activitiesIn, watchActivities } from './live-activities'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
@@ -2328,6 +2329,16 @@ export class AgentService {
     return { ok: true, ...(kept.length ? { keptWorktrees: kept } : {}) }
   }
 }
+// The Live Activities store, reading threads from this service.
+export function activitiesFor(service: AgentService) {
+  return activitiesIn(dirname(service.store.path), (id) => {
+    try {
+      return service.get(id)
+    } catch {
+      return undefined
+    }
+  })
+}
 const globals = globalThis as typeof globalThis & { t3MiniService?: Promise<AgentService> }
 export function getService() {
   return (globals.t3MiniService ??= (async () => {
@@ -2354,6 +2365,8 @@ export function getService() {
       },
       push,
     )
+    // Live Activities on the iPhone app's lock screen (live-activities.ts): kept current too.
+    watchActivities(service, activitiesFor(service))
     return service
   })())
 }

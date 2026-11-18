@@ -55,8 +55,8 @@ struct TimelineTests {
             activities: [], running: false, completedAt: "2026-11-18T10:00:12.000Z", status: .interrupted)
         #expect(stopped[0].foldLabel == "Stopped after 12s · 1 message")
         #expect(stopped[0].finishLabel()?.hasPrefix("Stopped after 12s · ") == true)
-        #expect(WorkingRow.counter(42) == "42s")
-        #expect(WorkingRow.counter(185) == "3m 5s")
+        #expect(LiveLine.counter(42) == "42s")
+        #expect(LiveLine.counter(185) == "3m 5s")
     }
 
     @Test func durations() {
@@ -99,5 +99,66 @@ struct TimelineTests {
         #expect(drawing.height > 100 && drawing.width < 250) // stacked top to bottom (side by side: ~300 × 60)
         #expect(DiagramRenderer.shared.cached("flowchart LR\n  a[Phone] --> b[Computer]", dark: true) == drawing)
         await #expect(throws: (any Error).self) { try await DiagramRenderer.shared.draw("flowchart TB\n  a -->", dark: false) }
+    }
+
+    @Test func liveActivityLinksAndText() throws {
+        let url = try #require(ThreadLink.url(for: "thr_abc-123"))
+        #expect(url.absoluteString == "t3mini://thread/thr_abc-123")
+        #expect(ThreadLink.threadId(from: url) == "thr_abc-123")
+        #expect(ThreadLink.threadId(from: URL(string: "t3mini://thread/../x")!) == nil)
+        #expect(ThreadLink.threadId(from: URL(string: "https://example.com/thread/abc")!) == nil)
+        // The computer's update (src/server/live-activities.ts) decodes as the widget reads it.
+        let json = #"{"status":"done","steps":12,"startedAt":1000,"endedAt":1130}"#
+        let state = try JSONDecoder().decode(ThreadActivityAttributes.ContentState.self, from: Data(json.utf8))
+        #expect(state.detail == "Done in 2m 10s · 12 steps")
+        #expect(ThreadActivityAttributes.ContentState(status: "working", steps: 1, startedAt: 0).detail == "Working · 1 step")
+    }
+
+    @Test func workingLineLikeTheWeb() {
+        // Only finished text: the last note up to its last finished paragraph.
+        #expect(LiveText.finishedText("Looking at the tests.\n\nNow I'll run") == "Looking at the tests.")
+        #expect(LiveText.finishedText("Still typing") == "")
+        #expect(LiveText.noteLine("Intro\n\n- **Checking** the [docs](https://example.com) and `tests`") == "Checking the docs and tests")
+        let note = Message(id: "a1", role: .assistant, text: "I'll check the branch first.\n\nThen", createdAt: "2026-11-18T10:00:01.000Z")
+        let step = Activity(id: "s1", label: "Run", summary: "git status", status: "running", startedAt: "2026-11-18T10:00:02.000Z")
+        // The note is the latest item and still streaming: only its finished paragraph shows.
+        var turn = Turn(id: "u1", work: [.step(step), .note(note)], done: false, startedAt: "2026-11-18T10:00:00.000Z")
+        #expect(turn.liveLine(starting: false, stepsOpen: false).text == "I'll check the branch first.")
+        // A step came after it: the note is finished, so its last paragraph shows.
+        turn.work = [.note(note), .step(step)]
+        #expect(turn.liveLine(starting: false, stepsOpen: false).text == "Then")
+        #expect(turn.liveLine(starting: false, stepsOpen: true).text == "Run · git status")
+        turn.work = [.step(step)]
+        #expect(turn.liveLine(starting: false, stepsOpen: false).text == "Run · git status")
+        #expect(turn.liveLine(starting: false, stepsOpen: false).working)
+        turn.work = []
+        #expect(turn.liveLine(starting: true, stepsOpen: false).text == "Starting…")
+        #expect(!turn.liveLine(starting: true, stepsOpen: false).working)
+    }
+
+    @Test func diskCacheKeepsAndTrims() throws {
+        let cache = DiskCache(scope: "test-" + UUID().uuidString, limit: 250)
+        defer { cache.removeAll() }
+        cache.write("upload:a.png", Data(repeating: 1, count: 100))
+        #expect(cache.read("upload:a.png")?.count == 100)
+        // Names on disk are hashes, not the keys.
+        let names = try FileManager.default.contentsOfDirectory(atPath: cache.folder.path)
+        #expect(names.allSatisfy { !$0.contains("upload") && $0.count == 64 })
+        Thread.sleep(forTimeInterval: 0.02)
+        cache.write("upload:b.png", Data(repeating: 2, count: 100))
+        Thread.sleep(forTimeInterval: 0.02)
+        cache.write("upload:c.png", Data(repeating: 3, count: 100))
+        cache.trim()
+        #expect(cache.read("upload:a.png") == nil) // oldest went past the limit
+        #expect(cache.read("upload:c.png")?.count == 100)
+        cache.removeAll()
+        #expect(cache.read("upload:c.png") == nil)
+    }
+
+    @MainActor
+    @Test func mascotsAreBundled() {
+        for name in ["claude-working", "claude-thinking", "claude-celebrating", "codex-working", "codex-thinking", "codex-celebrating"] {
+            #expect(Bundle.main.url(forResource: name, withExtension: "gif", subdirectory: "mascots") != nil, "\(name)")
+        }
     }
 }

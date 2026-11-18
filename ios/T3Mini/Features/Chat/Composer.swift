@@ -19,7 +19,6 @@ struct Composer: View {
     @State private var dictation = LiveDictation()
     /// What was typed before dictation started; the live words go after it.
     @State private var dictationBase = ""
-    @State private var sending = false
     @State private var problem: String?
     @FocusState private var focused: Bool
 
@@ -35,7 +34,7 @@ struct Composer: View {
     private var ready: [Attachment] { pending.compactMap(\.attachment) }
     /// Send works while dictating too: it finishes the recording, adds its words, and sends.
     private var canSend: Bool {
-        (hasContent || dictation.active) && !sending && !uploading && !dictation.finishing
+        (hasContent || dictation.active) && !uploading && !dictation.finishing
     }
     private var hasContent: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !ready.isEmpty }
 
@@ -168,7 +167,7 @@ struct Composer: View {
             } else {
                 Button { Task { await submit() } } label: {
                     Group {
-                        if sending || uploading { ProgressView().tint(Color(.systemBackground)) } else {
+                        if uploading { ProgressView().tint(Color(.systemBackground)) } else {
                             Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold))
                         }
                     }
@@ -301,14 +300,14 @@ struct Composer: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = ready
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        sending = true
-        defer { sending = false }
+        // Optimistic: the box clears and the message shows in the chat at once (AppModel.send);
+        // only if it couldn't be sent does it come back here, unless you've started a new one.
         problem = nil
         let saved = (draft, pending)
         draft = ""
         pending = []
         if let failure = await send(text, attachments) {
-            (draft, pending) = saved
+            if draft.isEmpty && pending.isEmpty { (draft, pending) = saved }
             problem = failure
         }
     }
