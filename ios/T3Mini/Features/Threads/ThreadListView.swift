@@ -12,6 +12,11 @@ struct ThreadListView: View {
     /// One project's threads only (nil: all projects), like the sidebar's filter.
     @State private var onlyProject: String?
     @State private var collapsed: Set<String> = []
+    // Press-and-hold actions.
+    @State private var renaming: ThreadSummary?
+    @State private var newTitle = ""
+    @State private var deleting: ThreadSummary?
+    @State private var problem: String?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -73,6 +78,29 @@ struct ThreadListView: View {
                 NewThreadSheet { id in path.append(id) }
             }
             .sheet(isPresented: $showingSettings) { SettingsSheet() }
+            .alert("Rename thread", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("Title", text: $newTitle)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let thread = renaming, !title.isEmpty, title != thread.title else { return }
+                    attempt { try await model.rename(thread.id, to: String(title.prefix(120))) }
+                }
+            }
+            .confirmationDialog("Delete this thread?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { thread in
+                Button("Delete", role: .destructive) {
+                    attempt {
+                        try await model.deleteThread(thread.id)
+                        path.removeAll { $0 == thread.id }
+                    }
+                }
+            } message: { thread in
+                Text("“\(thread.title)” and its conversation are removed from your computer. Files the agent changed stay as they are.")
+            }
+            .alert("Couldn’t do that", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(problem ?? "") }
         }
         .onChange(of: path) { _, path in model.open(path.last) }
         // A tapped notification (or the debug launch) opens its thread: on top of whatever was
@@ -121,17 +149,88 @@ struct ThreadListView: View {
         let projects = Dictionary(model.projects.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         ForEach(section.threads) { thread in
             let project = projects[thread.cwd]
-            NavigationLink(value: thread.id) {
+            // A button with its own pressed look (a soft rounded highlight) instead of the
+            // list's full-width grey flash.
+            Button { path.append(thread.id) } label: {
                 ThreadRow(thread: thread,
                           projectName: project?.displayName ?? (thread.cwd as NSString).lastPathComponent,
                           project: project, avatar: project.flatMap { model.cachedAvatar($0) },
                           showProject: section.showProject, now: now)
                     .equatable()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .contentShape(.rect(cornerRadius: 16))
+                    // Pressed and held: the row lifts as a rounded card.
+                    .contentShape(.contextMenuPreview, .rect(cornerRadius: 16))
             }
+            .buttonStyle(ThreadRowButtonStyle())
+            .contextMenu { actions(for: thread) }
             // Space instead of lines between rows: easier to read, calmer to look at.
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 6))
         }
+    }
+}
+
+extension ThreadListView {
+    /// Press and hold a thread: the everyday actions, like the web sidebar's right-click menu.
+    @ViewBuilder func actions(for thread: ThreadSummary) -> some View {
+        Button { Task { await newThread(like: thread) } } label: {
+            Label("New thread in this project", systemImage: "square.and.pencil")
+        }
+        Divider()
+        Button {
+            newTitle = thread.title
+            renaming = thread
+        } label: { Label("Rename…", systemImage: "pencil") }
+        Button { attempt { try await model.regenerateTitle(thread.id) } } label: {
+            Label("Regenerate title", systemImage: "sparkles")
+        }
+        if thread.unread == true {
+            Button { Task { await model.markRead(thread.id) } } label: {
+                Label("Mark as read", systemImage: "envelope.open")
+            }
+        }
+        if thread.status.isRunning || thread.status == .waiting {
+            Divider()
+            Button(role: .destructive) { attempt { try await model.stop(thread.id) } } label: {
+                Label("Stop", systemImage: "stop.circle")
+            }
+        }
+        Divider()
+        Button(role: .destructive) { deleting = thread } label: { Label("Delete…", systemImage: "trash") }
+            .disabled(thread.status.isRunning || thread.status == .waiting)
+    }
+
+    private func attempt(_ action: @escaping () async throws -> Void) {
+        Task {
+            do { try await action() } catch { problem = error.localizedDescription }
+        }
+    }
+
+    /// Same project and agent, with that agent's last-used settings; opens it.
+    private func newThread(like thread: ThreadSummary) async {
+        do {
+            if let id = try await model.createThread(project: model.project(at: thread.cwd),
+                                                     choice: model.defaultChoice(for: thread.provider)) {
+                path = [id]
+            }
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
+}
+
+/// The thread row's pressed look: a soft rounded highlight inset from the edges and a slight
+/// press-in, instead of the list's full-width grey flash.
+struct ThreadRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color(.secondarySystemFill).opacity(configuration.isPressed ? 1 : 0),
+                        in: .rect(cornerRadius: 16))
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: configuration.isPressed ? 0.08 : 0.2), value: configuration.isPressed)
     }
 }
 

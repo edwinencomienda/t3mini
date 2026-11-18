@@ -313,6 +313,37 @@ final class AppModel {
         try await run { try await client.stop(id) }
     }
 
+    // MARK: Thread actions (press and hold in the list)
+
+    func stop(_ id: String) async throws {
+        guard let client else { return }
+        try await run { try await client.stop(id) }
+    }
+
+    func rename(_ id: String, to title: String) async throws {
+        guard let client else { return }
+        try await run { try await client.rename(id, title: title) }
+        if let index = threads.firstIndex(where: { $0.id == id }) { threads[index].title = title }
+    }
+
+    func regenerateTitle(_ id: String) async throws {
+        guard let client else { return }
+        try await run { try await client.regenerateTitle(id) }
+        await refresh()
+    }
+
+    func markRead(_ id: String) async {
+        guard let client else { return }
+        try? await client.markRead(id)
+        if let index = threads.firstIndex(where: { $0.id == id }) { threads[index].unread = false }
+    }
+
+    func deleteThread(_ id: String) async throws {
+        guard let client else { return }
+        try await run { try await client.deleteThread(id) }
+        threads.removeAll { $0.id == id }
+    }
+
     func answer(_ approval: Approval, allow: Bool, answers: [String: String]? = nil) async throws {
         guard let client, let id = openThreadId else { return }
         try await run { try await client.approve(id, approvalId: approval.id, allow: allow, answers: answers) }

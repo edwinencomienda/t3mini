@@ -11,6 +11,10 @@ struct ChatView: View {
     /// How many of the latest turns are drawn; "Show earlier" adds more (like the web app's
     /// firstTurns / OlderTurns).
     @State private var shownTurns = ChatView.turnPage
+    /// Near the bottom: new replies are followed, and the jump-to-latest button hides.
+    @State private var atBottom = true
+    @State private var startingThread = false
+    @State private var problem: String?
     static let turnPage = 20
 
     private var thread: ChatThread? { model.openThread?.id == threadId ? model.openThread : nil }
@@ -79,13 +83,47 @@ struct ChatView: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
             .defaultScrollAnchor(.bottom)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.visibleRect.maxY >= geometry.contentSize.height - 120
+            } action: { _, near in
+                atBottom = near
+            }
+            // Follows new content only when you're at the bottom (or just sent something), so
+            // reading back up isn't interrupted.
             .onChange(of: scrollKey) { _, _ in
+                guard atBottom || thread?.messages.last?.role == .user else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomId, anchor: .bottom) }
             }
+            .safeAreaInset(edge: .bottom) {
+                composer
+                    // The jump-to-latest button floats over the conversation, centered just
+                    // above the message box; it doesn't change the layout.
+                    .overlay(alignment: .top) {
+                        if !atBottom {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(bottomId, anchor: .bottom) }
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 40, height: 40)
+                                    .floatingBackground(in: Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Scroll to the latest")
+                            .offset(y: -52)
+                            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.15), value: atBottom)
+            }
         }
-        .safeAreaInset(edge: .bottom) { composer }
         .navigationTitle(thread?.info.title ?? summary?.title ?? "Thread")
         .navigationBarTitleDisplayMode(.inline)
+        // No bar behind the header: the back button, title, and actions float as pills over
+        // the conversation, which fades out softly under them.
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .softTopEdge()
         .toolbar {
             // Like a Messages conversation: the project's avatar with the thread's name under it.
             ToolbarItem(placement: .principal) {
@@ -107,8 +145,44 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                     }
                 }
+                .padding(.leading, 5)
+                .padding(.trailing, 14)
+                .padding(.vertical, 5)
+                // A floating pill of its own, like Claude's, over the conversation.
+                .floatingBackground(in: Capsule())
                 .frame(maxWidth: 260)
             }
+            .hidingSharedBackground()
+            // Like Claude's: working spinner, a new thread in this project, and more.
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if running {
+                    ProgressView().controlSize(.small)
+                }
+                Menu {
+                    Button { editingSettings = true } label: {
+                        Label("Agent settings", systemImage: "slider.horizontal.3")
+                    }
+                    .disabled(thread == nil)
+                    if running {
+                        Button(role: .destructive) { Task { try? await model.stop() } } label: {
+                            Label("Stop", systemImage: "stop.circle")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("More")
+                Button { Task { await newThreadHere() } } label: {
+                    if startingThread { ProgressView().controlSize(.small) } else { Image(systemName: "square.and.pencil") }
+                }
+                .disabled(startingThread || (thread == nil && summary == nil))
+                .accessibilityLabel("New thread in this project")
+            }
+        }
+        .alert("Couldn’t start a thread", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(problem ?? "")
         }
         .onAppear { model.open(threadId) }
         // On opening, and whenever a turn ends (the agent may have switched branches).
@@ -121,6 +195,22 @@ struct ChatView: View {
     }
 
     private let bottomId = "bottom"
+
+    /// A new thread in this thread's project, with the same agent and settings, opened in place
+    /// of this one (back still goes to the list).
+    private func newThreadHere() async {
+        let cwd = thread?.info.cwd ?? summary?.cwd ?? ""
+        let choice = thread?.info.settings ?? model.defaultChoice(for: summary?.provider ?? model.defaultProvider)
+        startingThread = true
+        defer { startingThread = false }
+        do {
+            if let id = try await model.createThread(project: model.project(at: cwd), choice: choice) {
+                model.pendingOpen = id
+            }
+        } catch {
+            problem = error.localizedDescription
+        }
+    }
 
     /// A worktree thread's own branch, else the folder's current branch (short hash when detached).
     private var branchName: String? {
@@ -204,6 +294,15 @@ struct WorkingRow: View {
 }
 
 extension View {
+    /// Content fades out softly under the floating header (iOS 26's scroll edge effect).
+    @ViewBuilder func softTopEdge() -> some View {
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
     /// The floating look of iOS's own bars: Liquid Glass on iOS 26, a blurred material before.
     @ViewBuilder func floatingBackground(in shape: some Shape) -> some View {
         if #available(iOS 26.0, *) {
@@ -212,6 +311,17 @@ extension View {
             background(.regularMaterial, in: shape)
                 .overlay(shape.stroke(Color(.separator).opacity(0.4), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.08), radius: 10, y: 2)
+        }
+    }
+}
+
+extension ToolbarContent {
+    /// The title pill draws its own glass, so iOS 26's shared toolbar background stays off it.
+    @ToolbarContentBuilder func hidingSharedBackground() -> some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
         }
     }
 }

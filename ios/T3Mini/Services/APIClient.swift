@@ -239,6 +239,20 @@ final class APIClient: Sendable {
         let _: Empty = try await call("threads/\(id.urlPathEscaped)/stop", method: "POST", body: [String: String]())
     }
 
+    func rename(_ id: String, title: String) async throws {
+        let _: Empty = try await call("threads/\(id.urlPathEscaped)/rename", method: "POST", body: ["title": title])
+    }
+
+    /// A fresh AI title from the conversation (Claude's session title, Luna for Codex).
+    func regenerateTitle(_ id: String) async throws {
+        let _: Empty = try await call("threads/\(id.urlPathEscaped)/title", method: "POST", body: [String: String]())
+    }
+
+    /// Deletes the thread on the computer (refused while its agent works).
+    func deleteThread(_ id: String) async throws {
+        let _: Empty = try await call("threads/\(id.urlPathEscaped)", method: "DELETE")
+    }
+
     func markRead(_ id: String) async throws {
         let _: Empty = try await call("threads/\(id.urlPathEscaped)/read", method: "POST", body: [String: String]())
     }
@@ -341,9 +355,11 @@ final class APIClient: Sendable {
     private func call<T: Decodable>(_ path: String, method: String = "GET", body: (any Encodable)? = nil) async throws -> T {
         var request = authorized(URLRequest(url: URL(string: "api/\(path)", relativeTo: connection.server)!.absoluteURL))
         request.httpMethod = method
-        if let body {
+        // The server takes changes only as JSON (its guard against cross-site requests), so a
+        // POST or DELETE without a body still sends an empty JSON object.
+        if body != nil || method != "GET" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(body)
+            request.httpBody = try body.map { try JSONEncoder().encode($0) } ?? Data("{}".utf8)
         }
         let (data, response) = try await Self.send(request, with: session)
         if response.statusCode == 401 { throw APIError.unpaired }

@@ -15,7 +15,7 @@ search, pull to refresh, working / needs-you / unread marks), live chat (replies
 threads you opened before show at once), Markdown with tables and code blocks, images (yours and
 the agent's, full screen with zoom), `show_html` pages in a sealed web view, status and sub-agent
 cards, sending and steering, stop, Allow / Deny, answering the agent's questions, starting a new
-thread in a project, choosing the agent, model, reasoning, speed, and permission (the chip above
+thread in a project, a new thread in the same project in one tap (✎ at the top right of a thread, same agent and settings; ⋯ has Agent settings and Stop), a ↓ button to jump back to the latest message, press and hold a thread in the list for New thread in this project, Rename, Regenerate title, Mark as read, Stop, and Delete, choosing the agent, model, reasoning, speed, and permission (the chip above
 the message box, and New thread; switching agents mid-thread too), the branch in the header,
 sending photos (+, resized to JPEG ≤ 2048 px like the web app), replies grouped into turns like
 the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line), a
