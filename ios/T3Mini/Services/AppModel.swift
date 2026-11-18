@@ -767,6 +767,22 @@ final class AppModel {
         try? await client?.git(threadId)
     }
 
+    /// Each thread's branch as last seen, so its header shows it at once when you come back.
+    private(set) var branches: [String: GitInfo] = [:]
+
+    /// Checks a thread's branch. A failed or cancelled check keeps the one already known (it
+    /// used to blank the header), and tries once more a moment later.
+    func refreshBranch(of threadId: String) async {
+        for attempt in 0..<2 {
+            if attempt > 0 { try? await Task.sleep(for: .seconds(2)) }
+            guard !Task.isCancelled, let client else { return }
+            if let info = try? await client.git(threadId) {
+                if !Task.isCancelled, branches[threadId] != info { branches[threadId] = info }
+                return
+            }
+        }
+    }
+
     /// The project new threads start in: the one last used on the computer, else the most recent.
     var defaultProject: ProjectSummary? {
         if let cwd = ui?.agent?.cwd, let match = projects.first(where: { $0.path == cwd }) { return match }

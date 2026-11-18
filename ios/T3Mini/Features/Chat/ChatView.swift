@@ -6,8 +6,6 @@ struct ChatView: View {
     let threadId: String
     @Environment(AppModel.self) private var model
     @State private var editingSettings = false
-    /// The thread's branch (GET /api/threads/:id/git), checked when it opens and after each turn.
-    @State private var branch: GitInfo?
     /// How many of the latest turns are drawn; "Show earlier" adds more (like the web app's
     /// firstTurns / OlderTurns).
     @State private var shownTurns = ChatView.turnPage
@@ -292,9 +290,10 @@ struct ChatView: View {
             Text(problem ?? "")
         }
         .onAppear { model.open(threadId) }
-        // On opening, and whenever a turn ends (the agent may have switched branches).
+        // The branch (GET /api/threads/:id/git): on opening, even while the agent works, and again
+        // whenever a turn ends (it may have switched branches). The last one known shows at once.
         .task(id: "\(threadId)|\(thread?.info.status.isRunning == true)") {
-            if thread?.info.status.isRunning != true { branch = await model.branch(of: threadId) }
+            await model.refreshBranch(of: threadId)
         }
         .sheet(isPresented: $showingChanges) { ChangesView(threadId: threadId) }
         .sheet(isPresented: $showingDetails) {
@@ -361,7 +360,7 @@ struct ChatView: View {
     /// A worktree thread's own branch, else the folder's current branch (short hash when detached).
     private var branchName: String? {
         if let worktree = thread?.info.worktree?.branch, !worktree.isEmpty { return worktree }
-        return branch?.branch
+        return model.branches[threadId]?.branch
     }
 
     /// Changes whenever something new appears at the bottom, to follow it.
