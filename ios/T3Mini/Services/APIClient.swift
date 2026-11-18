@@ -226,6 +226,16 @@ final class APIClient: Sendable {
     }
 
     /// Saves a photo on the computer (POST /api/uploads); send it with a message by its id.
+    /// Any other file: saved on the computer (like dropping a file on the web); returns its path
+    /// there, for the message.
+    func uploadFile(_ data: Data, name: String, mimeType: String) async throws -> String {
+        struct Saved: Decodable { let path: String }
+        let saved: Saved = try await call("uploads", method: "POST", body: [
+            "kind": "file", "name": name, "mimeType": mimeType, "data": data.base64EncodedString(),
+        ])
+        return saved.path
+    }
+
     func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
         struct Saved: Decodable { let id: String; let mimeType: String }
         let saved: Saved = try await call("uploads", method: "POST", body: [

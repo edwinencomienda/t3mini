@@ -88,16 +88,25 @@ struct ThreadListView: View {
                     attempt { try await model.rename(thread.id, to: String(title.prefix(120))) }
                 }
             }
-            .confirmationDialog("Delete this thread?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                                titleVisibility: .visible, presenting: deleting) { thread in
+            // A centered alert on the screen, not a dialog on the row: the list redraws on live
+            // updates (about once a second while agents work), which closed a row's dialog by
+            // itself. It names the thread, so it's clear which one it's about.
+            .alert("Delete “\(deleting?.title ?? "this thread")”?",
+                   isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                   presenting: deleting) { thread in
                 Button("Delete", role: .destructive) {
                     attempt {
                         try await model.deleteThread(thread.id)
                         path.removeAll { $0 == thread.id }
                     }
                 }
-            } message: { thread in
-                Text("“\(thread.title)” and its conversation are removed from your computer. Files the agent changed stay as they are.")
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The thread and its conversation are removed from your computer. Files the agent changed stay as they are.")
+            }
+            .overlay(alignment: .bottom) { undoBar }
+            .onChange(of: model.deleteProblem) { _, message in
+                if let message { problem = message; model.deleteProblem = nil }
             }
             .alert("Couldn’t do that", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -123,6 +132,10 @@ struct ThreadListView: View {
         // Debug builds only: T3MINI_REOPEN=<thread id> opens it, goes back, and opens it again
         // (for checking where a reopened thread lands, in the simulator).
         .task {
+            if ProcessInfo.processInfo.environment["T3MINI_PREVIEW_UNDO"] != nil {
+                try? await Task.sleep(for: .seconds(4))
+                if let thread = model.listedThreads.first { model.previewUndo(thread) }
+            }
             guard let id = ProcessInfo.processInfo.environment["T3MINI_REOPEN"] else { return }
             try? await Task.sleep(for: .seconds(4))
             path = [id]
@@ -166,15 +179,11 @@ struct ThreadListView: View {
     }
 
     @ViewBuilder private func rows(_ section: ThreadSection, now: Date) -> some View {
-        // Lookups the model keeps up to date (not rebuilt on every redraw).
+        // Lookups the model keeps up to date (not rebuilt on every redraw). Helper threads aren't
+        // listed: they're in their lead's details (tap its title pill) and report in its chat.
         let projects = model.projectsByPath
-        let helpers = model.helpersByLead
         ForEach(section.threads) { thread in
             row(thread, project: projects[thread.cwd], showProject: section.showProject, nested: false, now: now)
-            // Helper threads (start_thread) under their lead, like the web sidebar.
-            ForEach(helpers[thread.id] ?? []) { helper in
-                row(helper, project: projects[helper.cwd], showProject: false, nested: true, now: now)
-            }
         }
     }
 
@@ -197,14 +206,38 @@ struct ThreadListView: View {
             }
             .padding(.leading, nested ? 26 : 12)
             .padding(.trailing, 12)
-            .padding(.vertical, nested ? 8 : 11)
+            .padding(.vertical, nested ? 9 : 12)
             .contentShape(.rect(cornerRadius: 16))
             // Pressed and held: the row lifts as a rounded card.
             .contentShape(.contextMenuPreview, .rect(cornerRadius: 16))
         }
         .buttonStyle(ThreadRowButtonStyle())
         .contextMenu { actions(for: thread) }
-        // Space instead of lines between rows: easier to read, calmer to look at.
+        // Swipe left, like Mail: Delete (asks first; while the agent works it's Stop instead) and
+        // Mark as read. No full-swipe, so a long swipe never deletes by accident.
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if thread.status.isRunning || thread.status == .waiting {
+                Button { attempt { try await model.stop(thread.id) } } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .tint(.orange)
+            } else {
+                // Gone at once, with Undo for a few seconds (no confirmation that snaps the row back).
+                Button(role: .destructive) {
+                    withAnimation(.snappy) { model.deleteWithUndo(thread) }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .tint(.red)
+            }
+            if thread.unread == true {
+                Button { Task { await model.markRead(thread.id) } } label: {
+                    Label("Read", systemImage: "envelope.open")
+                }
+                .tint(.blue)
+            }
+        }
+        // No dividers: the rows are told apart by their space and avatars.
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 6))
@@ -212,6 +245,28 @@ struct ThreadListView: View {
 }
 
 extension ThreadListView {
+    /// "Deleted “…” · Undo", above the search bar, while a swiped-away thread can still come back.
+    @ViewBuilder var undoBar: some View {
+        if let thread = model.undoable {
+            HStack(spacing: 12) {
+                Image(systemName: "trash").foregroundStyle(.secondary)
+                Text("Deleted “\(thread.title)”").font(.subheadline).lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Undo") { withAnimation(.snappy) { model.undoDelete() } }
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .floatingBackground(in: Capsule())
+            .padding(.horizontal, 16)
+            // The list's safe area already ends above the floating search bar: a small gap keeps
+            // the bar right on top of it.
+            .padding(.bottom, 10)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.snappy, value: model.undoable?.id)
+        }
+    }
+
     /// Press and hold a thread: the everyday actions, like the web sidebar's right-click menu.
     @ViewBuilder func actions(for thread: ThreadSummary) -> some View {
         Button { Task { await newThread(like: thread) } } label: {
@@ -224,6 +279,9 @@ extension ThreadListView {
         } label: { Label("Rename…", systemImage: "pencil") }
         Button { attempt { try await model.regenerateTitle(thread.id) } } label: {
             Label("Regenerate title", systemImage: "sparkles")
+        }
+        Button { UIPasteboard.general.string = thread.cwd } label: {
+            Label("Copy project path", systemImage: "doc.on.doc")
         }
         if thread.unread == true {
             Button { Task { await model.markRead(thread.id) } } label: {
@@ -241,7 +299,7 @@ extension ThreadListView {
             .disabled(thread.status.isRunning || thread.status == .waiting)
     }
 
-    private func attempt(_ action: @escaping () async throws -> Void) {
+    func attempt(_ action: @escaping () async throws -> Void) {
         Task {
             do { try await action() } catch { problem = error.localizedDescription }
         }
@@ -370,20 +428,27 @@ struct ThreadRow: View, Equatable {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
+            // The project's avatar in its own column, like Messages and Mail, so the project
+            // name and the title line up on one left edge next to it.
+            if showProject {
+                ProjectAvatar(name: projectName, project: project, size: 38, square: true, cached: avatar)
+            }
+            // Refined type: a calm, slightly smaller project line close to its title, and a
+            // medium-weight title (semibold when unread), like a well-set mail list.
+            VStack(alignment: .leading, spacing: 3) {
                 if showProject {
-                    HStack(spacing: 7) {
-                        ProjectAvatar(name: projectName, project: project, size: 18, square: true, cached: avatar)
-                        Text(projectName)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    Text(projectName)
+                        .font(.footnote)
+                        .tracking(0.1)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Text(thread.title)
-                    .font(.body.weight(unread ? .semibold : .regular))
+                    .font(.callout.weight(unread ? .semibold : .medium))
+                    .tracking(-0.1)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
+                    .lineSpacing(1)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 8) {

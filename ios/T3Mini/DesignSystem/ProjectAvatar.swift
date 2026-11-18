@@ -10,6 +10,7 @@ struct ProjectAvatar: View {
     /// Rounded square, like the web sidebar's small avatars (circle: like a contact photo).
     var square = false
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var scheme
     @State private var image: UIImage?
 
     init(name: String, project: ProjectSummary? = nil, size: CGFloat = 48, square: Bool = false,
@@ -29,23 +30,24 @@ struct ProjectAvatar: View {
                     .font(.system(size: size * 0.38))
                     .foregroundStyle(.secondary)
             } else if let image {
-                // Icons are often square with their own background: a light backdrop and a ring
-                // keep transparent and white ones visible in both light and dark mode.
-                Rectangle().fill(Color(.secondarySystemBackground))
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size, height: size)
+                // Like the web: no box around it. A chosen image fills the square, a project's own
+                // icon is shown whole.
+                if project?.avatar == "image" {
+                    Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size)
+                } else {
+                    Image(uiImage: image).resizable().scaledToFit().frame(width: size, height: size)
+                }
             } else {
-                Rectangle().fill(color.gradient)
+                // The web's letter avatar: a soft tint of the project's color, the letter in it.
+                let dark = scheme == .dark
+                Rectangle().fill(AvatarColor.oklch(0.62, 0.12, hue).opacity(dark ? 0.22 : 0.16))
                 Text(initial)
-                    .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: size * 0.45, weight: .bold))
+                    .foregroundStyle(dark ? AvatarColor.oklch(0.82, 0.11, hue) : AvatarColor.oklch(0.5, 0.14, hue))
             }
         }
         .frame(width: size, height: size)
         .clipShape(shape)
-        .overlay { if image != nil { shape.stroke(Color(.separator).opacity(0.5), lineWidth: 0.5) } }
         .accessibilityHidden(true)
         // Reload when the choice changes on the computer (avatar, image, icon on/off). Already
         // decoded: shown at once, with no letter in between.
@@ -69,10 +71,37 @@ struct ProjectAvatar: View {
         name.first(where: { $0.isLetter || $0.isNumber }).map { String($0).uppercased() } ?? "?"
     }
 
-    private var color: Color {
-        let palette: [Color] = [.indigo, .blue, .teal, .green, .orange, .pink, .purple, .red, .cyan, .mint]
-        let hash = name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0x7fffffff }
-        return palette[hash % palette.count]
+    /// The same hue as the web app's (ProjectAvatar.tsx), so a project keeps its color everywhere.
+    private var hue: Double { AvatarColor.hue(name) }
+}
+
+/// The web app's avatar colors (src/components/ProjectAvatar.tsx and styles.css).
+enum AvatarColor {
+    /// `hash = (hash * 31 + char.charCodeAt(0)) >>> 0` over the name's code points, then % 360.
+    static func hue(_ name: String) -> Double {
+        var hash: UInt32 = 0
+        for scalar in name.unicodeScalars {
+            let code = UInt32(String(scalar).utf16.first ?? 0)
+            hash = hash &* 31 &+ code
+        }
+        return Double(hash % 360)
+    }
+
+    /// CSS `oklch(L C h)` as an sRGB color.
+    static func oklch(_ lightness: Double, _ chroma: Double, _ hue: Double) -> Color {
+        let radians = hue * .pi / 180
+        let a = chroma * cos(radians), b = chroma * sin(radians)
+        let l = pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3)
+        let m = pow(lightness - 0.1055613458 * a - 0.0638541728 * b, 3)
+        let s = pow(lightness - 0.0894841775 * a - 1.2914855480 * b, 3)
+        func encode(_ x: Double) -> Double {
+            let value = x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
+            return min(1, max(0, value))
+        }
+        return Color(.sRGB,
+                     red: encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+                     green: encode(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+                     blue: encode(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s))
     }
 }
 

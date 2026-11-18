@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The message box, laid out like the Claude app: the text on top, and under it + (photos), the
 /// agent chip (model and reasoning; tap to change), the microphone (dictation through the
@@ -15,6 +16,10 @@ struct Composer: View {
     @Environment(AppModel.self) private var model
     @State private var draft = ""
     @State private var photos: [PhotosPickerItem] = []
+    @State private var showingPhotos = false
+    @State private var showingCamera = false
+    @State private var showingFiles = false
+    @State private var uploadingFiles = 0
     @State private var pending: [PendingPhoto] = []
     @State private var dictation = LiveDictation()
     /// What was typed before dictation started; the live words go after it.
@@ -30,7 +35,7 @@ struct Composer: View {
         var failed = false
     }
 
-    private var uploading: Bool { pending.contains { $0.attachment == nil && !$0.failed } }
+    private var uploading: Bool { uploadingFiles > 0 || pending.contains { $0.attachment == nil && !$0.failed } }
     private var ready: [Attachment] { pending.compactMap(\.attachment) }
     /// Send works while dictating too: it finishes the recording, adds its words, and sends.
     private var canSend: Bool {
@@ -86,6 +91,19 @@ struct Composer: View {
             photos = []
             Task { await add(items) }
         }
+        .photosPicker(isPresented: $showingPhotos, selection: $photos,
+                      maxSelectionCount: max(1, 10 - pending.count), matching: .images)
+        .fullScreenCover(isPresented: $showingCamera) {
+            CameraPicker { data in
+                showingCamera = false
+                if let data { Task { await addImage(data) } }
+            }
+            .ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            Task { await addFiles(urls) }
+        }
         .onDisappear { dictation.cancel() }
         .onChange(of: dictation.text) { _, words in
             guard dictation.active || dictation.finishing else { return }
@@ -125,15 +143,24 @@ struct Composer: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            PhotosPicker(selection: $photos, maxSelectionCount: max(1, 10 - pending.count), matching: .images) {
+            // Like Claude's +: take a photo, pick photos, or attach a file.
+            Menu {
+                if CameraPicker.available {
+                    Button { showingCamera = true } label: { Label("Camera", systemImage: "camera") }
+                        .disabled(pending.count >= 10)
+                }
+                Button { showingPhotos = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
+                    .disabled(pending.count >= 10)
+                Button { showingFiles = true } label: { Label("Files", systemImage: "folder") }
+            } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .medium))
                     .frame(width: 36, height: 36)
                     .background(Color(.tertiarySystemFill), in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(pending.count >= 10 || dictation.active)
-            .accessibilityLabel("Add photos")
+            .disabled(dictation.active)
+            .accessibilityLabel("Add a photo or file")
 
             if let thread {
                 ModelChip(thread: thread, action: editSettings)
@@ -223,11 +250,55 @@ struct Composer: View {
     private func add(_ items: [PhotosPickerItem]) async {
         problem = nil
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let prepared = await Task.detached(operation: { ImagePrep.prepare(data) }).value
-            else {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
                 problem = "Couldn’t read that photo."
                 continue
+            }
+            await addImage(data)
+        }
+    }
+
+    /// Files from the Files app: images are attached like photos; anything else is saved on the
+    /// computer (POST /api/uploads, kind "file", up to 25 MB, like dropping a file on the web) and
+    /// its path goes into the message for the agent to read.
+    private func addFiles(_ urls: [URL]) async {
+        problem = nil
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else {
+                problem = "Couldn’t read \(url.lastPathComponent)."
+                continue
+            }
+            let type = UTType(filenameExtension: url.pathExtension)
+            if type?.conforms(to: .image) == true, pending.count < 10 {
+                await addImage(data)
+                continue
+            }
+            guard data.count <= 25 * 1024 * 1024 else {
+                problem = "\(url.lastPathComponent) is over 25 MB."
+                continue
+            }
+            uploadingFiles += 1
+            defer { uploadingFiles -= 1 }
+            do {
+                let path = try await model.uploadFile(data, name: url.lastPathComponent,
+                                                      mimeType: type?.preferredMIMEType ?? "application/octet-stream")
+                // Quoted when it has spaces, so the agent reads it as one path (like the web).
+                let formatted = path.contains(" ") ? "\"\(path)\"" : path
+                draft = Self.joined(draft, formatted) + " "
+            } catch {
+                problem = error.localizedDescription
+            }
+        }
+    }
+
+    /// A photo (picked, taken, or from Files): resized like the web app, then uploaded.
+    private func addImage(_ data: Data) async {
+        if true {
+            guard let prepared = await Task.detached(operation: { ImagePrep.prepare(data) }).value else {
+                problem = "Couldn’t read that photo."
+                return
             }
             let photo = PendingPhoto(preview: prepared.preview)
             pending.append(photo)

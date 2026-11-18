@@ -27,11 +27,55 @@ final class AppModel {
     private(set) var helpersByLead: [String: [ThreadSummary]] = [:]
     private(set) var projectsByPath: [String: ProjectSummary] = [:]
 
+    // MARK: Swipe to delete, with Undo (like Mail and Gmail)
+
+    /// Threads swiped away: hidden at once, deleted on the computer a few seconds later unless
+    /// you tap Undo.
+    private(set) var hiddenForUndo: Set<String> = []
+    /// The latest one, for the Undo bar.
+    private(set) var undoable: ThreadSummary?
+    /// A delete the computer refused (the thread is back in the list).
+    var deleteProblem: String?
+    private var pendingDeletes: [String: Task<Void, Never>] = [:]
+
+    func deleteWithUndo(_ thread: ThreadSummary) {
+        hiddenForUndo.insert(thread.id)
+        undoable = thread
+        indexThreads()
+        pendingDeletes[thread.id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled, self.hiddenForUndo.contains(thread.id) else { return }
+            if self.undoable?.id == thread.id { self.undoable = nil }
+            do {
+                try await self.deleteThread(thread.id)
+            } catch {
+                self.deleteProblem = error.localizedDescription
+            }
+            self.hiddenForUndo.remove(thread.id)
+            self.pendingDeletes[thread.id] = nil
+            self.indexThreads()
+        }
+    }
+
+    #if DEBUG
+    /// Debug builds only: shows the Undo bar without deleting anything (T3MINI_PREVIEW_UNDO).
+    func previewUndo(_ thread: ThreadSummary) { undoable = thread }
+    #endif
+
+    func undoDelete() {
+        guard let thread = undoable else { return }
+        pendingDeletes[thread.id]?.cancel()
+        pendingDeletes[thread.id] = nil
+        hiddenForUndo.remove(thread.id)
+        undoable = nil
+        indexThreads()
+    }
+
     private func indexThreads() {
         let newest: (ThreadSummary, ThreadSummary) -> Bool = {
             ($0.lastMessageAt ?? $0.updatedAt) > ($1.lastMessageAt ?? $1.updatedAt)
         }
-        listedThreads = threads.filter { $0.parentId == nil }.sorted(by: newest)
+        listedThreads = threads.filter { $0.parentId == nil && !hiddenForUndo.contains($0.id) }.sorted(by: newest)
         helpersByLead = Dictionary(grouping: threads.filter { $0.parentId != nil }, by: { $0.parentId! })
             .mapValues { $0.sorted(by: newest) }
     }
@@ -189,11 +233,17 @@ final class AppModel {
     /// icon (unless icons are off on the computer, or it's set to its letter), else nil (letter).
     func projectAvatar(_ project: ProjectSummary) async -> Data? {
         if project.avatar == "image", let image = project.image {
-            return try? await imageData(image)
+            guard let data = try? await imageData(image) else { return nil }
+            return await SVGIcon.rasterizeIfNeeded(data)
         }
         guard project.avatar != "letter", project.icon == true, ui?.projectIcons != false else { return nil }
         let path = project.path
-        return try? await cachedImage("icon:" + path, revalidate: true) { try await $0.projectIcon(path) }
+        // SVG icons are drawn into a PNG once (iOS can't decode SVG); the PNG is what's saved.
+        guard let data = try? await cachedImage("icon:" + path, revalidate: true, load: { client in
+            await SVGIcon.rasterizeIfNeeded(try await client.projectIcon(path))
+        }) else { return nil }
+        // A copy saved before this change may still be SVG.
+        return await SVGIcon.rasterizeIfNeeded(data)
     }
 
     /// Memory, then this phone's disk, then the computer. Uploads never change, so a saved copy is
@@ -472,6 +522,13 @@ final class AppModel {
         return formatter
     }()
     static func isoNow() -> String { isoFormatter.string(from: Date()) }
+
+    func uploadFile(_ data: Data, name: String, mimeType: String) async throws -> String {
+        guard let client else { throw APIError.unpaired }
+        var path = ""
+        try await run { path = try await client.uploadFile(data, name: name, mimeType: mimeType) }
+        return path
+    }
 
     func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
         guard let client else { throw APIError.unpaired }

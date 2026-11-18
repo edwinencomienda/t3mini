@@ -59,4 +59,16 @@ struct ThreadListTests {
         #expect(isPlain)
         #expect(sections.first?.threads.count == 2)
     }
+
+    /// Letter avatars get the same color as in the web app (hues from src/components/ProjectAvatar.tsx).
+    @Test func avatarHuesMatchTheWeb() {
+        let web: [String: Double] = ["shop-api": 43, "cart-demo": 72, "tool-choice-demo": 122, "myapp": 221,
+                                     "Café ☕ 😀": 315]
+        for (name, hue) in web { #expect(AvatarColor.hue(name) == hue, "\(name)") }
+    }
+
+    @MainActor @Test func svgIconsAreRecognized() {
+        #expect(SVGIcon.isSVG(Data("<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>".utf8)))
+        #expect(!SVGIcon.isSVG(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])))
+    }
 }

@@ -103,6 +103,24 @@ struct ThreadDetailsSheet: View {
                     }
                 }
 
+                if let helpers = model.helpersByLead[thread.id], !helpers.isEmpty {
+                    Section("Helper threads") {
+                        ForEach(helpers) { helper in
+                            Button {
+                                dismiss()
+                                model.pushThread = helper.id
+                            } label: {
+                                HStack(spacing: 10) {
+                                    AgentLogo(provider: helper.provider, size: 15)
+                                    Text(helper.title).foregroundStyle(.primary).lineLimit(2)
+                                    Spacer(minLength: 6)
+                                    ThreadStatusLabel(thread: helper, now: Date())
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if let error = info.error, info.status == .failed {
                     Section("Error") {
                         Text(error).font(.footnote).foregroundStyle(.red)
