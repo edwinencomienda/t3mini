@@ -165,6 +165,28 @@ it('pairs with a one-time code and forwards requests marked as remote', async ()
   expect(seen.cookie).toBe('theme=dark')
   expect(access.status().devices).toEqual([expect.objectContaining({ name: 'iPhone · Safari' })])
 })
+it('pairs the iOS app the way it pairs: a form post with no Origin, then the cookie as a header', async () => {
+  await access.enable(upstreamPort)
+  const { code } = access.createPairing()
+  // The app (ios/) posts the code without opening the page, sends no Origin, and doesn't follow
+  // the redirect: it keeps the session from Set-Cookie in the Keychain.
+  const response = await request(
+    '/pair',
+    {
+      'content-type': 'application/x-www-form-urlencoded',
+      'user-agent': 't3mini-ios/0.1.0 (iPhone)',
+    },
+    { method: 'POST', body: `code=${encodeURIComponent(code)}` },
+  )
+  expect(response.status).toBe(303)
+  const cookie = String(response.headers['set-cookie']?.[0] ?? '').split(';')[0]!
+  expect(cookie).toMatch(/^t3m_session=[\w-]{40,}$/)
+  expect((await request('/api/bootstrap', { cookie })).status).toBe(200)
+  expect(seen['x-t3-remote']).toBe('1')
+  expect(access.status().devices).toEqual([
+    expect.objectContaining({ name: 'iPhone · t3 mini app' }),
+  ])
+})
 it('expires pairing codes after five minutes', async () => {
   await access.enable(upstreamPort)
   vi.useFakeTimers({ toFake: ['Date'] })

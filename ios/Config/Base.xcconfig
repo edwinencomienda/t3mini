@@ -1,0 +1,7 @@
+// Build settings shared by all configurations.
+// Placeholders that build for the simulator. To run on your iPhone, copy
+// Signing.example.xcconfig to Signing.xcconfig (gitignored) and fill in your own team and id.
+T3MINI_TEAM =
+T3MINI_BUNDLE_ID = com.example.t3mini
+
+#include? "Signing.xcconfig"

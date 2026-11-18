@@ -4,3 +4,5 @@ dist
 .data
 bun.lock
 src/routeTree.gen.ts
+ios/build
+ios/T3Mini.xcodeproj

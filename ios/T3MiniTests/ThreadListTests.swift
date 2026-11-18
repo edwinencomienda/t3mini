@@ -1,0 +1,62 @@
+import Foundation
+import Testing
+@testable import T3Mini
+
+struct ThreadListTests {
+    let now = ISO8601DateFormatter().date(from: "2026-11-18T12:00:00Z")!
+    var utc: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    func thread(_ id: String, cwd: String = "/p/app", at: String = "2026-11-18T11:00:00Z",
+                status: ThreadStatus = .idle, unread: Bool? = nil, waitingFor: String? = nil) -> ThreadSummary {
+        ThreadSummary(id: id, title: id, provider: .claude, cwd: cwd, status: status, updatedAt: at,
+                      lastMessageAt: at, waitingFor: waitingFor, parentId: nil, chat: nil, unread: unread)
+    }
+
+    @Test func statusWordsMatchTheWebSidebar() {
+        #expect(ThreadStatusLabel.label(thread("a", status: .waiting, waitingFor: "question"), now: now) == "Question")
+        #expect(ThreadStatusLabel.label(thread("a", status: .waiting), now: now) == "Approval")
+        #expect(ThreadStatusLabel.label(thread("a", status: .completed, unread: true), now: now) == "Done")
+        #expect(ThreadStatusLabel.label(thread("a", status: .failed, unread: true), now: now) == "Failed")
+        #expect(ThreadStatusLabel.label(thread("a", at: "2026-11-18T11:59:30Z", status: .completed), now: now) == "now")
+        #expect(ThreadStatusLabel.label(thread("a", at: "2026-11-18T11:55:00Z"), now: now) == "5m")
+        #expect(ThreadStatusLabel.label(thread("a", at: "2026-11-18T09:00:00Z"), now: now) == "3h")
+        #expect(ThreadStatusLabel.label(thread("a", at: "2026-11-16T09:00:00Z"), now: now) == "2d")
+    }
+
+    @Test func groupsByProjectInTheOrderTheyWereAdded() {
+        let projects = [
+            ProjectSummary(path: "/p/web", name: nil, chats: nil, lastActiveAt: nil, addedAt: "2026-02-01"),
+            ProjectSummary(path: "/p/api", name: "API", chats: nil, lastActiveAt: nil, addedAt: "2026-01-01"),
+        ]
+        let sections = ThreadSection.group(
+            [thread("1", cwd: "/p/web"), thread("2", cwd: "/p/api"), thread("3", cwd: "/p/web")],
+            by: "project", projects: projects, now: now, calendar: utc)
+        #expect(sections.map(\.id) == ["p:/p/api", "p:/p/web"])
+        #expect(sections[1].threads.map(\.id) == ["1", "3"])
+        let plainRows = sections.allSatisfy { !$0.showProject }
+        #expect(plainRows)
+    }
+
+    @Test func groupsByDate() {
+        let sections = ThreadSection.group(
+            [thread("today"), thread("yesterday", at: "2026-11-17T08:00:00Z"),
+             thread("week", at: "2026-11-14T08:00:00Z"), thread("old", at: "2026-10-01T08:00:00Z")],
+            by: "date", projects: [], now: now, calendar: utc)
+        #expect(sections.map(\.id) == ["d:Today", "d:Yesterday", "d:This week", "d:Older"])
+        #expect(sections.map { $0.threads.map(\.id) } == [["today"], ["yesterday"], ["week"], ["old"]])
+        let withProject = sections.allSatisfy(\.showProject)
+        #expect(withProject)
+    }
+
+    @Test func notGroupedIsOneList() {
+        let sections = ThreadSection.group([thread("1"), thread("2")], by: "none", projects: [], now: now)
+        #expect(sections.count == 1)
+        let isPlain = sections.first?.header == nil
+        #expect(isPlain)
+        #expect(sections.first?.threads.count == 2)
+    }
+}

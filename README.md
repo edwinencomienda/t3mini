@@ -182,6 +182,8 @@ Other devices see the same threads live, and can send, steer, approve, stop, and
 
 Session tokens and pairing codes are stored only as SHA-256 hashes in `.data/devices.json`; the reconnect setting and whether Tailscale access was on are in `.data/phone-access.json`. Other devices get in-app toasts and sound for finished threads; system notifications on phones would need a home-screen web app with push, which t3 mini doesn't do yet.
 
+**iPhone app (early)**: a native app in [`ios/`](ios/README.md) with a messaging-app feel (thread list, chat per thread). It pairs like any device (scan the same QR code) and shows in Settings → Devices as **iPhone · t3 mini app**. Build it yourself with Xcode; see [ios/README.md](ios/README.md).
+
 Developer details (architecture, security invariants, pitfalls, tests): [docs/phone-access.md](docs/phone-access.md).
 
 ## Data and configuration

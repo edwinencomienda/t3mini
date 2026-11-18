@@ -116,6 +116,9 @@ function deviceName(userAgent = '') {
   // Another t3 mini that added this one as a machine (machines.ts): "t3 mini · <its host name>".
   const machine = /^t3mini\/\S+ \(([^)]{1,60})\)/.exec(userAgent)
   if (machine) return `t3 mini · ${machine[1]}`
+  // The iOS app (ios/): "t3mini-ios/<version> (iPhone)".
+  const app = /^t3mini-ios\/\S+ \((iPhone|iPad)\)/.exec(userAgent)
+  if (app) return `${app[1]} · t3 mini app`
   const device = /iPhone/.test(userAgent)
     ? 'iPhone'
     : /iPad/.test(userAgent)

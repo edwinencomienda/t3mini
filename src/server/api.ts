@@ -8,6 +8,14 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { mediaType } from './uploads'
+import {
+  loadLibraries,
+  pageDocument,
+  pageLibraries,
+  previewTokens,
+  themeCss,
+  type PageLibrary,
+} from '../html-page'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
 import { getMachines, isMachineError } from './machines'
@@ -432,6 +440,43 @@ export async function handleApi(request: Request) {
     }
     // An agent's HTML page (show_html), as plain text: the browser shows it only inside a
     // sandboxed frame. Opened directly, it's text, and sandboxed even if something sniffs it.
+    // The finished page for an app without the web client's page builder (the iOS app): the same
+    // pageDocument() the chat builds, with our CSP first, the theme's tokens, and any bundled
+    // library the block asked for. Still plain text with a sandbox CSP, so a browser that opens it
+    // directly never runs it; the app loads it into a sealed web view itself.
+    if (
+      parts[0] === 'html' &&
+      parts[1] &&
+      parts[2] === 'page' &&
+      !parts[3] &&
+      request.method === 'GET'
+    ) {
+      let html: string
+      try {
+        html = await service.uploads.readHtml(parts[1])
+      } catch {
+        return Response.json({ error: 'Page not found.' }, { status: 404 })
+      }
+      const dark = url.searchParams.get('theme') === 'dark'
+      const libraries = (url.searchParams.get('libraries') ?? '')
+        .split(',')
+        .filter((name): name is PageLibrary => (pageLibraries as readonly string[]).includes(name))
+      const page = pageDocument({
+        html,
+        theme: themeCss(previewTokens[dark ? 'dark' : 'light'], dark),
+        inline: url.searchParams.get('inline') !== '0',
+        still: url.searchParams.get('still') === '1',
+        libraries: await loadLibraries([...new Set(libraries)]),
+      })
+      return new Response(page, {
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; sandbox",
+          'cache-control': 'private, max-age=3600',
+        },
+      })
+    }
     if (parts[0] === 'html' && parts[1] && !parts[2] && request.method === 'GET') {
       let html: string
       try {

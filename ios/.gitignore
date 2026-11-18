@@ -1,0 +1,6 @@
+T3Mini.xcodeproj/
+T3Mini/Info.plist
+build/
+Config/Signing.xcconfig
+*.xcuserstate
+xcuserdata/

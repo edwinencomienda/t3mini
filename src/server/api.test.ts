@@ -98,6 +98,32 @@ it('serves agent HTML pages as sandboxed plain text, never as a page', async () 
   const missing = await handleApi(new Request('http://127.0.0.1:4310/api/html/..%2Fui.json'))
   expect(missing.status).toBe(404)
 })
+it('serves the finished agent page for the iOS app, still as plain text', async () => {
+  const { handleApi } = await import('./api')
+  const { getService } = await import('./service')
+  const { pagePolicy } = await import('../html-page')
+  const { id } = await (await getService()).uploads.saveHtml('<p>Hello</p>')
+  const page = (query: string) =>
+    handleApi(new Request(`http://127.0.0.1:4310/api/html/${id}/page${query}`))
+  const response = await page('?theme=dark&libraries=chart.js,evil.js')
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+  expect(response.headers.get('content-security-policy')).toContain('sandbox')
+  const text = await response.text()
+  // Our policy comes first, the agent's HTML last, inside <body>.
+  expect(text.indexOf(pagePolicy)).toBeGreaterThan(0)
+  expect(text.indexOf(pagePolicy)).toBeLessThan(text.indexOf('<body><p>Hello</p>'))
+  expect(text).toContain('color-scheme:dark')
+  // Chart.js is inlined (it was asked for); an unknown library name is ignored.
+  expect(text).toContain('t3Palette')
+  expect(text).not.toContain('evil.js')
+  const light = await (await page('?inline=0')).text()
+  expect(light).toContain('color-scheme:light')
+  expect(light).not.toContain('Chart.register')
+  expect(await page('').then((r) => r.status)).toBe(200)
+  const missing = await handleApi(new Request('http://127.0.0.1:4310/api/html/nope/page'))
+  expect(missing.status).toBe(404)
+})
 it('sends each tab only the live-update parts that changed', () => {
   const sent = new Map<string, string>()
   const thread = { id: 'a', messages: [{ text: 'long history' }] }

@@ -1,0 +1,63 @@
+# Source of truth for the Xcode project. Edit this file, then run `xcodegen generate`.
+# T3Mini.xcodeproj is generated and gitignored: never edit it by hand.
+name: T3Mini
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  T3Mini:
+    type: application
+    platform: iOS
+    sources: [T3Mini]
+    # Signing team and bundle id come from Config/Signing.xcconfig (gitignored, see README).
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    info:
+      path: T3Mini/Info.plist
+      properties:
+        # Only local addresses (a paired Mac on the local network) may use plain HTTP.
+        # Tailscale addresses are HTTPS with a real certificate, so nothing else is relaxed.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(T3MINI_BUNDLE_ID)
+        DEVELOPMENT_TEAM: $(T3MINI_TEAM)
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: t3 mini
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: "Scan the pairing QR code shown in t3 mini on your computer."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Connect to t3 mini on your computer over the local network."
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+    scheme:
+      testTargets: [T3MiniTests]
+
+  T3MiniTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [T3MiniTests]
+    dependencies:
+      - target: T3Mini
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(T3MINI_BUNDLE_ID).tests
+        DEVELOPMENT_TEAM: $(T3MINI_TEAM)
+        GENERATE_INFOPLIST_FILE: YES
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig

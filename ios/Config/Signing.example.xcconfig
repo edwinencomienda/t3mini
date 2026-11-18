@@ -1,0 +1,5 @@
+// Copy to Signing.xcconfig (gitignored) and fill in. Needed only for a real iPhone.
+// Your Apple developer team id: Xcode → Settings → Accounts → your team, or developer.apple.com → Membership.
+T3MINI_TEAM = ABCDE12345
+// Any id you own, e.g. com.yourname.t3mini.
+T3MINI_BUNDLE_ID = com.yourname.t3mini

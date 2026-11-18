@@ -15,6 +15,7 @@ bun bench/search.ts 1 10 50  # searching inside conversations (sidebar, ⌘K) at
 bun run typecheck  # tsc --noEmit
 bun run build
 bunx prettier --write .
+cd ios && xcodegen generate && xcodebuild -project T3Mini.xcodeproj -scheme T3Mini -destination 'platform=iOS Simulator,name=iPhone 17' test  # the iOS app
 ```
 
 Run typecheck, tests, and build before committing. Keep the README (and `docs/`) in sync with behavior changes.
@@ -43,6 +44,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 - **Phones run in an insecure context** (plain HTTP on a LAN address). Don't use `crypto.randomUUID`, `navigator.clipboard`, or other secure-context-only APIs in client code; see `docs/phone-access.md` → Pitfalls.
 - **Secrets stay on the server.** The Deepgram key comes from `DEEPGRAM_API_KEY` or `.data/secrets.json` (mode 0600); APIs return only `configured`/`source`/last-4 `hint`, and key management is Mac-only. Never log keys or send them to the browser. Live dictation relays audio through the server (`dictation-stream.ts`) for this reason; its WebSocket is wired into Vite (`vite.config.ts`) and `server.mjs` via an upgrade hook and enforces the same loopback/same-origin rules, accepting paired phones only through the authenticated gateway.
 - **Commands run without a shell** (`execFile` with argument arrays, `--` before paths). Keep it that way.
+- **The iOS app (`ios/`): test it on the user's iPhone.** After app changes, run its tests, then `ios/scripts/run-on-device.sh` (outside the sandbox) to install it on the phone; the pairing survives reinstalls. Needs the gitignored `ios/Config/Signing.xcconfig` and an unlocked, connected phone. The whole loop, and what to do when the phone is unavailable or the simulator misbehaves, is in [ios/README.md](ios/README.md) → Iterating on the app.
 - **Where state lives.** Per-device state (notification prefs, sidebar width/hidden, diff panel, drafts, unread markers, dictation mic) lives in `localStorage`; wrap access in try/catch. Shared state lives on the server: threads, projects, devices, and view settings that should match in every window (`UiSettings` in `.data/ui.json`: Group by, theme, project icons, animations, agent defaults, collapsed projects, background music). Shared view settings go through `src/shared-settings.ts` (`registerShared` / `shareSetting`, validated by `server/ui-settings.ts`), keep a local copy for instant load, and are only re-applied when their value changes.
 
 ## Feature docs
@@ -54,4 +56,5 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 - [docs/delegation.md](docs/delegation.md): sub-agents (`delegate_task`, `list_delegations`, `stop_delegation`: waiting or background, the shared folder and changed-file tracking, cards, limits).
 - [docs/orchestration.md](docs/orchestration.md): lead and helper threads (the start/message/list/stop/delete_thread tools, automatic reports, limits).
 - [docs/worktrees.md](docs/worktrees.md): worktree threads (choosing one, where and how worktrees are made, `.worktreeinclude`, cleanup, benchmarks, pitfalls).
+- [ios/README.md](ios/README.md): the native iPhone app (SwiftUI, XcodeGen): a paired device on the phone gateway, thread list and chat, live updates with patches, pairing and Keychain, signing setup kept out of the repo (`Config/Signing.xcconfig`).
 - [docs/phone-access.md](docs/phone-access.md): access from other devices (Settings → Devices: phones, tablets, other computers) over the local network (gateway, pairing, security model, pitfalls, testing, plus the planned Tailscale HTTPS follow-up).

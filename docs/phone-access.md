@@ -14,6 +14,10 @@ How t3 mini lets a phone use the app, over the local network or over Tailscale, 
 - The gateway marks forwarded requests with `x-t3-remote: 1`. The API uses that to refuse **Mac-only** actions and tells the page it's remote so the UI hides them.
 - Phone access starts **off** after every server restart. The one exception: **Tailscale** access the user left on comes back by itself (**Reconnect after restart**, on by default), so paired phones reconnect without re-scanning. Local-network access never comes back on its own. Paired devices persist (hashed).
 
+## The iOS app
+
+`ios/` is a native app ([ios/README.md](../ios/README.md)) that is just another paired device. It pairs by posting the code to `POST /pair` itself (form-encoded, no `Origin`, not following the 303), keeps the session cookie from `Set-Cookie` in the Keychain, and sends it as a `Cookie` header to that gateway address only. It then uses the same API as the web page: `/api/events?patch=1&thread=…`, `/api/threads/:id/send|stop|approve|read`, `POST /api/threads`. Its user agent `t3mini-ios/<version> (iPhone|iPad)` names it **iPhone · t3 mini app** (`deviceName()`). Nothing else on the server is specific to it; keep it that way, so the app never becomes a second way in. Keep `POST /pair` working without an `Origin` header (the app and `machines.ts` both rely on it; `allowed()` only refuses a wrong one).
+
 ## Request flow
 
 ```text
