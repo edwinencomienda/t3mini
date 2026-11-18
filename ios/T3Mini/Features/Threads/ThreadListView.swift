@@ -132,6 +132,15 @@ struct ThreadListView: View {
         // Debug builds only: T3MINI_REOPEN=<thread id> opens it, goes back, and opens it again
         // (for checking where a reopened thread lands, in the simulator).
         .task {
+            if ProcessInfo.processInfo.environment["T3MINI_PREVIEW_ACTIVITY"] != nil,
+               let thread = model.listedThreads.first(where: { model.project(at: $0.cwd)?.icon == true }) {
+                // Debug builds only: a Live Activity for a thread with an icon, without sending anything.
+                try? await Task.sleep(for: .seconds(4))
+                let project = model.project(at: thread.cwd)
+                LiveActivities.shared.start(threadId: thread.id, title: thread.title,
+                                            project: model.projectName(for: thread.cwd), provider: thread.provider,
+                                            avatar: project.flatMap { model.cachedAvatar($0) })
+            }
             if ProcessInfo.processInfo.environment["T3MINI_PREVIEW_BANNER"] != nil {
                 try? await Task.sleep(for: .seconds(5))
                 model.previewBanner()

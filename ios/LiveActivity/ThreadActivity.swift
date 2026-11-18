@@ -23,6 +23,9 @@ struct ThreadActivityAttributes: ActivityAttributes {
     var project: String
     /// "claude" or "codex".
     var provider: String
+    /// The project's picture (its icon or chosen image), shrunk to a couple of kilobytes so the
+    /// activity stays under Apple's size limit; nil draws its colored letter, as in the app.
+    var avatar: Data? = nil
 }
 
 extension ThreadActivityAttributes.ContentState {

@@ -20,9 +20,7 @@ struct ThreadActivityWidget: Widget {
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: state.symbol)
-                        .font(.title2)
-                        .foregroundStyle(statusColor(state))
+                    ActivityAvatar(attributes: context.attributes, state: state, size: 40)
                         .padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
@@ -38,7 +36,7 @@ struct ThreadActivityWidget: Widget {
                         .lineLimit(1)
                 }
             } compactLeading: {
-                Image(systemName: state.symbol).foregroundStyle(statusColor(state))
+                ActivityAvatar(attributes: context.attributes, state: state, size: 22, badge: false)
             } compactTrailing: {
                 Elapsed(state: state)
                     .font(.caption2.monospacedDigit())
@@ -57,10 +55,7 @@ private struct LockScreenView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: state.symbol)
-                .font(.title2)
-                .foregroundStyle(statusColor(state))
-                .frame(width: 32)
+            ActivityAvatar(attributes: attributes, state: state, size: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(attributes.project)
                     .font(.caption)
@@ -82,6 +77,59 @@ private struct LockScreenView: View {
             }
         }
         .padding(16)
+    }
+}
+
+/// The project's avatar, as in the app (its picture, or its letter on a soft tint of its color),
+/// with the status (working, done…) in a small badge on its corner, like a contact's photo.
+private struct ActivityAvatar: View {
+    let attributes: ThreadActivityAttributes
+    let state: ThreadActivityAttributes.ContentState
+    let size: CGFloat
+    var badge = true
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+        Group {
+            if let image = Self.bitmap(attributes.avatar) {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else {
+                let hue = AvatarColor.hue(attributes.project)
+                let dark = scheme == .dark
+                ZStack {
+                    shape.fill(AvatarColor.oklch(0.62, 0.12, hue).opacity(dark ? 0.32 : 0.16))
+                    Text(AvatarColor.initial(attributes.project))
+                        .font(.system(size: size * 0.45, weight: .bold))
+                        .foregroundStyle(dark ? AvatarColor.oklch(0.82, 0.11, hue) : AvatarColor.oklch(0.5, 0.14, hue))
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(shape)
+        .overlay(alignment: .bottomTrailing) {
+            if badge {
+                Image(systemName: state.symbol)
+                    .font(.system(size: size * 0.3, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: size * 0.44, height: size * 0.44)
+                    .background(statusColor(state) == .secondary ? Color.gray : statusColor(state), in: Circle())
+                    .overlay(Circle().stroke(.black.opacity(0.25), lineWidth: 1))
+                    .offset(x: size * 0.12, y: size * 0.12)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    /// The picture drawn into a plain bitmap here, so it packages cleanly for the lock screen.
+    static func bitmap(_ data: Data?) -> UIImage? {
+        guard let data, let decoded = UIImage(data: data), decoded.size.width > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: decoded.size, format: format).image { _ in
+            decoded.draw(in: CGRect(origin: .zero, size: decoded.size))
+        }
     }
 }
 

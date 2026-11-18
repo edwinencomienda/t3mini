@@ -512,9 +512,11 @@ final class AppModel {
         // On the lock screen while the agent works on it.
         let info = openThread?.id == id ? openThread?.info : nil
         let summary = threads.first { $0.id == id }
+        let cwd = info?.cwd ?? summary?.cwd ?? ""
         LiveActivities.shared.start(threadId: id, title: info?.title ?? summary?.title ?? "Thread",
-                                    project: projectName(for: info?.cwd ?? summary?.cwd ?? ""),
-                                    provider: info?.provider ?? summary?.provider ?? .claude)
+                                    project: projectName(for: cwd),
+                                    provider: info?.provider ?? summary?.provider ?? .claude,
+                                    avatar: project(at: cwd).flatMap { cachedAvatar($0) })
     }
 
     /// Drops the messages you sent once the computer's copy is in the thread (a message of yours

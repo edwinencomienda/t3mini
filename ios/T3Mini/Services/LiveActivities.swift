@@ -1,4 +1,5 @@
 @preconcurrency import ActivityKit
+import UIKit
 import Foundation
 
 /// Starts and tracks Live Activities for threads (ios/LiveActivity/ThreadActivity.swift).
@@ -24,7 +25,7 @@ final class LiveActivities {
     }
 
     /// You sent a message in this thread: show it working.
-    func start(threadId: String, title: String, project: String, provider: Provider) {
+    func start(threadId: String, title: String, project: String, provider: Provider, avatar: UIImage? = nil) {
         guard enabled else { return }
         let state = Attributes.ContentState(status: "working", steps: 0, startedAt: Date().timeIntervalSince1970)
         if let current = ActivityKit.Activity<Attributes>.activities.first(where: {
@@ -34,7 +35,8 @@ final class LiveActivities {
             return
         }
         let attributes = Attributes(threadId: threadId, title: title.isEmpty ? "Thread" : title,
-                                    project: project, provider: provider.rawValue)
+                                    project: project, provider: provider.rawValue,
+                                    avatar: avatar.flatMap(Self.smallAvatar))
         do {
             let activity = try ActivityKit.Activity.request(attributes: attributes,
                                                 content: ActivityContent(state: state, staleDate: nil),
@@ -86,5 +88,27 @@ final class LiveActivities {
                 await register?(token, thread)
             }
         }
+    }
+}
+
+extension LiveActivities {
+    /// Apple keeps a Live Activity's data under 4 KB in all: the avatar goes in at the largest size
+    /// that fits in about 2.5 KB, else none (its letter). PNG, not HEIC: the lock screen packages
+    /// the activity's view, and a lazily decoded HEIC image left it as a grey placeholder.
+    nonisolated static func smallAvatar(_ image: UIImage) -> Data? {
+        for side in [72.0, 64, 56, 48, 40, 32] {
+            let size = CGSize(width: side, height: side)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = false
+            let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                let scale = min(side / max(image.size.width, 1), side / max(image.size.height, 1))
+                let fitted = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                image.draw(in: CGRect(x: (side - fitted.width) / 2, y: (side - fitted.height) / 2,
+                                      width: fitted.width, height: fitted.height))
+            }
+            if let data = drawn.pngData(), data.count <= 2500 { return data }
+        }
+        return nil
     }
 }

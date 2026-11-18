@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Testing
 @testable import T3Mini
 
@@ -114,5 +115,19 @@ struct ThreadListTests {
         #expect(!AppModel.onlyTimesDiffer(old, title))
         #expect(!AppModel.onlyTimesDiffer(old, Array(old.reversed())))
         #expect(!AppModel.onlyTimesDiffer(old, old + [thread("c")]))
+    }
+
+    /// The Live Activity's avatar stays a couple of kilobytes (Apple's limit is 4 KB in all).
+    @Test func liveActivityAvatarIsSmall() {
+        let size = CGSize(width: 512, height: 512)
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            for index in 0..<64 {
+                UIColor(hue: CGFloat(index) / 64, saturation: 0.8, brightness: 0.9, alpha: 1).setFill()
+                context.fill(CGRect(x: CGFloat(index % 8) * 64, y: CGFloat(index / 8) * 64, width: 64, height: 64))
+            }
+        }
+        let data = LiveActivities.smallAvatar(image)
+        #expect(data != nil)
+        #expect((data?.count ?? .max) <= 2500)
     }
 }
