@@ -36,3 +36,17 @@ it('answers a refused upgrade with an HTTP error and never opens a stream', asyn
   await new Promise((resolve) => setTimeout(resolve, 10))
   expect(written).toMatch(/^HTTP\/1\.1 403 Forbidden/)
 })
+it('passes on only a known raw audio format (the iOS app streams 16 kHz PCM)', async () => {
+  const { rawAudioFormat } = await import('./dictation-stream')
+  const at = (query: string) =>
+    rawAudioFormat(new URL(`http://localhost/api/dictation/stream${query}`))
+  expect(at('?encoding=linear16&sample_rate=16000')).toEqual({
+    encoding: 'linear16',
+    sample_rate: '16000',
+    channels: '1',
+  })
+  expect(at('')).toEqual({})
+  expect(at('?encoding=linear16&sample_rate=12345')).toEqual({})
+  expect(at('?encoding=mulaw&sample_rate=8000')).toEqual({})
+  expect(at('?encoding=linear16&sample_rate=16000&model=evil')).not.toHaveProperty('model')
+})

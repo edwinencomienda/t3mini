@@ -54,10 +54,20 @@ echo "▸ Device: $name"
 echo "▸ Generating project"
 xcodegen generate >/dev/null
 
+# Without an Apple ID signed in to Xcode, an App Store Connect API key lets Xcode create and update
+# profiles (needed for push notifications). Optional, gitignored: Config/AppStoreConnect.env with
+# ASC_KEY_PATH, ASC_KEY_ID, ASC_ISSUER_ID (see ios/README.md).
+auth=()
+if [ -f Config/AppStoreConnect.env ]; then
+  # shellcheck disable=SC1091
+  . Config/AppStoreConnect.env
+  auth=(-authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+fi
+
 echo "▸ Building (registers the device and updates signing if needed)"
 if ! xcodebuild -project T3Mini.xcodeproj -scheme T3Mini \
   -destination "platform=iOS,id=$udid" -derivedDataPath build \
-  -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
+  -allowProvisioningUpdates -allowProvisioningDeviceRegistration "${auth[@]}" \
   build >"$tmp/build.log" 2>&1; then
   grep -E "error:" "$tmp/build.log" | sort -u >&2 || tail -20 "$tmp/build.log" >&2
   echo "Build failed. See ios/README.md → Run on your iPhone." >&2

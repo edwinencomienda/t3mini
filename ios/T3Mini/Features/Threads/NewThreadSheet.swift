@@ -5,7 +5,8 @@ struct NewThreadSheet: View {
     let created: (String) -> Void
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var provider: Provider = .claude
+    @State private var choice = AgentChoice(provider: .claude, model: "", effort: "", serviceTier: "",
+                                            permissionMode: PermissionMode.defaultValue)
     @State private var projectPath: String?
     @State private var working = false
     @State private var problem: String?
@@ -13,12 +14,6 @@ struct NewThreadSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Agent") {
-                    Picker("Agent", selection: $provider) {
-                        ForEach(Provider.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                }
                 Section("Project") {
                     ForEach(projects) { project in
                         Button {
@@ -35,6 +30,7 @@ struct NewThreadSheet: View {
                         }
                     }
                 }
+                AgentSettingsForm(choice: $choice, cwd: projectPath)
                 if let problem {
                     Section { Text(problem).foregroundStyle(.red) }
                 }
@@ -50,7 +46,7 @@ struct NewThreadSheet: View {
                 }
             }
             .onAppear {
-                provider = model.defaultProvider
+                choice = model.defaultChoice(for: model.defaultProvider)
                 projectPath = model.defaultProject?.path ?? projects.first?.path
             }
         }
@@ -70,7 +66,7 @@ struct NewThreadSheet: View {
         defer { working = false }
         do {
             let project = model.projects.first { $0.path == projectPath }
-            if let id = try await model.createThread(provider: provider, project: project) {
+            if let id = try await model.createThread(project: project, choice: choice) {
                 dismiss()
                 created(id)
             }
@@ -92,6 +88,26 @@ struct SettingsSheet: View {
                     Section("Connected to") {
                         LabeledContent("Computer", value: connection.displayHost)
                         LabeledContent("Paired", value: connection.pairedAt.formatted(date: .abbreviated, time: .shortened))
+                    }
+                }
+                Section {
+                    Toggle("Notify me", isOn: Binding(
+                        get: { model.push == .on || model.push == .notSetUp },
+                        set: { on in Task { on ? await model.enablePush() : await model.disablePush() } }))
+                        .disabled(model.push == .denied)
+                    if model.push == .on || model.push == .notSetUp {
+                        Button("Send a test") { Task { await model.testPush() } }
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    switch model.push {
+                    case .denied:
+                        Text("Notifications are off for t3 mini in iOS Settings → Notifications.")
+                    case .notSetUp:
+                        Text("This iPhone is ready, but the computer has no Apple push key yet.")
+                    default:
+                        Text(model.pushProblem ?? "Get a notification when a thread finishes, fails, or needs you. It says only what happened; the thread's name shows when you open it.")
                     }
                 }
                 Section {

@@ -4,13 +4,26 @@ A native iOS app for t3 mini, made to feel like a messaging app: a list of threa
 for each one. It talks to t3 mini on your computer through the same gateway paired phones use
 (Settings → Devices), so it needs nothing new on the server and no account anywhere.
 
+Push notifications: Settings → **Notify me** (and **Send a test**). They come through Apple's push
+service from the computer when a thread finishes, fails, or needs you, and tapping one opens the
+thread. The computer needs an APNs key once (see docs/phone-access.md → Push notifications). The
+thread's name and project are encrypted with a key that never leaves this phone and the computer,
+and the notification extension (`T3MiniNotify`) unlocks them on the phone, so Apple can't read them.
+
 Early version. What works: pairing (QR code or pasted link), the thread list (project avatars,
 search, pull to refresh, working / needs-you / unread marks), live chat (replies stream in,
 threads you opened before show at once), Markdown with tables and code blocks, images (yours and
 the agent's, full screen with zoom), `show_html` pages in a sealed web view, status and sub-agent
-cards, sending and steering, stop, Allow / Deny, answering the agent's questions, and starting a
-new thread in a project. Not yet: diagrams, video and sound (they say "open on your computer"),
-sending images, diffs, notifications, editing messages, agent and model pickers.
+cards, sending and steering, stop, Allow / Deny, answering the agent's questions, starting a new
+thread in a project, choosing the agent, model, reasoning, speed, and permission (the chip above
+the message box, and New thread; switching agents mid-thread too), the branch in the header,
+sending photos (+, resized to JPEG ≤ 2048 px like the web app), replies grouped into turns like
+the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line), a
+copy button and the time under each message, and live dictation (the mic: words appear in the
+message box as you talk; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
+`encoding=linear16&sample_rate=16000`, relayed to the computer's Deepgram key; shown only when
+it's set up). Not yet: diagrams, video and sound (they say "open on your computer"),
+diffs, editing messages, the camera.
 
 ## Connect it
 
@@ -59,6 +72,12 @@ scripts/run-on-device.sh   # builds, signs, installs and opens it on the phone (
   Apple's servers (automatic provisioning).
 - **It needs `Config/Signing.xcconfig`** (gitignored: the user's team id and bundle id). If it's
   missing, ask the user; never commit it or put the team id anywhere in the repo.
+- **Signing profiles with push.** Push needs an app-specific profile with the Push Notifications
+  capability, which Xcode makes on its own only if it can reach the Apple account. Either an Apple
+  ID is signed in to Xcode (Settings → Accounts), or `Config/AppStoreConnect.env` (gitignored, mode 0600) points at an App Store Connect API key: `ASC_KEY_PATH`, `ASC_KEY_ID`, `ASC_ISSUER_ID`. The
+  script passes it to `xcodebuild -authenticationKeyPath …`. It only names where the key is; never
+  copy the key itself into the repo. Without either, the build fails with "No Accounts" and "doesn't
+  include the aps-environment entitlement".
 - **The phone must be reachable.** `xcrun devicectl list devices` shows it as `connected`. When it
   says `unavailable` (locked, unplugged, asleep), the script stops and says so: ask the user to
   unlock it and keep it plugged in, then run the script again.

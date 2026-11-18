@@ -1,8 +1,17 @@
+import { createCipheriv, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { generateVAPIDKeys, sendNotification } from 'web-push'
 import { z } from 'zod'
 import { threadEvents, eventLabel, type ThreadEvent } from '../notifications'
+import {
+  createApnsSender,
+  readApnsConfig,
+  type ApnsConfig,
+  type ApnsEnvironment,
+  type ApnsSender,
+} from './apns'
+import { getRemoteAccess } from './remote'
 import type { Status, ThreadSummary } from '../types'
 
 // Push notifications (Web Push) for t3 mini added to a phone's home screen, or any browser that
@@ -25,8 +34,28 @@ type Subscription = {
   deviceId?: string
   createdAt: string
 }
-type Saved = { publicKey: string; privateKey: string; subscriptions: Subscription[] }
-export type PushPayload = { title: string; body: string; url: string; tag: string }
+// The native iOS app (ios/) on a device: its APNs token, which of Apple's two services it uses
+// (development builds: sandbox), and its bundle id (the APNs topic). See apns.ts.
+type AppDevice = {
+  token: string
+  environment: ApnsEnvironment
+  topic: string
+  // A key the app made and keeps on the phone (base64, 32 bytes): the title and project are
+  // encrypted with it (AES-256-GCM), so Apple can't read them; the app's notification extension
+  // opens them on the phone. Without one, only the brief line goes out.
+  key?: string
+  deviceId?: string
+  createdAt: string
+}
+type Saved = {
+  publicKey: string
+  privateKey: string
+  subscriptions: Subscription[]
+  apps: AppDevice[]
+}
+// title/body: shown by Web Push (encrypted to the browser). brief: what the native app's
+// notification says instead, since Apple can read APNs messages (no title or project).
+export type PushPayload = { title: string; body: string; url: string; tag: string; brief: string }
 // What sends one message; tests pass a stand-in. Resolves, or rejects with the push service's
 // status code when it has one.
 export type PushSender = (
@@ -63,6 +92,28 @@ const pushHosts = [
   /^[\w-]+\.push\.services\.mozilla\.com$/,
   /^[\w.-]+\.notify\.windows\.com$/,
 ]
+export const appDeviceSchema = z.object({
+  token: z.string().regex(/^[0-9a-fA-F]{64,200}$/),
+  environment: z.enum(['sandbox', 'production']),
+  topic: z
+    .string()
+    .regex(/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/)
+    .max(155),
+  key: z
+    .string()
+    .regex(/^[A-Za-z0-9+/]{43}=$/)
+    .refine((value) => Buffer.from(value, 'base64').length === 32)
+    .optional(),
+})
+
+// The notification's real text, sealed for the phone: AES-256-GCM with the app's key, as
+// base64(nonce · ciphertext · tag), the layout CryptoKit's AES.GCM.SealedBox(combined:) reads.
+export function sealForApp(key: string, content: { title: string; body: string }) {
+  const nonce = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', Buffer.from(key, 'base64'), nonce)
+  const sealed = Buffer.concat([cipher.update(JSON.stringify(content), 'utf8'), cipher.final()])
+  return Buffer.concat([nonce, sealed, cipher.getAuthTag()]).toString('base64')
+}
 export function allowedPushHost(endpoint: string) {
   try {
     const url = new URL(endpoint)
@@ -88,6 +139,8 @@ export class PushNotifications {
       deviceExists?: (id: string) => boolean | Promise<boolean>
       send?: PushSender
       subject?: string
+      // The native app: the APNs key (null while it isn't set up) and what sends.
+      apns?: { config: () => Promise<ApnsConfig | null>; send: ApnsSender }
     } = {},
   ) {}
 
@@ -102,13 +155,21 @@ export class PushNotifications {
           subscriptions: Array.isArray(data.subscriptions)
             ? data.subscriptions.filter((item) => allowedPushHost(item?.endpoint ?? ''))
             : [],
+          apps: Array.isArray(data.apps)
+            ? data.apps.filter((item) => appDeviceSchema.safeParse(item).success)
+            : [],
         }
     } catch {
       // Missing or unreadable: make new keys (old subscriptions can't be used with them anyway).
     }
     if (!this.saved) {
       const keys = generateVAPIDKeys()
-      this.saved = { publicKey: keys.publicKey, privateKey: keys.privateKey, subscriptions: [] }
+      this.saved = {
+        publicKey: keys.publicKey,
+        privateKey: keys.privateKey,
+        subscriptions: [],
+        apps: [],
+      }
       await this.save()
     }
     return this.saved
@@ -147,14 +208,68 @@ export class PushNotifications {
   async subscribed(endpoint: string) {
     return (await this.load()).subscriptions.some((item) => item.endpoint === endpoint)
   }
+  // The native app on a device registers its APNs token (POST /api/push/app).
+  async registerApp(input: unknown, deviceId?: string) {
+    const data = appDeviceSchema.parse(input)
+    const token = data.token.toLowerCase()
+    const saved = await this.load()
+    saved.apps = saved.apps.filter((item) => item.token !== token)
+    saved.apps.push({
+      ...data,
+      token,
+      ...(deviceId ? { deviceId } : {}),
+      createdAt: new Date().toISOString(),
+    })
+    saved.apps = saved.apps.slice(-maxSubscriptions)
+    await this.save()
+  }
+  async unregisterApp(token: string) {
+    const saved = await this.load()
+    const before = saved.apps.length
+    saved.apps = saved.apps.filter((item) => item.token !== token.toLowerCase())
+    if (saved.apps.length !== before) await this.save()
+  }
+  async appRegistered(token: string) {
+    return (await this.load()).apps.some((item) => item.token === token.toLowerCase())
+  }
+  async apnsConfigured() {
+    return Boolean(await this.options.apns?.config())
+  }
   // A device was revoked (or all of them, without an id): its subscriptions go too.
   async removeDevice(id?: string) {
     const saved = await this.load()
-    const before = saved.subscriptions.length
-    saved.subscriptions = saved.subscriptions.filter((item) =>
-      id ? item.deviceId !== id : !item.deviceId,
-    )
-    if (saved.subscriptions.length !== before) await this.save()
+    const before = saved.subscriptions.length + saved.apps.length
+    const keep = (item: { deviceId?: string }) => (id ? item.deviceId !== id : !item.deviceId)
+    saved.subscriptions = saved.subscriptions.filter(keep)
+    saved.apps = saved.apps.filter(keep)
+    if (saved.subscriptions.length + saved.apps.length !== before) await this.save()
+  }
+
+  // To the native app: the brief line Apple can read, the thread to open, and (with the app's
+  // key) the real title and project sealed so only the phone can read them.
+  private async sendApp(app: AppDevice, payload: PushPayload) {
+    const apns = this.options.apns
+    const config = await apns?.config()
+    if (!apns || !config) return 'failed' as const
+    return apns.send(config, {
+      token: app.token,
+      environment: app.environment,
+      topic: app.topic,
+      collapseId: payload.tag,
+      payload: {
+        aps: {
+          alert: { title: 't3 mini', body: payload.brief },
+          sound: 'default',
+          'thread-id': 't3mini',
+          // Lets the app's extension swap in the sealed title and project before it's shown.
+          ...(app.key ? { 'mutable-content': 1 } : {}),
+        },
+        url: payload.url,
+        ...(app.key
+          ? { sealed: sealForApp(app.key, { title: payload.title, body: payload.body }) }
+          : {}),
+      },
+    })
   }
 
   // Sends to every subscription (encrypted for each). Subscriptions the push service says are
@@ -191,10 +306,27 @@ export class PushNotifications {
         }
       }),
     )
-    if (gone.size) {
+    const goneApps = new Set<string>()
+    await Promise.all(
+      saved.apps.map(async (app) => {
+        if (app.deviceId && !(await this.options.deviceExists?.(app.deviceId))) {
+          goneApps.add(app.token)
+          return
+        }
+        if ((await this.sendApp(app, payload)) === 'gone') goneApps.add(app.token)
+      }),
+    )
+    if (gone.size || goneApps.size) {
       saved.subscriptions = saved.subscriptions.filter((item) => !gone.has(item.endpoint))
+      saved.apps = saved.apps.filter((item) => !goneApps.has(item.token))
       await this.save()
     }
+  }
+  // A test to one app device (the app's Settings → Send a test).
+  async sendAppTest(token: string, payload: PushPayload) {
+    const app = (await this.load()).apps.find((item) => item.token === token.toLowerCase())
+    if (!app) return 'missing' as const
+    return this.sendApp(app, payload)
   }
   // A test message to one subscription (Settings → Send a test).
   async sendTest(endpoint: string, payload: PushPayload) {
@@ -234,6 +366,14 @@ export function pushFor(event: ThreadEvent, project: string): PushPayload {
     body: `${what} · ${project}`,
     url: `/threads/${encodeURIComponent(event.thread.id)}`,
     tag: event.thread.id,
+    brief:
+      event.kind === 'completed'
+        ? 'A thread finished.'
+        : event.kind === 'failed'
+          ? 'A thread failed.'
+          : event.thread.waitingFor === 'question'
+            ? 'A thread has a question for you.'
+            : 'A thread needs your approval.',
   }
 }
 
@@ -273,6 +413,23 @@ export function watchThreads(
 
 // One per server process (kept across dev reloads, like the phone gateway).
 const globals = globalThis as typeof globalThis & { t3MiniPush?: PushNotifications }
-export function getPush(path: string, deviceExists: (id: string) => Promise<boolean>) {
-  return (globals.t3MiniPush ??= new PushNotifications(path, { deviceExists }))
+export function getPush(
+  path: string,
+  deviceExists: (id: string) => Promise<boolean>,
+  apns?: { config: () => Promise<ApnsConfig | null>; send: ApnsSender },
+) {
+  return (globals.t3MiniPush ??= new PushNotifications(path, {
+    deviceExists,
+    ...(apns ? { apns } : {}),
+  }))
+}
+
+// The push store for a data folder: Web Push and the native app, with paired devices checked
+// against the phone gateway's devices, and the APNs key read from apns.json when it's set.
+export function pushIn(data: string) {
+  return getPush(
+    join(data, 'push.json'),
+    async (id) => (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
+    { config: () => readApnsConfig(join(data, 'apns.json')), send: createApnsSender() },
+  )
 }

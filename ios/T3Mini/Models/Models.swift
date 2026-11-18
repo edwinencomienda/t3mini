@@ -82,6 +82,8 @@ struct Bootstrap: Codable, Sendable {
     var projects: [ProjectSummary]
     var ui: UiSettings?
     var defaultCwd: String?
+    /// The computer has a Deepgram key, so the message box offers dictation.
+    var dictation: Bool?
 }
 
 struct Attachment: Codable, Hashable, Sendable {
@@ -117,6 +119,7 @@ struct Activity: Codable, Identifiable, Hashable, Sendable {
     var title: String?
     var status: String
     var todo: Bool?
+    var startedAt: String?
 
     /// One line for the working indicator, e.g. "Run · bun run test".
     var line: String {
@@ -152,9 +155,22 @@ struct ThreadInfo: Codable, Hashable, Sendable {
     var provider: Provider
     var cwd: String
     var model: String?
+    var effort: String?
+    var permissionMode: String?
+    var serviceTier: String?
+    var worktree: Worktree?
+    var completedAt: String?
     var status: ThreadStatus
     var approvals: [Approval]
     var error: String?
+
+    /// A worktree thread works on its own branch (server/worktrees.ts).
+    struct Worktree: Codable, Hashable, Sendable { var branch: String }
+
+    var settings: AgentChoice {
+        AgentChoice(provider: provider, model: model ?? "", effort: effort ?? "",
+                    serviceTier: serviceTier ?? "", permissionMode: permissionMode ?? PermissionMode.defaultValue)
+    }
 }
 
 /// A whole thread. Decoded from one JSON object holding the info and both lists.
@@ -246,4 +262,86 @@ enum Block: Codable, Hashable, Sendable {
             try c.encodeIfPresent(title, forKey: .title)
         }
     }
+}
+
+
+// MARK: Agent settings (src/agent-settings.ts)
+
+/// A model the computer offers for an agent (GET /api/models), with its reasoning levels and speeds.
+struct ModelOption: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    var label: String
+    var description: String?
+    var efforts: [String]
+    var defaultEffort: String?
+    var isDefault: Bool?
+    var serviceTiers: [ServiceTier]?
+
+    struct ServiceTier: Codable, Hashable, Sendable {
+        let id: String
+        var label: String
+        var description: String?
+    }
+}
+
+/// The permission modes, as the web app words them (src/agent-settings.ts → permissionModes).
+struct PermissionMode: Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let description: String
+    let symbol: String
+
+    static let all: [PermissionMode] = [
+        PermissionMode(id: "approval-required", label: "Approval required",
+                       description: "Ask before actions that need approval.", symbol: "hand.raised"),
+        PermissionMode(id: "auto-accept-edits", label: "Auto-accept edits",
+                       description: "Allow project edits; ask when other actions need approval.", symbol: "pencil"),
+        PermissionMode(id: "auto", label: "Auto",
+                       description: "Let the provider review and approve actions automatically.", symbol: "wand.and.stars"),
+        PermissionMode(id: "full-access", label: "Full access",
+                       description: "Run with full system access and bypass normal permission prompts.", symbol: "bolt.shield"),
+    ]
+    static let defaultValue = "full-access"
+    static func named(_ id: String) -> PermissionMode? { all.first { $0.id == id } }
+}
+
+/// What a thread runs with: the agent, its model, reasoning level, speed, and permission.
+/// Empty model / effort / tier: the agent's default.
+struct AgentChoice: Hashable, Sendable {
+    var provider: Provider
+    var model: String
+    var effort: String
+    var serviceTier: String
+    var permissionMode: String
+
+    /// "Extra high" for "xhigh", like the web app's effortLabel.
+    static func effortLabel(_ value: String) -> String {
+        switch value {
+        case "": return "Default"
+        case "xhigh": return "Extra high"
+        default: return value.prefix(1).uppercased() + value.dropFirst()
+        }
+    }
+
+    /// Keeps the choice valid for the models on offer: a model that isn't there goes back to the
+    /// default, and an effort or speed the model doesn't have goes back to the default too.
+    func fitted(to models: [ModelOption]) -> AgentChoice {
+        var next = self
+        guard !models.isEmpty else { return next }
+        if !next.model.isEmpty, !models.contains(where: { $0.id == next.model }) { next.model = "" }
+        let current = models.first { $0.id == next.model } ?? models.first { $0.isDefault == true }
+        if let current {
+            if !next.effort.isEmpty, !current.efforts.contains(next.effort) { next.effort = "" }
+            if !next.serviceTier.isEmpty, !(current.serviceTiers ?? []).contains(where: { $0.id == next.serviceTier }) {
+                next.serviceTier = ""
+            }
+        }
+        return next
+    }
+}
+
+/// The thread's branch (GET /api/threads/:id/git).
+struct GitInfo: Codable, Hashable, Sendable {
+    var branch: String?
+    var detached: Bool?
 }

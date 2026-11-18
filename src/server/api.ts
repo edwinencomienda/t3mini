@@ -18,7 +18,8 @@ import {
 } from '../html-page'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
-import { getPush } from './push'
+import { pushIn } from './push'
+import { readApnsConfig, writeApnsConfig } from './apns'
 import { defaultStorePath } from './store'
 import { getMachines, isMachineError } from './machines'
 import { tailscaleStatus } from './tailscale'
@@ -42,13 +43,8 @@ import { appUpdate, latestAppUpdate, onAppUpdate, restartApp, restartWhenIdle } 
 registerDictationStream()
 
 // This application launches local agents. Keep every endpoint loopback-only and same-origin.
-// The push notifications store, next to the other data (getPush keeps one per process).
-function pushFor() {
-  const data = dirname(defaultStorePath())
-  return getPush(join(data, 'push.json'), async (id) =>
-    (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
-  )
-}
+// The push notifications store, next to the other data (one per process).
+const pushFor = () => pushIn(dirname(defaultStorePath()))
 export function checkRequest(request: Request) {
   const url = new URL(request.url)
   if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -407,6 +403,64 @@ export async function handleApi(request: Request) {
         await push.unsubscribe(endpoint)
         return Response.json({ ok: true })
       }
+      // The native iOS app (apns.ts): register this device's APNs token, check it, remove it, and
+      // a test. The device is the paired one asking (gateway requests only).
+      if (parts[1] === 'app') {
+        const deviceId = remote ? request.headers.get('x-t3-device') || undefined : undefined
+        if (!parts[2] && request.method === 'GET') {
+          const token = url.searchParams.get('token') ?? ''
+          return Response.json({
+            configured: await push.apnsConfigured(),
+            registered: token ? await push.appRegistered(token) : false,
+          })
+        }
+        if (!parts[2] && request.method === 'POST') {
+          await push.registerApp(await request.json(), deviceId)
+          return Response.json({ ok: true, configured: await push.apnsConfigured() })
+        }
+        if (!parts[2] && request.method === 'DELETE') {
+          const { token } = z.object({ token: z.string().max(200) }).parse(await request.json())
+          await push.unregisterApp(token)
+          return Response.json({ ok: true })
+        }
+        if (parts[2] === 'test' && !parts[3] && request.method === 'POST') {
+          const { token } = z.object({ token: z.string().max(200) }).parse(await request.json())
+          if (!(await push.apnsConfigured()))
+            throw new HttpError(409, 'Push isn’t set up on the computer yet (its Apple push key).')
+          const result = await push.sendAppTest(token, {
+            title: 't3 mini',
+            body: 'Notifications work.',
+            url: '/',
+            tag: 'test',
+            brief: 'Notifications work. You’ll get one when a thread finishes or needs you.',
+          })
+          if (result === 'missing')
+            throw new HttpError(
+              404,
+              'This iPhone isn’t registered. Turn notifications off and on again.',
+            )
+          if (result !== 'sent')
+            throw new HttpError(502, 'Apple didn’t accept the message. Try again.')
+          return Response.json({ ok: true })
+        }
+      }
+      // The Apple push key for the native app: set on this Mac only, never shown back.
+      if (parts[1] === 'apns' && !parts[2]) {
+        macOnly('Setting up push notifications')
+        const path = join(dirname(defaultStorePath()), 'apns.json')
+        if (request.method === 'GET') {
+          const config = await readApnsConfig(path)
+          return Response.json(
+            config
+              ? { configured: true, keyId: config.keyId, teamId: config.teamId }
+              : { configured: false },
+          )
+        }
+        if (request.method === 'POST') {
+          const config = await writeApnsConfig(path, await request.json())
+          return Response.json({ configured: true, keyId: config.keyId, teamId: config.teamId })
+        }
+      }
       if (parts[1] === 'test' && !parts[2] && request.method === 'POST') {
         const { endpoint } = z
           .object({ endpoint: z.string().max(2048) })
@@ -418,6 +472,7 @@ export async function handleApi(request: Request) {
               body: 'Notifications work. You’ll get one when a thread finishes or needs you.',
               url: '/',
               tag: 'test',
+              brief: 'Notifications work.',
             }))
           )
             throw new HttpError(

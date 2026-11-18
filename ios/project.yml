@@ -3,28 +3,41 @@
 name: T3Mini
 options:
   deploymentTarget:
-    iOS: "18.0"
+    iOS: '18.0'
   createIntermediateGroups: true
 
 settings:
   base:
-    SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: '6.0'
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
     CODE_SIGN_STYLE: Automatic
 
 targets:
   T3Mini:
     type: application
     platform: iOS
-    sources: [T3Mini]
+    sources: [T3Mini, Shared]
+    dependencies:
+      - target: T3MiniNotify
+        embed: true
     # Signing team and bundle id come from Config/Signing.xcconfig (gitignored, see README).
     configFiles:
       Debug: Config/Base.xcconfig
       Release: Config/Base.xcconfig
+    # Push notifications (APNs): development for builds from Xcode or scripts/run-on-device.sh;
+    # an App Store or TestFlight export switches it to production.
+    entitlements:
+      path: T3Mini/T3Mini.entitlements
+      properties:
+        aps-environment: development
+        # The push key is shared with the notification extension (and only the push key).
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(T3MINI_BUNDLE_ID).shared
     info:
       path: T3Mini/Info.plist
       properties:
+        T3MiniSharedKeychain: $(AppIdentifierPrefix)$(T3MINI_BUNDLE_ID).shared
         # Only local addresses (a paired Mac on the local network) may use plain HTTP.
         # Tailscale addresses are HTTPS with a real certificate, so nothing else is relaxed.
         NSAppTransportSecurity:
@@ -38,14 +51,42 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
-        INFOPLIST_KEY_NSCameraUsageDescription: "Scan the pairing QR code shown in t3 mini on your computer."
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Connect to t3 mini on your computer over the local network."
-        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_NSCameraUsageDescription: 'Scan the pairing QR code shown in t3 mini on your computer.'
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: 'Dictate messages: your recording goes to t3 mini on your computer to become text.'
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 'Connect to t3 mini on your computer over the local network.'
+        TARGETED_DEVICE_FAMILY: '1,2'
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
     scheme:
       testTargets: [T3MiniTests]
+
+  # Opens the sealed title and project of a push notification on the phone (Shared/PushKey.swift).
+  T3MiniNotify:
+    type: app-extension
+    platform: iOS
+    sources: [T3MiniNotify, Shared]
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    entitlements:
+      path: T3MiniNotify/T3MiniNotify.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(T3MINI_BUNDLE_ID).shared
+    info:
+      path: T3MiniNotify/Info.plist
+      properties:
+        CFBundleDisplayName: t3 mini
+        T3MiniSharedKeychain: $(AppIdentifierPrefix)$(T3MINI_BUNDLE_ID).shared
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(T3MINI_BUNDLE_ID).notify
+        DEVELOPMENT_TEAM: $(T3MINI_TEAM)
+        TARGETED_DEVICE_FAMILY: '1,2'
 
   T3MiniTests:
     type: bundle.unit-test

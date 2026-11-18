@@ -90,8 +90,7 @@ import {
 import { defaultPermission } from '../agent-settings'
 import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
 import { replaceHtmlBlock } from './html-pages'
-import { getPush, watchThreads } from './push'
-import { getRemoteAccess } from './remote'
+import { pushIn, watchThreads } from './push'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
@@ -2342,10 +2341,7 @@ export function getService() {
     warmModels()
     // Push notifications (push.ts): watch for finished, failed, and waiting threads from the start,
     // so they're sent even when no window is open.
-    const data = dirname(store.path)
-    const push = getPush(join(data, 'push.json'), async (id) =>
-      (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
-    )
+    const push = pushIn(dirname(store.path))
     watchThreads(
       {
         subscribe: (listener) => service.subscribe(listener),

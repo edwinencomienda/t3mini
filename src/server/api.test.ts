@@ -56,6 +56,8 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
     ['remote', 'GET'],
     ['remote', 'POST'],
     ['remote/pair', 'POST'],
+    ['push/apns', 'GET'],
+    ['push/apns', 'POST'],
     ['folders/pick', 'POST'],
     ['threads/some-thread/open-editor', 'POST'],
     ['dictation', 'GET'],

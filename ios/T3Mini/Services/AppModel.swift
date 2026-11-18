@@ -135,6 +135,78 @@ final class AppModel {
         while openedOrder.count > 30 { opened[openedOrder.removeFirst()] = nil }
     }
 
+    // MARK: Push notifications (Services/Notifications.swift)
+
+    enum PushState: Equatable {
+        case unknown, off, on
+        /// Allowed on the phone, but the computer has no Apple push key yet.
+        case notSetUp
+        /// Turned off for t3 mini in iOS Settings.
+        case denied
+    }
+    private(set) var push: PushState = .unknown
+    private(set) var pushProblem: String?
+
+    private func startNotifications() {
+        let notifications = Notifications.shared
+        notifications.onToken = { [weak self] token in
+            Task { await self?.registerPush(token: token) }
+        }
+        notifications.onOpenThread = { [weak self] id in
+            guard let self, self.isPaired else { return }
+            self.pendingOpen = id
+        }
+        notifications.visibleThread = { [weak self] in self?.openThreadId }
+        Task {
+            if await notifications.authorization == .denied { push = .denied }
+            await notifications.refresh()
+        }
+    }
+
+    private func registerPush(token: String) async {
+        guard let client else { return }
+        do {
+            // The key titles are sealed with (only this phone and the computer have it).
+            let key = PushKey.loadOrCreate().map(PushKey.base64)
+            try await client.registerPush(token: token, environment: Notifications.environment,
+                                          topic: Bundle.main.bundleIdentifier ?? "", key: key)
+            let status = try await client.pushStatus(token: token)
+            push = status.configured ? .on : .notSetUp
+            pushProblem = nil
+        } catch {
+            pushProblem = error.localizedDescription
+        }
+    }
+
+    /// The Settings switch: asks iOS (once), then registers with Apple and the computer.
+    func enablePush() async {
+        pushProblem = nil
+        if await Notifications.shared.enable() {
+            if let token = Notifications.shared.token { await registerPush(token: token) }
+            // Otherwise the token arrives in a moment and registerPush runs then.
+        } else {
+            push = .denied
+        }
+    }
+
+    func disablePush() async {
+        if let client, let token = Notifications.shared.token { try? await client.unregisterPush(token: token) }
+        push = .off
+    }
+
+    func testPush() async {
+        guard let client, let token = Notifications.shared.token else {
+            pushProblem = "Turn notifications on first."
+            return
+        }
+        do {
+            try await client.testPush(token: token)
+            pushProblem = nil
+        } catch {
+            pushProblem = error.localizedDescription
+        }
+    }
+
     // MARK: Pairing
 
     func pair(with text: String) async throws {
@@ -149,6 +221,11 @@ final class AppModel {
 
     /// Forgets the computer on this phone. (It still lists this phone until it's removed there.)
     func disconnect() {
+        // Stop this phone's notifications on the computer too (best effort).
+        if let client, let token = Notifications.shared.token {
+            Task { try? await client.unregisterPush(token: token) }
+        }
+        push = .off
         Keychain.delete()
         stopStream()
         client = nil
@@ -168,6 +245,9 @@ final class AppModel {
         self.connection = connection
         client = APIClient(connection: connection)
         restartStream()
+        startNotifications()
+        // The bootstrap's extras (dictation available) aren't in live updates.
+        Task { await refresh() }
     }
 
     private func sessionEnded() {
@@ -192,6 +272,7 @@ final class AppModel {
             if bootstrap.threads != threads { threads = bootstrap.threads }
             if bootstrap.projects != projects { projects = bootstrap.projects }
             if bootstrap.ui != ui { ui = bootstrap.ui }
+            if (bootstrap.dictation ?? false) != dictationAvailable { dictationAvailable = bootstrap.dictation ?? false }
             if let id = openThreadId { openThread = try await client.thread(id) }
         } catch APIError.unpaired {
             sessionEnded()
@@ -200,9 +281,31 @@ final class AppModel {
         }
     }
 
-    func send(_ text: String) async throws {
+    func send(_ text: String, attachments: [Attachment] = []) async throws {
         guard let client, let id = openThreadId else { return }
-        try await run { try await client.send(text, to: id) }
+        try await run { try await client.send(text, attachments: attachments, to: id) }
+    }
+
+    func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
+        guard let client else { throw APIError.unpaired }
+        var saved: Attachment?
+        try await run { saved = try await client.uploadImage(data, name: name, mimeType: mimeType) }
+        guard let saved else { throw APIError.badResponse }
+        return saved
+    }
+
+    /// Whether the computer can turn speech into text (it has a Deepgram key).
+    private(set) var dictationAvailable = false
+
+    func dictationRequest() -> URLRequest? {
+        client?.dictationRequest(thread: openThreadId)
+    }
+
+    func transcribe(_ audio: Data, mimeType: String) async throws -> String {
+        guard let client else { throw APIError.unpaired }
+        var text = ""
+        try await run { text = try await client.transcribe(audio, mimeType: mimeType, thread: openThreadId) }
+        return text
     }
 
     func stop() async throws {
@@ -225,6 +328,48 @@ final class AppModel {
     }
 
     var defaultProvider: Provider { ui?.agent?.provider ?? .claude }
+
+    func createThread(project: ProjectSummary?, choice: AgentChoice) async throws -> String? {
+        guard let client else { return nil }
+        var created: ChatThread?
+        try await run { created = try await client.createThread(project: project, choice: choice) }
+        return created?.id
+    }
+
+    /// What a new thread with this agent starts with: the settings last used on the computer.
+    func defaultChoice(for provider: Provider) -> AgentChoice {
+        let saved = ui?.agent?.settings?[provider.rawValue]
+        return AgentChoice(provider: provider, model: saved?.model ?? "", effort: saved?.effort ?? "",
+                           serviceTier: saved?.serviceTier ?? "",
+                           permissionMode: saved?.permissionMode ?? PermissionMode.defaultValue)
+    }
+
+    // MARK: Models and agent settings
+
+    /// Each agent's models, per project (they can differ by folder), kept while the app runs.
+    private var modelLists: [String: [ModelOption]] = [:]
+
+    func cachedModels(_ provider: Provider, cwd: String?) -> [ModelOption] {
+        modelLists["\(provider.rawValue)|\(cwd ?? "")"] ?? []
+    }
+
+    func models(_ provider: Provider, cwd: String?) async -> [ModelOption] {
+        let key = "\(provider.rawValue)|\(cwd ?? "")"
+        if let cached = modelLists[key], !cached.isEmpty { return cached }
+        guard let client, let models = try? await client.models(provider: provider, cwd: cwd) else { return [] }
+        modelLists[key] = models
+        return models
+    }
+
+    /// Changes the open thread's agent settings. The computer refuses while the agent works.
+    func updateSettings(_ choice: AgentChoice) async throws {
+        guard let client, let id = openThreadId else { return }
+        try await run { try await client.updateSettings(id, to: choice) }
+    }
+
+    func branch(of threadId: String) async -> GitInfo? {
+        try? await client?.git(threadId)
+    }
 
     /// The project new threads start in: the one last used on the computer, else the most recent.
     var defaultProject: ProjectSummary? {

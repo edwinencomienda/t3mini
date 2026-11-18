@@ -73,7 +73,13 @@ it('sends encrypted-for-the-browser messages, and drops gone and revoked subscri
   await push.subscribe({ endpoint: apple, keys }, 'phone')
   await push.subscribe({ endpoint: 'https://web.push.apple.com/tablet', keys }, 'tablet')
   await push.subscribe({ endpoint: 'https://fcm.googleapis.com/fcm/send/mac', keys })
-  const payload = { title: 'Fix login', body: 'Done · app', url: '/threads/t1', tag: 't1' }
+  const payload = {
+    title: 'Fix login',
+    body: 'Done · app',
+    url: '/threads/t1',
+    tag: 't1',
+    brief: 'A thread finished.',
+  }
   await push.send(payload)
   expect(sent.map((item) => item.endpoint).sort()).toHaveLength(3)
   expect(sent[0]!.payload).toEqual(payload)
@@ -150,9 +156,15 @@ it('pushes finished, failed, and waiting threads you aren’t looking at', async
     listener()
     await vi.advanceTimersByTimeAsync(600)
     expect(queued).toEqual([
-      { title: 'a', body: 'Done · app', url: '/threads/a', tag: 'a' },
-      { title: 'b', body: 'Failed · app', url: '/threads/b', tag: 'b' },
-      { title: 'c', body: 'Has a question · app', url: '/threads/c', tag: 'c' },
+      { title: 'a', body: 'Done · app', url: '/threads/a', tag: 'a', brief: 'A thread finished.' },
+      { title: 'b', body: 'Failed · app', url: '/threads/b', tag: 'b', brief: 'A thread failed.' },
+      {
+        title: 'c',
+        body: 'Has a question · app',
+        url: '/threads/c',
+        tag: 'c',
+        brief: 'A thread has a question for you.',
+      },
     ])
   } finally {
     vi.useRealTimers()
@@ -173,5 +185,6 @@ it('words an approval wait like the web app', () => {
     body: 'Needs your approval · app',
     url: '/threads/t',
     tag: 't',
+    brief: 'A thread needs your approval.',
   })
 })

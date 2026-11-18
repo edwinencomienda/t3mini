@@ -4,3 +4,7 @@ build/
 Config/Signing.xcconfig
 *.xcuserstate
 xcuserdata/
+T3Mini/T3Mini.entitlements
+Config/AppStoreConnect.env
+T3MiniNotify/Info.plist
+T3MiniNotify/T3MiniNotify.entitlements

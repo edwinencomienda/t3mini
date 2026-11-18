@@ -143,8 +143,96 @@ final class APIClient: Sendable {
         return data
     }
 
-    func send(_ text: String, to id: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/send", method: "POST", body: ["text": text])
+    // MARK: Push notifications (src/server/push.ts → /api/push/app)
+
+    struct PushStatus: Decodable { let configured: Bool; let registered: Bool }
+
+    func pushStatus(token: String) async throws -> PushStatus {
+        try await call("push/app?token=\(token)")
+    }
+
+    func registerPush(token: String, environment: String, topic: String, key: String?) async throws {
+        var body = ["token": token, "environment": environment, "topic": topic]
+        if let key { body["key"] = key }
+        let _: Empty = try await call("push/app", method: "POST", body: body)
+    }
+
+    func unregisterPush(token: String) async throws {
+        let _: Empty = try await call("push/app", method: "DELETE", body: ["token": token])
+    }
+
+    func testPush(token: String) async throws {
+        let _: Empty = try await call("push/app/test", method: "POST", body: ["token": token])
+    }
+
+    // MARK: Agent settings and git
+
+    func models(provider: Provider, cwd: String?) async throws -> [ModelOption] {
+        struct Catalog: Decodable { let models: [ModelOption] }
+        var query = "models?provider=\(provider.rawValue)"
+        if let cwd, let escaped = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))) {
+            query += "&cwd=\(escaped)"
+        }
+        let catalog: Catalog = try await call(query)
+        return catalog.models
+    }
+
+    func updateSettings(_ id: String, to choice: AgentChoice) async throws {
+        let _: Empty = try await call("threads/\(id.urlPathEscaped)/settings", method: "POST", body: [
+            "provider": choice.provider.rawValue, "model": choice.model, "effort": choice.effort,
+            "serviceTier": choice.serviceTier, "permissionMode": choice.permissionMode,
+        ])
+    }
+
+    func git(_ id: String) async throws -> GitInfo {
+        try await call("threads/\(id.urlPathEscaped)/git")
+    }
+
+    func send(_ text: String, attachments: [Attachment] = [], to id: String) async throws {
+        struct Body: Encodable {
+            let text: String
+            let attachments: [Item]
+            struct Item: Encodable { let id: String; let name: String }
+        }
+        let _: Empty = try await call("threads/\(id.urlPathEscaped)/send", method: "POST",
+                                      body: Body(text: text, attachments: attachments.map { .init(id: $0.id, name: $0.name) }))
+    }
+
+    /// Saves a photo on the computer (POST /api/uploads); send it with a message by its id.
+    func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
+        struct Saved: Decodable { let id: String; let mimeType: String }
+        let saved: Saved = try await call("uploads", method: "POST", body: [
+            "kind": "image", "name": name, "mimeType": mimeType, "data": data.base64EncodedString(),
+        ])
+        return Attachment(id: saved.id, name: name, mimeType: saved.mimeType)
+    }
+
+    /// The live dictation stream (WebSocket /api/dictation/stream): raw 16 kHz PCM up, words back.
+    /// Sends the session and this gateway's own origin, as a browser would, so the gateway's usual
+    /// checks apply.
+    func dictationRequest(thread: String?) -> URLRequest? {
+        guard var components = URLComponents(url: connection.server, resolvingAgainstBaseURL: false) else { return nil }
+        let origin = connection.server.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.path = "/api/dictation/stream"
+        components.queryItems = [
+            URLQueryItem(name: "encoding", value: "linear16"),
+            URLQueryItem(name: "sample_rate", value: "16000"),
+        ] + (thread.map { [URLQueryItem(name: "thread", value: $0)] } ?? [])
+        guard let url = components.url else { return nil }
+        var request = authorized(URLRequest(url: url))
+        request.setValue(origin, forHTTPHeaderField: "Origin")
+        return request
+    }
+
+    /// Speech to text on the computer (POST /api/transcribe, its Deepgram key), with the thread's
+    /// vocabulary for names and terms.
+    func transcribe(_ audio: Data, mimeType: String, thread: String?) async throws -> String {
+        struct Result: Decodable { let text: String }
+        var body = ["mimeType": mimeType, "data": audio.base64EncodedString()]
+        if let thread { body["thread"] = thread }
+        let result: Result = try await call("transcribe", method: "POST", body: body)
+        return result.text
     }
 
     func stop(_ id: String) async throws {
@@ -160,6 +248,12 @@ final class APIClient: Sendable {
         let _: Empty = try await call(
             "threads/\(id.urlPathEscaped)/approve", method: "POST",
             body: Body(approvalId: approvalId, allow: allow, answers: answers))
+    }
+
+    func createThread(project: ProjectSummary?, choice: AgentChoice) async throws -> ChatThread {
+        try await createThread(provider: choice.provider, project: project, settings: AgentSettings(
+            model: choice.model, effort: choice.effort, permissionMode: choice.permissionMode,
+            serviceTier: choice.serviceTier.isEmpty ? nil : choice.serviceTier))
     }
 
     func createThread(provider: Provider, project: ProjectSummary?, settings: AgentSettings?) async throws -> ChatThread {

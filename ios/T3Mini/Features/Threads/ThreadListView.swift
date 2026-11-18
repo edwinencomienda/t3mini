@@ -75,10 +75,14 @@ struct ThreadListView: View {
             .sheet(isPresented: $showingSettings) { SettingsSheet() }
         }
         .onChange(of: path) { _, path in model.open(path.last) }
+        // A tapped notification (or the debug launch) opens its thread: on top of whatever was
+        // open, with any sheet closed so the thread is what you see.
         .onChange(of: model.pendingOpen, initial: true) { _, id in
             guard let id else { return }
             model.pendingOpen = nil
-            path = [id]
+            composing = false
+            showingSettings = false
+            if path != [id] { path = [id] }
         }
     }
 
