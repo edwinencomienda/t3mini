@@ -85,4 +85,17 @@ struct ThreadListTests {
         #expect(Event(was: .completed, now: .completed, waitingFor: nil) == nil)
         #expect(Event(was: .idle, now: .completed, waitingFor: nil) == nil)
     }
+
+    /// Dictation: on this iPhone by default (when it can), your computer once chosen in Settings.
+    @Test func dictationEngineChoice() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.string(forKey: DictationEngine.key)
+        defer { defaults.set(saved, forKey: DictationEngine.key) }
+        defaults.removeObject(forKey: DictationEngine.key)
+        #expect(DictationEngine.current == (DictationEngine.onDeviceAvailable ? .iphone : .computer))
+        defaults.set(DictationEngine.computer.rawValue, forKey: DictationEngine.key)
+        #expect(DictationEngine.current == .computer)
+        defaults.set(DictationEngine.iphone.rawValue, forKey: DictationEngine.key)
+        #expect(DictationEngine.current == (DictationEngine.onDeviceAvailable ? .iphone : .computer))
+    }
 }

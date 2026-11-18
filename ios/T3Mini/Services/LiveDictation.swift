@@ -1,6 +1,38 @@
 @preconcurrency import AVFoundation
 import Foundation
 import Observation
+import Speech
+
+/// Where dictation turns speech into text (Settings → Dictation).
+enum DictationEngine: String, CaseIterable, Identifiable {
+    /// Apple's speech recognition on the iPhone itself (iOS 26): no key, nothing leaves the phone.
+    case iphone
+    /// The computer's Deepgram key, streamed through t3 mini (the web app's live dictation).
+    case computer
+
+    static let key = "t3mini.dictationEngine"
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .iphone: "On this iPhone"
+        case .computer: "Your computer"
+        }
+    }
+
+    /// iOS 26 or later, on a device that supports it.
+    static var onDeviceAvailable: Bool {
+        if #available(iOS 26, *) { return SpeechTranscriber.isAvailable }
+        return false
+    }
+
+    /// The chosen engine; this iPhone unless set otherwise (or it can't).
+    static var current: DictationEngine {
+        let saved = UserDefaults.standard.string(forKey: key).flatMap(DictationEngine.init(rawValue:))
+        if saved == .computer || !onDeviceAvailable { return .computer }
+        return .iphone
+    }
+}
 
 /// Live dictation, like the web app's: the microphone streams to the computer while you talk
 /// (WebSocket /api/dictation/stream, relayed to its Deepgram key; src/server/dictation-stream.ts)
@@ -12,6 +44,8 @@ final class LiveDictation {
     static let maxSeconds: TimeInterval = 300
 
     private(set) var active = false
+    /// Getting ready (on this iPhone, the first time: downloading the language's speech model).
+    private(set) var preparing = false
     /// Stopped; waiting for the last words.
     private(set) var finishing = false
     private(set) var elapsed: TimeInterval = 0
@@ -33,9 +67,15 @@ final class LiveDictation {
     private var isClosed = false
     private(set) var problem: String?
 
-    /// Starts listening. Returns why it couldn't, or nil.
-    func start(_ request: URLRequest) async -> String? {
-        guard !active else { return nil }
+    /// On this iPhone (iOS 26): Apple's speech analyzer and its feed (`OnDeviceSpeech`).
+    private var onDevice: AnyObject?
+
+    /// Starts listening, on this iPhone or through the computer (`DictationEngine.current`; the
+    /// computer needs `request`). Returns why it couldn't, or nil.
+    func start(_ request: URLRequest?) async -> String? {
+        guard !active, !preparing else { return nil }
+        if DictationEngine.current == .iphone, #available(iOS 26, *) { return await startOnDevice() }
+        guard let request else { return "Dictation through your computer needs its Deepgram key (t3 mini → Settings → Dictation)." }
         guard await AVAudioApplication.requestRecordPermission() else {
             return "Microphone not available. Allow it in iOS Settings → t3 mini."
         }
@@ -86,6 +126,12 @@ final class LiveDictation {
             return "Couldn’t start the microphone."
         }
         self.engine = engine
+        beginRecording()
+        return nil
+    }
+
+    /// Listening: the start cue, the clock, and the five-minute limit (both engines).
+    fileprivate func beginRecording() {
         active = true
         SoundEffects.recording = true
         // Like the web: two soft rising notes when it starts listening.
@@ -99,13 +145,13 @@ final class LiveDictation {
                 if self.elapsed >= Self.maxSeconds { Task { await self.stop() } }
             }
         }
-        return nil
     }
 
     /// Stops the microphone and waits (up to a few seconds) for the last words. Returns the text.
     @discardableResult
     func stop() async -> String {
         guard active else { return text }
+        if #available(iOS 26, *), let speech = onDevice as? OnDeviceSpeech { return await stopOnDevice(speech) }
         stopMicrophone()
         finishing = true
         socket?.send(.string(#"{"type":"stop"}"#)) { @Sendable _ in }
@@ -131,6 +177,11 @@ final class LiveDictation {
     func cancel() {
         guard active else { return }
         stopMicrophone()
+        if #available(iOS 26, *), let speech = onDevice as? OnDeviceSpeech {
+            onDevice = nil
+            Task { await speech.cancel() }
+            return
+        }
         close()
     }
 
@@ -256,5 +307,195 @@ private final class AudioSender: @unchecked Sendable {
         let rms = (sum / Float(count)).squareRoot()
         let db = 20 * log10(max(rms, 0.000_01))
         onLevel(max(0, min(1, (db + 50) / 50)))
+    }
+}
+
+// MARK: On this iPhone (iOS 26)
+
+extension LiveDictation {
+    /// Apple's on-device speech recognition: the microphone feeds Speech's analyzer, which reports
+    /// words as they're said (shown muted) and then settles them. The language's model downloads
+    /// once, the first time; after that it works offline, and the audio never leaves the phone.
+    @available(iOS 26, *)
+    fileprivate func startOnDevice() async -> String? {
+        guard await AVAudioApplication.requestRecordPermission() else {
+            return "Microphone not available. Allow it in iOS Settings → t3 mini."
+        }
+        preparing = true
+        defer { preparing = false }
+        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) else {
+            return "Dictation on this iPhone doesn’t support your language yet. Switch to Your computer in Settings → Dictation."
+        }
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [],
+                                            reportingOptions: [.volatileResults], attributeOptions: [])
+        do {
+            if let download = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                try await download.downloadAndInstall()
+            }
+        } catch {
+            return "Couldn’t get dictation ready on this iPhone. Check your connection and try again."
+        }
+
+        let audio = AVAudioSession.sharedInstance()
+        do {
+            try audio.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try audio.setActive(true)
+        } catch {
+            return "Couldn’t start the microphone."
+        }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0 else { return "Couldn’t read the microphone." }
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: inputFormat)
+            ?? inputFormat
+
+        committed = ""
+        interim = ""
+        problem = nil
+        let speech = OnDeviceSpeech(transcriber: transcriber, inputFormat: inputFormat, format: format) { [weak self] level in
+            Task { @MainActor in self?.level = level }
+        }
+        // Words as they come (listening before the analyzer starts, so none are missed): muted
+        // while Speech is still working them out, then settled.
+        speech.results = Task { @MainActor [weak self] in
+            do {
+                for try await result in transcriber.results {
+                    guard let self else { return }
+                    let words = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if result.isFinal {
+                        if !words.isEmpty { self.committed = self.committed.isEmpty ? words : self.committed + " " + words }
+                        self.interim = ""
+                    } else {
+                        self.interim = words
+                    }
+                }
+            } catch {
+                if let self, self.active { self.problem = "Dictation stopped." }
+            }
+        }
+        do {
+            try await speech.start()
+        } catch {
+            speech.results?.cancel()
+            return "Couldn’t start dictation on this iPhone."
+        }
+        // The microphone calls this on its own audio thread (@Sendable, as for the computer).
+        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable buffer, _ in
+            speech.feed(buffer)
+        }
+        do {
+            engine.prepare()
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            await speech.cancel()
+            return "Couldn’t start the microphone."
+        }
+        self.engine = engine
+        onDevice = speech
+        beginRecording()
+        return nil
+    }
+
+    /// Stops the microphone, lets Speech settle the last words (up to a few seconds), returns all.
+    @available(iOS 26, *)
+    fileprivate func stopOnDevice(_ speech: OnDeviceSpeech) async -> String {
+        stopMicrophone()
+        finishing = true
+        await speech.finish(timeout: .seconds(4))
+        if !interim.isEmpty {
+            committed = text
+            interim = ""
+        }
+        finishing = false
+        onDevice = nil
+        return text
+    }
+}
+
+/// The analyzer and its audio feed. `feed` runs on the microphone's thread; the rest on the main actor.
+@available(iOS 26, *)
+private final class OnDeviceSpeech: @unchecked Sendable {
+    private let analyzer: SpeechAnalyzer
+    private let input: AsyncStream<AnalyzerInput>
+    private let continuation: AsyncStream<AnalyzerInput>.Continuation
+    private let converter: AVAudioConverter?
+    private let format: AVAudioFormat
+    private let onLevel: @Sendable (Float) -> Void
+    private var lastLevel = Date.distantPast
+    var results: Task<Void, Never>?
+
+    init(transcriber: SpeechTranscriber, inputFormat: AVAudioFormat, format: AVAudioFormat,
+         onLevel: @escaping @Sendable (Float) -> Void) {
+        analyzer = SpeechAnalyzer(modules: [transcriber])
+        (input, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
+        self.format = format
+        converter = inputFormat == format ? nil : AVAudioConverter(from: inputFormat, to: format)
+        self.onLevel = onLevel
+    }
+
+    func start() async throws {
+        try await analyzer.prepareToAnalyze(in: format)
+        try await analyzer.start(inputSequence: input)
+    }
+
+    func feed(_ buffer: AVAudioPCMBuffer) {
+        reportLevel(buffer)
+        guard let converter else {
+            continuation.yield(AnalyzerInput(buffer: buffer))
+            return
+        }
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+        var supplied = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if supplied {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, out.frameLength > 0 else { return }
+        continuation.yield(AnalyzerInput(buffer: out))
+    }
+
+    /// No more audio: Speech settles what it heard; waits for its last results (or gives up).
+    func finish(timeout: Duration) async {
+        continuation.finish()
+        let analyzer = analyzer
+        let results = results
+        let done = Task {
+            try? await analyzer.finalizeAndFinishThroughEndOfInput()
+            await results?.value
+        }
+        let deadline = Task {
+            try? await Task.sleep(for: timeout)
+            await analyzer.cancelAndFinishNow()
+        }
+        await done.value
+        deadline.cancel()
+    }
+
+    func cancel() async {
+        continuation.finish()
+        results?.cancel()
+        await analyzer.cancelAndFinishNow()
+    }
+
+    // About ten times a second: -50 dB (quiet) … 0 dB (loud) → 0…1, as for the computer.
+    private func reportLevel(_ buffer: AVAudioPCMBuffer) {
+        guard Date().timeIntervalSince(lastLevel) > 0.1, let channel = buffer.floatChannelData?[0] else { return }
+        lastLevel = Date()
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+        var sum: Float = 0
+        for index in 0..<count { sum += channel[index] * channel[index] }
+        let rms = (sum / Float(count)).squareRoot()
+        onLevel(max(0, min(1, (20 * log10(max(rms, 0.000_01)) + 50) / 50)))
     }
 }

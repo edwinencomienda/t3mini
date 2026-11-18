@@ -82,6 +82,7 @@ struct SettingsSheet: View {
     @AppStorage(SoundEffects.finishNameKey) private var finishName = SoundEffects.Finish.chime.rawValue
     @AppStorage(SoundEffects.dictationKey) private var dictationSounds = true
     @AppStorage(AppTheme.key) private var theme = AppTheme.system.rawValue
+    @AppStorage(DictationEngine.key) private var dictationEngine = DictationEngine.iphone.rawValue
     @Environment(\.dismiss) private var dismiss
     @State private var confirming = false
 
@@ -105,6 +106,28 @@ struct SettingsSheet: View {
                     Text("Appearance")
                 } footer: {
                     Text("System follows your iPhone's light and dark setting.")
+                }
+                Section {
+                    if DictationEngine.onDeviceAvailable {
+                        Picker("Dictation", selection: $dictationEngine) {
+                            ForEach(DictationEngine.allCases) { Text($0.label).tag($0.rawValue) }
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                    }
+                } header: {
+                    Text("Dictation")
+                } footer: {
+                    if !DictationEngine.onDeviceAvailable {
+                        Text("Dictation goes through your computer's Deepgram key. Dictating on the iPhone itself needs iOS 26.")
+                    } else if dictationEngine == DictationEngine.computer.rawValue {
+                        Text(model.dictationAvailable
+                             ? "Your voice goes to your computer, which turns it into text with its Deepgram key."
+                             : "Your computer has no Deepgram key yet (t3 mini → Settings → Dictation), so the mic is off.")
+                    } else {
+                        Text("Apple's speech recognition, right on this iPhone: free, no key, and your voice never leaves the phone. The first time, iOS downloads your language's model.")
+                    }
                 }
                 Section {
                     Toggle("Notify me", isOn: Binding(

@@ -22,6 +22,8 @@ struct Composer: View {
     @State private var uploadingFiles = 0
     @State private var pending: [PendingPhoto] = []
     @State private var dictation = LiveDictation()
+    /// Settings → Dictation (read so the mic button follows a change there).
+    @AppStorage(DictationEngine.key) private var dictationEngine = ""
     /// What was typed before dictation started; the live words go after it.
     @State private var dictationBase = ""
     @State private var problem: String?
@@ -56,7 +58,7 @@ struct Composer: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 if !pending.isEmpty { photoStrip }
-                if dictation.active || dictation.finishing { recordingLine }
+                if dictation.active || dictation.finishing || dictation.preparing { recordingLine }
                 // One line to start, like Claude's; grows as you type. While dictating, the words
                 // appear as you say them: settled ones in the normal color, the ones still being
                 // worked out muted (editing waits until you stop).
@@ -167,7 +169,7 @@ struct Composer: View {
             }
             Spacer(minLength: 4)
 
-            if model.dictationAvailable {
+            if model.dictationAvailable || (dictationEngine != DictationEngine.computer.rawValue && DictationEngine.current == .iphone) {
                 Button { Task { await toggleDictation() } } label: {
                     Image(systemName: dictation.active ? "stop.fill" : "mic")
                         .font(.system(size: dictation.active ? 12 : 16, weight: .medium))
@@ -177,7 +179,7 @@ struct Composer: View {
                                     in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(dictation.finishing)
+                .disabled(dictation.finishing || dictation.preparing)
                 .accessibilityLabel(dictation.active ? "Stop dictating" : "Dictate")
             }
 
@@ -319,7 +321,10 @@ struct Composer: View {
 
     private var recordingLine: some View {
         HStack(spacing: 10) {
-            if dictation.finishing {
+            if dictation.preparing {
+                ProgressView().controlSize(.small)
+                Text("Getting dictation ready…").foregroundStyle(.secondary)
+            } else if dictation.finishing {
                 ProgressView().controlSize(.small)
                 Text("Finishing…").foregroundStyle(.secondary)
             } else {
@@ -343,7 +348,9 @@ struct Composer: View {
             await finishDictation()
             focused = true
         } else {
-            guard let request = model.dictationRequest() else { return }
+            let onDevice = DictationEngine.current == .iphone
+            let request = model.dictationRequest()
+            guard onDevice || request != nil else { return }
             focused = false
             dictationBase = draft
             if let failure = await dictation.start(request) { problem = failure }
