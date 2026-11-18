@@ -98,4 +98,21 @@ struct ThreadListTests {
         defaults.set(DictationEngine.iphone.rawValue, forKey: DictationEngine.key)
         #expect(DictationEngine.current == (DictationEngine.onDeviceAvailable ? .iphone : .computer))
     }
+
+    /// While an agent works only the times change, several times a second: those are batched.
+    @Test func onlyTimesDifferSpotsTimeOnlyChanges() {
+        let old = [thread("a", at: "2026-11-18T11:00:00Z"), thread("b")]
+        var newer = old
+        newer[0].updatedAt = "2026-11-18T11:00:05Z"
+        newer[0].lastMessageAt = "2026-11-18T11:00:05Z"
+        #expect(AppModel.onlyTimesDiffer(old, newer))
+        var status = newer
+        status[0].status = .completed
+        #expect(!AppModel.onlyTimesDiffer(old, status))
+        var title = old
+        title[1].title = "Renamed"
+        #expect(!AppModel.onlyTimesDiffer(old, title))
+        #expect(!AppModel.onlyTimesDiffer(old, Array(old.reversed())))
+        #expect(!AppModel.onlyTimesDiffer(old, old + [thread("c")]))
+    }
 }

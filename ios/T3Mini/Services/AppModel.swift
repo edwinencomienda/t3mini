@@ -191,6 +191,8 @@ final class AppModel {
     /// Avatars already decoded, by project and choice, so a row scrolling back into view shows its
     /// image at once instead of its letter and a fresh decode.
     private let avatarImages = NSCache<NSString, UIImage>()
+    /// Avatars with nothing saved on this phone yet (cleared when one loads).
+    @ObservationIgnored private var avatarMisses: Set<String> = []
 
     func avatarKey(_ project: ProjectSummary) -> String {
         [project.path, project.avatar ?? "", project.image ?? "", project.icon == true ? "1" : "0",
@@ -202,9 +204,14 @@ final class AppModel {
     func cachedAvatar(_ project: ProjectSummary) -> UIImage? {
         let key = avatarKey(project) as NSString
         if let image = avatarImages.object(forKey: key) { return image }
+        // Looked for already and not saved on this phone: no disk read for it on every redraw.
+        if avatarMisses.contains(key as String) { return nil }
         guard let dataKey = avatarDataKey(project), let data = images.object(forKey: dataKey as NSString) as Data? ?? disk?.read(dataKey),
               let image = ImageDecode.decode(data, maxPixel: Self.avatarPixels)
-        else { return nil }
+        else {
+            avatarMisses.insert(key as String)
+            return nil
+        }
         images.setObject(data as NSData, forKey: dataKey as NSString, cost: data.count)
         avatarImages.setObject(image, forKey: key)
         return image
@@ -217,6 +224,7 @@ final class AppModel {
               let image = await Task.detached(operation: { ImageDecode.decode(data, maxPixel: Self.avatarPixels) }).value
         else { return nil }
         avatarImages.setObject(image, forKey: key)
+        avatarMisses.remove(key as String)
         return image
     }
 
@@ -281,6 +289,7 @@ final class AppModel {
             guard let fresh = try? await load(client), fresh != current else { return }
             store(key, fresh)
             avatarImages.removeAllObjects()
+            avatarMisses.removeAll()
             avatarRevision += 1
         }
     }
@@ -467,6 +476,10 @@ final class AppModel {
         guard let client else { return }
         do {
             let bootstrap = try await client.bootstrap()
+            // The whole list, fresh: nothing held back is newer.
+            heldTimer?.cancel()
+            heldTimer = nil
+            heldThreads = nil
             if bootstrap.threads != threads {
                 announceFinished(bootstrap.threads)
                 threads = bootstrap.threads
@@ -807,14 +820,65 @@ final class AppModel {
         streamTask = nil
     }
 
+    // MARK: Thread list updates
+
+    /// A newer list whose only changes are times, held back (`flushThreads`).
+    @ObservationIgnored private var heldThreads: [ThreadSummary]?
+    @ObservationIgnored private var heldTimer: Task<Void, Never>?
+    /// How long only-the-times changes wait: the list re-sorts and redraws at most this often for
+    /// them (rows show minutes, "now", "3m").
+    static let timeOnlyDelay: Duration = .seconds(5)
+
+    /// While an agent works, the computer sends the thread list several times a second, and
+    /// usually only the working thread's times have changed. Redrawing the whole list for each
+    /// one made scrolling it stutter, so those wait a few seconds; anything you'd see at once (a
+    /// status, title, unread mark, a new or deleted thread) goes through right away.
+    private func receiveThreads(_ next: [ThreadSummary]) {
+        guard next != threads else {
+            heldThreads = nil
+            return
+        }
+        if Self.onlyTimesDiffer(threads, next) {
+            heldThreads = next
+            guard heldTimer == nil else { return }
+            heldTimer = Task { [weak self] in
+                try? await Task.sleep(for: Self.timeOnlyDelay)
+                guard !Task.isCancelled else { return }
+                self?.flushThreads()
+            }
+            return
+        }
+        heldTimer?.cancel()
+        heldTimer = nil
+        heldThreads = nil
+        announceFinished(next)
+        threads = next
+        LiveActivities.shared.sync(next)
+    }
+
+    private func flushThreads() {
+        heldTimer = nil
+        guard let next = heldThreads else { return }
+        heldThreads = nil
+        if next != threads { threads = next }
+    }
+
+    /// The same threads, in the same order, with only their times changed.
+    nonisolated static func onlyTimesDiffer(_ old: [ThreadSummary], _ new: [ThreadSummary]) -> Bool {
+        guard old.count == new.count else { return false }
+        for (a, b) in zip(old, new) {
+            var a = a, b = b
+            a.updatedAt = ""; b.updatedAt = ""
+            a.lastMessageAt = nil; b.lastMessageAt = nil
+            if a != b { return false }
+        }
+        return true
+    }
+
     private func apply(_ update: LiveUpdate, threadId: String?, client: APIClient) async {
         // Only real changes: @Observable redraws whatever reads a property on every assignment, and
         // while an agent works the thread list arrives several times a second.
-        if let threads = update.threads, threads != self.threads {
-            announceFinished(threads)
-            self.threads = threads
-            LiveActivities.shared.sync(threads)
-        }
+        if let threads = update.threads { receiveThreads(threads) }
         if let projects = update.projects, projects != self.projects { self.projects = projects }
         if let ui = update.ui, ui != self.ui { self.ui = ui }
         guard threadId == openThreadId else { return }
