@@ -17,7 +17,13 @@ targets:
   T3Mini:
     type: application
     platform: iOS
-    sources: [T3Mini, Shared]
+    sources:
+      - T3Mini
+      - Shared
+      # Mermaid for diagrams (show_diagram), from the web app's own install (`bun install` at
+      # the repo root first); bundled, so the phone draws diagrams with no network.
+      - path: ../node_modules/mermaid/dist/mermaid.min.js
+        buildPhase: resources
     dependencies:
       - target: T3MiniNotify
         embed: true

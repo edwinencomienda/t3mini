@@ -54,14 +54,20 @@ struct Composer: View {
                 if !pending.isEmpty { photoStrip }
                 if dictation.active || dictation.finishing { recordingLine }
                 // One line to start, like Claude's; grows as you type. While dictating, the words
-                // appear here as you say them (editing waits until you stop).
-                TextField(placeholder, text: $draft, axis: .vertical)
-                    .font(.body)
-                    .lineLimit(1...8)
-                    .focused($focused)
-                    .disabled(dictation.active || dictation.finishing)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 6)
+                // appear as you say them: settled ones in the normal color, the ones still being
+                // worked out muted (editing waits until you stop).
+                Group {
+                    if dictation.active || dictation.finishing {
+                        liveWords
+                    } else {
+                        TextField(placeholder, text: $draft, axis: .vertical)
+                            .lineLimit(1...8)
+                            .focused($focused)
+                    }
+                }
+                .font(.body)
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
                 controls
             }
             .padding(10)
@@ -89,6 +95,26 @@ struct Composer: View {
         .onChange(of: dictation.problem) { _, message in
             if let message { problem = message }
         }
+    }
+
+    /// What's typed plus what you've said, the unsettled words muted. Long dictation keeps its
+    /// newest words in view (the start gives way).
+    private var liveWords: some View {
+        let settled = Self.joined(dictationBase, dictation.committed)
+        let pending = dictation.interim
+        let gap = !settled.isEmpty && !pending.isEmpty && !settled.hasSuffix(" ") && !settled.hasSuffix("\n") ? " " : ""
+        return Group {
+            if settled.isEmpty && pending.isEmpty {
+                Text("Listening…").foregroundStyle(.tertiary)
+            } else {
+                Text("\(Text(settled))\(Text(gap + pending).foregroundStyle(.secondary))")
+            }
+        }
+        .lineLimit(8)
+        .truncationMode(.head)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(nil, value: pending)
+        .accessibilityLabel(settled + gap + pending)
     }
 
     private var placeholder: String {

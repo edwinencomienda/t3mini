@@ -15,14 +15,16 @@ search, pull to refresh, working / needs-you / unread marks), live chat (replies
 threads you opened before show at once), Markdown with tables and code blocks, images (yours and
 the agent's, full screen with zoom), `show_html` pages in a sealed web view, status and sub-agent
 cards, sending and steering, stop, Allow / Deny, answering the agent's questions, starting a new
-thread in a project, a new thread in the same project in one tap (✎ at the top right of a thread, same agent and settings; ⋯ has Agent settings and Stop), a ↓ button to jump back to the latest message, press and hold a thread in the list for New thread in this project, Rename, Regenerate title, Mark as read, Stop, and Delete, choosing the agent, model, reasoning, speed, and permission (the chip above
+thread in a project, tap the title pill for the thread's details (full title, status and times, agent and settings, folder, branch, open pull request), a new thread in the same project in one tap (✎ at the top right of a thread, same agent and settings; ⋯ has Agent settings and Stop), a ↓ button to jump back to the latest message, press and hold a thread in the list for New thread in this project, Rename, Regenerate title, Mark as read, Stop, and Delete, choosing the agent, model, reasoning, speed, and permission (the chip above
 the message box, and New thread; switching agents mid-thread too), the branch in the header,
 sending photos (+, resized to JPEG ≤ 2048 px like the web app), replies grouped into turns like
 the web app (the agent's steps fold under "Worked for 2m 10s · 6 steps", the final answer stays open; "Worked for 24s · done 2:00 PM" under the latest turn, "Stopped after…" / "Failed after…" when a run ended early, and a live seconds counter on the working line), a
 copy button and the time under each message, and live dictation (the mic: words appear in the
-message box as you talk; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
+message box as you talk, the words still being worked out muted; 16 kHz PCM streamed over the `/api/dictation/stream` WebSocket with
 `encoding=linear16&sample_rate=16000`, relayed to the computer's Deepgram key; shown only when
-it's set up). Not yet: diagrams, video and sound (they say "open on your computer"),
+it's set up), and Mermaid diagrams (`show_diagram`, drawn on the phone; tap for full screen
+with pinch to zoom). Images open full screen with smooth pinch, pan, and double-tap zoom.
+Not yet: video and sound (they say "open on your computer"),
 diffs, editing messages, the camera.
 
 ## Connect it
@@ -35,9 +37,21 @@ The app keeps the session (30 days, like any paired device) in the iPhone's Keyc
 Settings → Devices as **iPhone · t3 mini app**; remove it there to cut it off. If the session ends,
 the app goes back to the pairing screen.
 
+## Thread speed
+
+Live updates redraw the open thread several times a second while a reply streams, so the chat
+avoids repeat work: parsed Markdown is remembered by its text (`MarkdownCache`), so only the
+reply that changed is parsed again; a turn that didn't change is skipped (`TurnView` is
+`Equatable`); images are shrunk to screen size straight from the file (`ImageDecode`, ImageIO
+thumbnails) and kept decoded, with the full image loaded only in the viewer; the full-screen
+viewer zooms with UIKit's scroll view (`ZoomableImage`), not per-frame SwiftUI redraws;
+diagrams are drawn once by one hidden web view (`DiagramRenderer`) and remembered; and only
+the latest 20 turns are drawn (Show earlier messages adds more).
+
 ## Build
 
-Requirements: Xcode 26+, and XcodeGen (`brew install xcodegen`).
+Requirements: Xcode 26+, XcodeGen (`brew install xcodegen`), and `bun install` at the repo
+root: the app bundles Mermaid for diagrams from `node_modules/mermaid/dist/mermaid.min.js`.
 
 ```sh
 cd ios

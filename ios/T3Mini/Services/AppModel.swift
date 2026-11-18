@@ -63,6 +63,29 @@ final class AppModel {
         try await cachedImage("upload:" + id) { try await $0.image(id) }
     }
 
+    /// Images already decoded (shrunk for the conversation, or full size for the viewer), so a
+    /// thread you come back to shows its pictures at once, at their size, without decoding again.
+    private let decodedImages: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 160 * 1024 * 1024
+        return cache
+    }()
+
+    private func decodedKey(_ id: String, _ maxPixel: Int?) -> NSString { "\(id)|\(maxPixel ?? 0)" as NSString }
+
+    func cachedDecodedImage(_ id: String, maxPixel: Int?) -> UIImage? {
+        decodedImages.object(forKey: decodedKey(id, maxPixel))
+    }
+
+    func decodedImage(_ id: String, maxPixel: Int?) async throws -> UIImage? {
+        let key = decodedKey(id, maxPixel)
+        if let hit = decodedImages.object(forKey: key) { return hit }
+        let data = try await imageData(id)
+        let image = await Task.detached(priority: .userInitiated) { ImageDecode.decode(data, maxPixel: maxPixel) }.value
+        if let image { decodedImages.setObject(image, forKey: key, cost: ImageDecode.cost(image)) }
+        return image
+    }
+
     /// Avatars already decoded, by project and choice, so a row scrolling back into view shows its
     /// image at once instead of its letter and a fresh decode.
     private let avatarImages = NSCache<NSString, UIImage>()
@@ -396,6 +419,10 @@ final class AppModel {
     func updateSettings(_ choice: AgentChoice) async throws {
         guard let client, let id = openThreadId else { return }
         try await run { try await client.updateSettings(id, to: choice) }
+    }
+
+    func pullRequest(of threadId: String) async -> PullRequest? {
+        (try? await client?.pullRequest(threadId)) ?? nil
     }
 
     func branch(of threadId: String) async -> GitInfo? {

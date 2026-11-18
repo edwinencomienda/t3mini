@@ -74,4 +74,30 @@ struct TimelineTests {
         #expect(MessageTime.label("2026-11-17T09:36:00.000Z", now: now, calendar: calendar).hasPrefix("Yesterday"))
         #expect(MessageTime.label("2026-11-16T09:36:00.000Z", now: now, calendar: calendar).contains("/"))
     }
+
+    @Test func diagramsForThePhone() {
+        #expect(DiagramRenderer.phoneFriendly("flowchart LR\n  a --> b") == "flowchart TB\n  a --> b")
+        #expect(DiagramRenderer.phoneFriendly("%% note\ngraph RL;\na-->b") == "%% note\ngraph TB;\na-->b")
+        #expect(DiagramRenderer.phoneFriendly("sequenceDiagram\nA->>B: LR") == "sequenceDiagram\nA->>B: LR")
+        let size = DiagramRenderer.size(of: #"<svg width="100%" viewBox="-8 -8 316.5 120" style="max-width: 316px">"#)
+        #expect(size?.width == 316.5)
+        #expect(size?.height == 120)
+        #expect(DiagramRenderer.size(of: "<svg>") == nil)
+    }
+
+    @Test func decodesDiagramBlocks() throws {
+        let json = #"{"type":"diagram","source":"graph TD; a-->b","title":"Flow"}"#
+        let block = try JSONDecoder().decode(Block.self, from: Data(json.utf8))
+        #expect(block == .diagram(source: "graph TD; a-->b", title: "Flow"))
+    }
+
+    @MainActor
+    @Test(.timeLimit(.minutes(1))) func drawsARealDiagram() async throws {
+        let drawing = try await DiagramRenderer.shared.draw("flowchart LR\n  a[Phone] --> b[Computer]", dark: true)
+        #expect(drawing.svg.hasPrefix("<svg"))
+        #expect(drawing.svg.contains("Computer"))
+        #expect(drawing.height > 100 && drawing.width < 250) // stacked top to bottom (side by side: ~300 × 60)
+        #expect(DiagramRenderer.shared.cached("flowchart LR\n  a[Phone] --> b[Computer]", dark: true) == drawing)
+        await #expect(throws: (any Error).self) { try await DiagramRenderer.shared.draw("flowchart TB\n  a -->", dark: false) }
+    }
 }

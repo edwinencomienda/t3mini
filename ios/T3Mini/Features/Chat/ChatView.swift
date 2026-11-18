@@ -15,6 +15,9 @@ struct ChatView: View {
     @State private var atBottom = true
     @State private var startingThread = false
     @State private var problem: String?
+    /// The screen's width, to size the title pill so it never runs into the buttons.
+    @State private var width: CGFloat = 0
+    @State private var showingDetails = false
     static let turnPage = 20
 
     private var thread: ChatThread? { model.openThread?.id == threadId ? model.openThread : nil }
@@ -43,7 +46,7 @@ struct ChatView: View {
                             .foregroundStyle(.secondary)
                         }
                         ForEach(all.suffix(shownTurns)) { turn in
-                            TurnView(turn: turn)
+                            TurnView(turn: turn).equatable()
                         }
                         if thread.info.status.isRunning {
                             WorkingRow(activity: thread.activities.last { $0.status == "running" } ?? thread.activities.last,
@@ -118,16 +121,24 @@ struct ChatView: View {
                     .animation(.easeOut(duration: 0.15), value: atBottom)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .appScreen()
         .navigationTitle(thread?.info.title ?? summary?.title ?? "Thread")
         .navigationBarTitleDisplayMode(.inline)
+        // Our title pill replaces the bar's own centered title (kept above for the back menu and
+        // VoiceOver); without this the system draws it in the middle and squeezes the pill.
+        .toolbar(removing: .title)
         // No bar behind the header: the back button, title, and actions float as pills over
         // the conversation, which fades out softly under them.
         .toolbarBackground(.hidden, for: .navigationBar)
         .softTopEdge()
         .toolbar {
             // Like a Messages conversation: the project's avatar with the thread's name under it.
-            ToolbarItem(placement: .principal) {
+            // Right after the back button, like Claude's, and only as wide as the space left
+            // between it and the buttons on the right (long titles end in "…").
+            ToolbarItem(placement: .topBarLeading) {
                 let cwd = thread?.info.cwd ?? summary?.cwd ?? ""
+                Button { showingDetails = true } label: {
                 HStack(spacing: 8) {
                     ProjectAvatar(name: model.projectName(for: cwd), project: model.project(at: cwd), size: 30)
                     VStack(alignment: .leading, spacing: 0) {
@@ -144,20 +155,29 @@ struct ChatView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     }
+                    .layoutPriority(1)
+                    // Working: a small spinner in the pill (the buttons on the right stay put).
+                    if running {
+                        ProgressView().controlSize(.mini)
+                    }
                 }
+                // The text itself gets the width limit (the toolbar would otherwise let it take
+                // its full length and spill out of the pill), so long titles end in "…" inside.
+                .modifier(CappedWidth(max: titleWidth - 19))
                 .padding(.leading, 5)
                 .padding(.trailing, 14)
                 .padding(.vertical, 5)
                 // A floating pill of its own, like Claude's, over the conversation.
                 .floatingBackground(in: Capsule())
-                .frame(maxWidth: 260)
+                .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(thread == nil)
+                .accessibilityHint("Shows the thread’s details")
             }
             .hidingSharedBackground()
             // Like Claude's: working spinner, a new thread in this project, and more.
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if running {
-                    ProgressView().controlSize(.small)
-                }
                 Menu {
                     Button { editingSettings = true } label: {
                         Label("Agent settings", systemImage: "slider.horizontal.3")
@@ -189,12 +209,30 @@ struct ChatView: View {
         .task(id: "\(threadId)|\(thread?.info.status.isRunning == true)") {
             if thread?.info.status.isRunning != true { branch = await model.branch(of: threadId) }
         }
+        .sheet(isPresented: $showingDetails) {
+            if let thread {
+                ThreadDetailsSheet(thread: thread, branch: branchName) {
+                    // After the details sheet has gone: one sheet at a time.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        editingSettings = true
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $editingSettings) {
             if let thread { ThreadSettingsSheet(thread: thread) }
         }
     }
 
     private let bottomId = "bottom"
+
+    /// The screen minus the back button (~70 pt with margins) and the ⋯ ✎ group (~115 pt), plus
+    /// the gap iOS wants between them. Leave too little and iOS hides ✎ (it collapses the right
+    /// side to fit), so this errs on the roomy side.
+    private var titleWidth: CGFloat {
+        max(140, min(320, (width > 0 ? width : 390) - 232))
+    }
 
     /// A new thread in this thread's project, with the same agent and settings, opened in place
     /// of this one (back still goes to the list).
@@ -323,5 +361,33 @@ extension ToolbarContent {
         } else {
             self
         }
+    }
+}
+
+/// Exactly min(natural width, `max`), whatever the parent offers: in a toolbar the text would
+/// otherwise spill out of the pill (no offer) or stop short (too small an offer). Long text
+/// truncates at `max`; short content keeps its natural width.
+struct CappedWidth: ViewModifier {
+    let max: CGFloat
+
+    func body(content: Content) -> some View {
+        CappedWidthLayout(max: max) { content }
+    }
+}
+
+private struct CappedWidthLayout: Layout {
+    let max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        // Not the toolbar's offer: it offers leading items less than the real room between the
+        // back button and the buttons on the right, which `max` already accounts for.
+        let natural = child.sizeThatFits(.unspecified).width
+        let width = Swift.min(natural, max)
+        return child.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }

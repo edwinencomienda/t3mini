@@ -36,6 +36,7 @@ struct MessageBubble: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if !message.text.isEmpty {
                         MarkdownText(text: message.text)
+                            .equatable()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(Array((message.blocks ?? []).enumerated()), id: \.offset) { _, block in
@@ -73,7 +74,7 @@ struct ReportCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 14))
+        .background(Color.appSurface, in: .rect(cornerRadius: 14))
     }
 }
 
@@ -115,9 +116,12 @@ struct MessageMeta: View {
 
 /// One turn: your message, the agent's work (folded into "Worked for…" once it's done, live while
 /// it runs), the pictures it showed, and its answer.
-struct TurnView: View {
+struct TurnView: View, Equatable {
     let turn: Turn
     @State private var open = false
+
+    // A live update redraws the thread; a turn that didn't change is skipped.
+    nonisolated static func == (a: TurnView, b: TurnView) -> Bool { a.turn == b.turn }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {

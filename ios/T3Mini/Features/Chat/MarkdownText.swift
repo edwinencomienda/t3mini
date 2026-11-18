@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Enough Markdown for agent replies: paragraphs with inline styling (bold, code, links), headings,
 /// lists, quotes, fenced code blocks, and tables.
-struct MarkdownText: View {
+struct MarkdownText: View, Equatable {
     let text: String
 
     /// Space between lines inside a paragraph, on top of the font's own: reads like the web app.
@@ -10,7 +10,7 @@ struct MarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(MarkdownCache.blocks(text).enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
         }
@@ -49,9 +49,39 @@ struct MarkdownText: View {
         }
     }
 
-    static func inline(_ line: String) -> AttributedString {
+    /// Inline Markdown as styled text, remembered (MarkdownCache), so redraws don't parse again.
+    static func inline(_ line: String) -> AttributedString { MarkdownCache.inline(line) }
+
+    nonisolated static func parseInline(_ line: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: line, options: options)) ?? AttributedString(line)
+    }
+}
+
+/// Parsed Markdown, remembered by its text: a live update redraws the thread, but only a reply
+/// whose text changed (the one streaming in) is parsed again. Finished replies come from here,
+/// also when you come back to a thread.
+@MainActor
+enum MarkdownCache {
+    private final class Blocks { let value: [MarkdownBlock]; init(_ value: [MarkdownBlock]) { self.value = value } }
+    private final class Inline { let value: AttributedString; init(_ value: AttributedString) { self.value = value } }
+    private static let blockCache: NSCache<NSString, Blocks> = { let cache = NSCache<NSString, Blocks>(); cache.countLimit = 600; return cache }()
+    private static let inlineCache: NSCache<NSString, Inline> = { let cache = NSCache<NSString, Inline>(); cache.countLimit = 6000; return cache }()
+
+    static func blocks(_ text: String) -> [MarkdownBlock] {
+        let key = text as NSString
+        if let hit = blockCache.object(forKey: key) { return hit.value }
+        let parsed = MarkdownBlock.parse(text)
+        blockCache.setObject(Blocks(parsed), forKey: key)
+        return parsed
+    }
+
+    static func inline(_ line: String) -> AttributedString {
+        let key = line as NSString
+        if let hit = inlineCache.object(forKey: key) { return hit.value }
+        let parsed = MarkdownText.parseInline(line)
+        inlineCache.setObject(Inline(parsed), forKey: key)
+        return parsed
     }
 }
 
@@ -96,7 +126,7 @@ struct CodeBlock: View {
                     .padding(.top, 4)
             }
         }
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
+        .background(Color.appSurface, in: .rect(cornerRadius: 16))
     }
 }
 

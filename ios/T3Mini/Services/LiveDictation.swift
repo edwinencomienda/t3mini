@@ -20,8 +20,10 @@ final class LiveDictation {
     /// Everything heard so far: the settled words, then the ones still being worked out.
     var text: String { [committed, interim].filter { !$0.isEmpty }.joined(separator: " ") }
 
-    private var committed = ""
-    private var interim = ""
+    /// Words Deepgram has settled on.
+    private(set) var committed = ""
+    /// Words it's still working out (shown muted; they may still change).
+    private(set) var interim = ""
     private var engine: AVAudioEngine?
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?

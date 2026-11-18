@@ -40,6 +40,7 @@ struct ThreadListView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .appScreen()
             }
             .overlay {
                 if model.threads.isEmpty {

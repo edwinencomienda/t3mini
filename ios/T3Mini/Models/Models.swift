@@ -205,6 +205,8 @@ enum Block: Codable, Hashable, Sendable {
     case image(id: String, caption: String?)
     /// A page from show_html: its id, title, and bundled libraries ("chart.js").
     case html(id: String, title: String?, libraries: [String])
+    /// A Mermaid diagram from show_diagram: its source (drawn on the phone) and title.
+    case diagram(source: String, title: String?)
     case status(title: String, status: String, detail: String?, url: String?)
     case delegation(title: String, status: String, step: String?)
     case other(type: String, title: String?)
@@ -223,6 +225,9 @@ enum Block: Codable, Hashable, Sendable {
             guard let id = string(.id) ?? nil else { self = .other(type: type, title: nil); return }
             self = .html(id: id, title: string(.title) ?? nil,
                          libraries: (try? c.decodeIfPresent([String].self, forKey: .libraries)) ?? [])
+        case "diagram":
+            guard let source = string(.source) ?? nil, !source.isEmpty else { self = .other(type: type, title: nil); return }
+            self = .diagram(source: source, title: string(.title) ?? nil)
         case "status":
             self = .status(title: (string(.title) ?? nil) ?? "Status", status: (string(.status) ?? nil) ?? "running",
                            detail: string(.detail) ?? nil, url: string(.url) ?? nil)
@@ -246,6 +251,10 @@ enum Block: Codable, Hashable, Sendable {
             try c.encode(id, forKey: .id)
             try c.encodeIfPresent(title, forKey: .title)
             try c.encode(libraries, forKey: .libraries)
+        case .diagram(let source, let title):
+            try c.encode("diagram", forKey: .type)
+            try c.encode(source, forKey: .source)
+            try c.encodeIfPresent(title, forKey: .title)
         case .status(let title, let status, let detail, let url):
             try c.encode("status", forKey: .type)
             try c.encode(title, forKey: .title)
@@ -338,6 +347,12 @@ struct AgentChoice: Hashable, Sendable {
         }
         return next
     }
+}
+
+/// The open pull request for the thread's branch, if any (GET /api/threads/:id/pull-request).
+struct PullRequest: Codable, Hashable, Sendable {
+    var number: Int
+    var url: String
 }
 
 /// The thread's branch (GET /api/threads/:id/git).

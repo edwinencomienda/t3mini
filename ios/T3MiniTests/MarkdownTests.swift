@@ -74,7 +74,7 @@ struct MarkdownTests {
         #expect(blocks == [
             .image(id: "abc.png", caption: "Login page"),
             .status(title: "Pushed", status: "done", detail: nil, url: nil),
-            .other(type: "diagram", title: "Flow"),
+            .diagram(source: "flowchart LR", title: "Flow"),
             .html(id: "p.html", title: "Chart", libraries: ["chart.js"]),
             .other(type: "future-thing", title: nil),
         ])

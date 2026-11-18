@@ -54,7 +54,7 @@ struct HtmlPageCard: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground).opacity(0.6), in: .rect(cornerRadius: 16))
+        .background(Color.appSurface.opacity(0.6), in: .rect(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(.separator).opacity(0.5), lineWidth: 0.5))
         .task(id: colorScheme) {
             do {

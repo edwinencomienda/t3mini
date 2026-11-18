@@ -184,6 +184,12 @@ final class APIClient: Sendable {
         ])
     }
 
+    func pullRequest(_ id: String) async throws -> PullRequest? {
+        struct Result: Decodable { let pullRequest: PullRequest? }
+        let result: Result = try await call("threads/\(id.urlPathEscaped)/pull-request")
+        return result.pullRequest
+    }
+
     func git(_ id: String) async throws -> GitInfo {
         try await call("threads/\(id.urlPathEscaped)/git")
     }
