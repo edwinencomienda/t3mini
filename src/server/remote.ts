@@ -162,6 +162,18 @@ const pageHeaders = {
   'Cache-Control': 'no-store',
   'Referrer-Policy': 'same-origin',
 }
+// The home-screen web app's own files: the browser fetches them by itself, without the session
+// (a web app manifest and its icons are requested without cookies, and a phone's home-screen app
+// may not have been paired yet). Static, nothing private: forwarded without a session, GET only,
+// these exact paths only.
+export const publicAppFiles = new Set([
+  '/manifest.webmanifest',
+  '/sw.js',
+  '/apple-touch-icon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/favicon.svg',
+])
 // Pairing codes are token(18): 24 base64url characters.
 const pairingCodeFormat = /^[\w-]{16,64}$/
 const expiredPage = () =>
@@ -177,6 +189,15 @@ const connectPage = (code: string) =>
     'This device will be able to use t3 mini, and run agents on the computer that runs it, for 30 days. Only continue on your own device.',
     `<form method="post" action="/pair"><input type="hidden" name="code" value="${code}"><button type="submit" style="font:inherit;font-weight:600;padding:0.65rem 1.4rem;border:0;border-radius:0.6rem;background:#4f46e5;color:#fff;cursor:pointer">Connect this device</button></form>`,
   )
+// The "Not connected" page's box: paste the pairing link (or just its code). It posts to /pair
+// like the Connect button, so a home-screen web app, which can't open links itself, can pair.
+const pasteForm = `<form method="post" action="/pair" style="display:flex;gap:.5rem;margin-top:1.5rem"><input name="code" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the pairing link" style="flex:1;min-width:0;font:inherit;padding:.6rem .75rem;border:1px solid #d4d4d8;border-radius:.6rem"><button type="submit" style="font:inherit;font-weight:600;padding:.6rem 1rem;border:0;border-radius:.6rem;background:#4f46e5;color:#fff">Connect</button></form>`
+// What was pasted: a pairing link (its code= value) or the code itself.
+export function pairingCode(value: string) {
+  const trimmed = value.trim()
+  const match = /[?&]code=([\w-]+)/.exec(trimmed)
+  return match ? match[1]! : trimmed
+}
 // A small form body (the pairing code), refused past a limit.
 function readForm(request: http.IncomingMessage, limit = 2048) {
   return new Promise<URLSearchParams | null>((resolve) => {
@@ -570,7 +591,10 @@ export class RemoteAccess {
         response.writeHead(413).end()
         return
       }
-      const result = await this.redeem(form.get('code') ?? '', request.headers['user-agent'])
+      const result = await this.redeem(
+        pairingCode(form.get('code') ?? ''),
+        request.headers['user-agent'],
+      )
       if (!result) {
         response.writeHead(401, pageHeaders).end(expiredPage())
         return
@@ -584,6 +608,14 @@ export class RemoteAccess {
         .end()
       return
     }
+    if (
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      publicAppFiles.has(url.pathname) &&
+      !url.search
+    ) {
+      this.forward(request, response)
+      return
+    }
     const device = this.authenticate(request.headers.cookie)
     if (!device) {
       response
@@ -591,7 +623,8 @@ export class RemoteAccess {
         .end(
           page(
             'Not connected',
-            'On the computer running t3 mini, open Settings → Devices, then scan the QR code with this device or open the copied link here.',
+            'On the computer running t3 mini, open Settings → Devices, then scan the QR code with this device or open the copied link here. In an app on your home screen, paste the link below.',
+            pasteForm,
           ),
         )
       return
@@ -615,6 +648,38 @@ export class RemoteAccess {
       response.end('t3 mini is not reachable.')
     })
     request.pipe(upstream)
+  }
+
+  // A public app file (publicAppFiles) to the app, without a session or device: the headers are
+  // rewritten the same way, with no cookies at all.
+  private forward(request: http.IncomingMessage, response: http.ServerResponse) {
+    const headers: http.OutgoingHttpHeaders = {
+      host: `127.0.0.1:${this.upstreamPort}`,
+      accept: request.headers.accept ?? '*/*',
+      [remoteHeader]: '1',
+    }
+    if (request.headers['service-worker'])
+      headers['service-worker'] = request.headers['service-worker']
+    const upstream = http.request(
+      {
+        host: '127.0.0.1',
+        port: this.upstreamPort,
+        method: request.method,
+        path: request.url,
+        headers,
+      },
+      (reply) => {
+        const out = { ...reply.headers }
+        delete out['set-cookie']
+        response.writeHead(reply.statusCode ?? 502, out)
+        reply.pipe(response)
+      },
+    )
+    upstream.on('error', () => {
+      if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain' })
+      response.end('t3 mini is not reachable.')
+    })
+    upstream.end()
   }
 
   // WebSockets (the dev server's live reload) go through the same checks, then are piped.

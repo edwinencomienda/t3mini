@@ -18,6 +18,8 @@ import {
 } from '../html-page'
 import QRCode from 'qrcode'
 import { getRemoteAccess, remoteHeader } from './remote'
+import { getPush } from './push'
+import { defaultStorePath } from './store'
 import { getMachines, isMachineError } from './machines'
 import { tailscaleStatus } from './tailscale'
 import { providerAccount } from './accounts'
@@ -40,6 +42,13 @@ import { appUpdate, latestAppUpdate, onAppUpdate, restartApp, restartWhenIdle } 
 registerDictationStream()
 
 // This application launches local agents. Keep every endpoint loopback-only and same-origin.
+// The push notifications store, next to the other data (getPush keeps one per process).
+function pushFor() {
+  const data = dirname(defaultStorePath())
+  return getPush(join(data, 'push.json'), async (id) =>
+    (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
+  )
+}
 export function checkRequest(request: Request) {
   const url = new URL(request.url)
   if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -364,7 +373,62 @@ export async function handleApi(request: Request) {
       if (parts[1] === 'devices' && request.method === 'DELETE') {
         const { id } = z.object({ id: z.string().optional() }).parse(await request.json())
         await access.revoke(id)
+        // Its push notifications stop too (all paired devices' when revoking all).
+        await pushFor().removeDevice(id)
         return Response.json(await status())
+      }
+    }
+    // Push notifications (push.ts): the server's public key for subscribing, subscribe and
+    // unsubscribe this browser, and a test message. A paired device's subscription belongs to it
+    // (the gateway's x-t3-device, trusted only on gateway requests), so revoking it stops them.
+    if (parts[0] === 'push') {
+      const push = pushFor()
+      if (!parts[1] && request.method === 'GET') {
+        const endpoint = url.searchParams.get('endpoint')
+        return Response.json({
+          publicKey: await push.publicKey(),
+          subscribed: endpoint ? await push.subscribed(endpoint) : false,
+        })
+      }
+      if (!parts[1] && request.method === 'POST') {
+        const deviceId = remote ? request.headers.get('x-t3-device') || undefined : undefined
+        try {
+          await push.subscribe(await request.json(), deviceId)
+        } catch (error) {
+          if (error instanceof z.ZodError) throw error
+          throw new HttpError(400, 'This browser’s push service isn’t supported.')
+        }
+        return Response.json({ ok: true })
+      }
+      if (!parts[1] && request.method === 'DELETE') {
+        const { endpoint } = z
+          .object({ endpoint: z.string().max(2048) })
+          .parse(await request.json())
+        await push.unsubscribe(endpoint)
+        return Response.json({ ok: true })
+      }
+      if (parts[1] === 'test' && !parts[2] && request.method === 'POST') {
+        const { endpoint } = z
+          .object({ endpoint: z.string().max(2048) })
+          .parse(await request.json())
+        try {
+          if (
+            !(await push.sendTest(endpoint, {
+              title: 't3 mini',
+              body: 'Notifications work. You’ll get one when a thread finishes or needs you.',
+              url: '/',
+              tag: 'test',
+            }))
+          )
+            throw new HttpError(
+              404,
+              'This browser isn’t subscribed. Turn notifications off and on again.',
+            )
+        } catch (error) {
+          if (isHttpError(error)) throw error
+          throw new HttpError(502, 'The push service didn’t accept the message. Try again.')
+        }
+        return Response.json({ ok: true })
       }
     }
     // Provider CLI updates change software on the Mac, so they're never offered to a phone.

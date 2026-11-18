@@ -1,6 +1,6 @@
 import { mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -90,6 +90,8 @@ import {
 import { defaultPermission } from '../agent-settings'
 import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
 import { replaceHtmlBlock } from './html-pages'
+import { getPush, watchThreads } from './push'
+import { getRemoteAccess } from './remote'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
@@ -2338,6 +2340,24 @@ export function getService() {
     await service.browserStats.load()
     // Load the agents' model lists now, so creating the first thread doesn't wait for them.
     warmModels()
+    // Push notifications (push.ts): watch for finished, failed, and waiting threads from the start,
+    // so they're sent even when no window is open.
+    const data = dirname(store.path)
+    const push = getPush(join(data, 'push.json'), async (id) =>
+      (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
+    )
+    watchThreads(
+      {
+        subscribe: (listener) => service.subscribe(listener),
+        list: () => service.list(),
+        isWatching: (id) => service.tabs.isWatching(id),
+        projectName: (cwd) => {
+          const project = service.projects().find((item) => item.path === cwd)
+          return project?.name || basename(cwd)
+        },
+      },
+      push,
+    )
     return service
   })())
 }

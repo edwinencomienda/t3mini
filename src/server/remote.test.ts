@@ -187,6 +187,39 @@ it('pairs the iOS app the way it pairs: a form post with no Origin, then the coo
     expect.objectContaining({ name: 'iPhone · t3 mini app' }),
   ])
 })
+it('serves the home-screen app’s own files without a session, and nothing else', async () => {
+  await access.enable(upstreamPort)
+  for (const path of [
+    '/manifest.webmanifest',
+    '/sw.js',
+    '/icon-192.png',
+    '/apple-touch-icon.png',
+  ]) {
+    const response = await request(path, { cookie: 'other=1' })
+    expect(response, path).toMatchObject({ status: 200, body: 'ok from app' })
+    // No cookies go to the app, and it's still marked remote.
+    expect(seen.cookie).toBeUndefined()
+    expect(seen['x-t3-remote']).toBe('1')
+    expect(seen['x-t3-device']).toBeUndefined()
+  }
+  // Only those exact paths, only GET, no query, and still only on this gateway's address.
+  expect((await request('/sw.js?x=1')).status).toBe(401)
+  expect((await request('/api/bootstrap')).status).toBe(401)
+  expect((await request('/sw.js/../api/bootstrap')).status).toBe(401)
+  expect((await request('/sw.js', {}, { method: 'POST', body: 'x' })).status).toBe(401)
+  expect((await request('/sw.js', { host: `localhost:${port}` })).status).toBe(403)
+})
+it('pairs from the Not connected page by pasting the whole link (home-screen apps)', async () => {
+  await access.enable(upstreamPort)
+  const notConnected = await request('/')
+  expect(notConnected.status).toBe(401)
+  expect(notConnected.body).toContain('action="/pair"')
+  const { urls } = access.createPairing()
+  const response = await connect(urls[0]!)
+  expect(response.status).toBe(303)
+  const cookie = String(response.headers['set-cookie']?.[0] ?? '').split(';')[0]!
+  expect((await request('/api/bootstrap', { cookie })).status).toBe(200)
+})
 it('expires pairing codes after five minutes', async () => {
   await access.enable(upstreamPort)
   vi.useFakeTimers({ toFake: ['Date'] })

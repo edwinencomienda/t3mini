@@ -58,6 +58,7 @@ import {
 } from 'lucide-react'
 import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { listenForPushOpens } from '../push'
 import {
   AgentSettingsControls,
   Picker,
@@ -2186,6 +2187,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     void navigate({ to: '/threads/$threadId', params: { threadId: id } })
   }
   openThread.current = select
+  // A tapped push notification (public/sw.js) opens its thread here, whether this window was
+  // open, in the background, or just started by the tap.
+  useEffect(() => listenForPushOpens((id) => openThread.current(id)), [])
   // After you send a message or start a thread, that thread moves to the top of the sidebar
   // (it's sorted by your latest message). Bring it into view there even if the list was
   // scrolled down. The reorder can arrive a moment later from the server, so it's watched

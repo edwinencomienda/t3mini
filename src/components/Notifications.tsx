@@ -35,6 +35,7 @@ import { Modal, ModalTitle } from './Modal'
 import { Segmented, Toggle } from './ui'
 import { Tabs } from '@base-ui/react/tabs'
 import { DictationSettings } from './DictationSettings'
+import { PushSetting } from './PushSetting'
 import {
   desktopPermission,
   eventLabel,
@@ -407,6 +408,7 @@ export function SettingsDialog({
             {tab === 'notifications' ? (
               <section className="settings-section">
                 <h3>Notifications</h3>
+                <PushSetting />
                 <div className="setting-row">
                   <div>
                     <strong>Desktop notifications</strong>

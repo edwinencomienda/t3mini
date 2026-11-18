@@ -108,7 +108,7 @@ Anyone who reaches the app can make agents run commands on the Mac (threads defa
 - **Phones load the app from an insecure context.** `http://10.10.16.103:4311` is not `localhost`, so browsers disable secure-context APIs there. This silently broke image attachments once:
   - `crypto.randomUUID()` doesn't exist. Use `randomId()` from `src/attachments.ts`. (`crypto.getRandomValues()` is fine.)
   - `navigator.clipboard` is missing. Use `copyText()`.
-  - The Notification API needs HTTPS, and even then phones need a service worker (iOS: a home-screen web app with push), so phones get in-app toasts and sound only. The Settings toggle shows it as unsupported or blocked, depending on the browser.
+  - The Notification API needs HTTPS, and phones need a service worker: on iPhone, only t3 mini added to the home screen gets push (see [Push notifications](#push-notifications)). In a Safari tab, phones get in-app toasts and sound only.
   - Over Tailscale (HTTPS) the page **is** a secure context, so the microphone (dictation) and Clipboard API work there; keep the fallbacks for local-network mode.
   - Before using any new browser API in the client, check MDN for "Secure context: This feature is available only in secure contexts".
 - **Never let a client async handler fail silently.** Attach paths go through `attachFiles()`, which shows errors above the composer. Follow the same pattern for new phone-reachable actions.
@@ -158,6 +158,33 @@ On a real phone: Settings → Devices → on → Connect a device → scan. For 
 | Something works on the Mac but silently not on the phone | A secure-context-only API (see Pitfalls).                                                                                                                                                                                                             |
 | "Could not start phone access on port 4311"              | Another process uses the port. Set `T3_MINI_PHONE_PORT`.                                                                                                                                                                                              |
 | Server code changes not taking effect                    | The dev server keeps one service and one `RemoteAccess` on `globalThis` across hot reloads. Restart `bun run dev` (local-network phone access turns off; Tailscale access reconnects by itself).                                                      |
+
+## Push notifications
+
+Web Push, so a phone is notified when a thread finishes, fails, or needs you, even with t3 mini closed. No Apple account or app: on iPhone it's t3 mini added to the home screen (iOS 16.4+), over Tailscale HTTPS.
+
+```text
+Thread status changes ─► watchThreads (push.ts, started in getService)
+                          same events as the web app (threadEvents), not while you're watching it,
+                          not helpers or stopped turns, checked at most twice a second
+                        ─► PushNotifications.send: per subscription, encrypted for that browser
+                          (web-push, VAPID-signed with this server's key), to its push service only
+                        ─► Apple / Google / Mozilla / Microsoft ─► the phone ─► public/sw.js shows it;
+                          a tap opens /threads/<id>
+```
+
+- **Files:** `src/server/push.ts` (keys, subscriptions, sending, the watcher), `/api/push*` in `api.ts`, `src/push.ts` (subscribe in the browser), `components/PushSetting.tsx` (Settings → Notifications), `public/sw.js`, `public/manifest.webmanifest` and icons, the home-screen tags in `routes/__root.tsx`.
+- **API:** `GET /api/push?endpoint=` (`{ publicKey, subscribed }`), `POST /api/push` (`PushSubscription.toJSON()`), `DELETE /api/push` (`{ endpoint }`), `POST /api/push/test` (`{ endpoint }`, that browser only).
+- **Security:**
+  - The server's VAPID key pair is made once and kept in `.data/push.json` (mode 0600) with the subscriptions; the private key never leaves it.
+  - Subscriptions are only accepted for the browsers' push services (`allowedPushHost`: https, port 443, Apple/Google/Mozilla/Microsoft hosts), so a subscription can't make the server call anything else (no SSRF).
+  - Messages are end-to-end encrypted to the browser (RFC 8291): the push service delivers them but can't read the title.
+  - A paired device's subscription carries its device id (the gateway's `x-t3-device`, trusted only on gateway requests). Revoking the device, or its session expiring, stops its pushes and drops the subscription. Gone subscriptions (404/410) are dropped.
+  - The service worker caches nothing and only opens paths inside t3 mini.
+- **Gateway:** the home-screen app's own files (`publicAppFiles` in `remote.ts`: the manifest, `sw.js`, icons) are forwarded without a session, GET only, those exact paths with no query, with no cookies, and still only on the gateway's address. Browsers fetch them without cookies, and a home-screen app may not be paired yet. They're static and contain nothing private.
+- **Pairing a home-screen app:** it may keep its own cookies apart from Safari, and it has no address bar to open a pairing link. The **Not connected** page has a box to paste the link (or code); it posts to `/pair` like the Connect button (`pairingCode()` takes the code out of a pasted link).
+- **Testing:** `src/server/push.test.ts` (allowed hosts, 0600 file, sending with a stand-in, dropping revoked and gone subscriptions, the watcher's events); `remote.test.ts` (public files without a session and nothing else, pairing by pasting the link). On a phone: Settings → Notifications → on → Send a test.
+- **Subject:** VAPID needs a contact (`mailto:`/`https:`); set `T3_MINI_PUSH_SUBJECT` to use your own instead of the placeholder.
 
 ## Previews of dev servers (proof of concept)
 

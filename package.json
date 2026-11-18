@@ -29,6 +29,7 @@
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "web-push": "4.0.0",
     "wordlist-english": "1.2.1",
     "ws": "8.21.3",
     "zod": "^4.0.0"
@@ -38,6 +39,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "latest",
     "prettier": "^3.9.10",

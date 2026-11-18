@@ -7,6 +7,11 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 't3 mini' },
+      // Added to a phone's home screen it opens as its own app (needed for push notifications on
+      // iPhone; see src/push.ts).
+      { name: 'apple-mobile-web-app-capable', content: 'yes' },
+      { name: 'apple-mobile-web-app-title', content: 't3 mini' },
+      { name: 'theme-color', content: '#171717' },
     ],
     links: [
       { rel: 'stylesheet', href: styles },
@@ -16,6 +21,8 @@ export const Route = createRootRoute({
         type: 'image/svg+xml',
         href: import.meta.env.DEV ? '/favicon-dev.svg' : '/favicon.svg',
       },
+      { rel: 'manifest', href: '/manifest.webmanifest' },
+      { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
     ],
   }),
   component: () => (
