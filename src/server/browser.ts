@@ -315,6 +315,11 @@ export class BrowserManager {
   private listeners = new Set<() => void>()
   // Whether public websites are allowed right now (Settings → Agents; set by the service).
   allowPublic: () => boolean = () => false
+  // show_html render checks running, and how long the browser stays up after the last one with
+  // no thread sessions (a burst of checks shares one launch; then its ~150 MB is freed).
+  private rendering = 0
+  private idleTimer?: NodeJS.Timeout
+  renderIdleMs = 30_000
   constructor(
     private readonly ports = blockedPorts(),
     private readonly executable: () => string | undefined = findBrowser,
@@ -418,13 +423,29 @@ export class BrowserManager {
     const value = await session.catch(() => undefined)
     if (value?.timer) clearTimeout(value.timer)
     await value?.context.close().catch(() => {})
-    if (!this.sessions.size) await this.shutdown()
+    // Not while a render check uses it; that one shuts it down when it's done.
+    if (!this.sessions.size && !this.rendering) await this.shutdown()
   }
   // The render check for show_html: the page (built by pageDocument(), with our CSP) loaded in a
   // throwaway context of its own (never a thread's session: no cookies, tabs, or history), with
   // every request refused and the network off, at the chat's width. Returns a screenshot, the
   // errors it logged, its height, and how far it overflows a phone-width screen.
   async renderPage(html: string, width = 736): Promise<RenderedPage> {
+    this.rendering++
+    clearTimeout(this.idleTimer)
+    try {
+      return await this.render(html, width)
+    } finally {
+      this.rendering--
+      if (!this.rendering && !this.sessions.size) {
+        this.idleTimer = setTimeout(() => {
+          if (!this.rendering && !this.sessions.size) void this.shutdown()
+        }, this.renderIdleMs)
+        this.idleTimer.unref?.()
+      }
+    }
+  }
+  private async render(html: string, width: number): Promise<RenderedPage> {
     const browser = await this.launch()
     const context = await browser.newContext({
       // Short, so the page's height is its content's, not the window's.
@@ -491,6 +512,7 @@ export class BrowserManager {
     if (this.info.delete(threadId)) this.changed()
   }
   private async shutdown() {
+    clearTimeout(this.idleTimer)
     const browser = this.browser
     this.browser = undefined
     await (await browser?.catch(() => undefined))?.close().catch(() => {})

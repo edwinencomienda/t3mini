@@ -338,7 +338,8 @@ final class APIClient: Sendable {
     /// Live updates (Server-Sent Events). `thread`: the open thread, sent whole then as patches.
     func events(thread: String?) -> AsyncThrowingStream<LiveUpdate, Error> {
         var components = URLComponents(url: connection.server.appending(path: "api/events"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "patch", value: "1")]
+        // append=1: a streaming reply comes as just its new text (servers that don't know it ignore it).
+        components.queryItems = [URLQueryItem(name: "patch", value: "1"), URLQueryItem(name: "append", value: "1")]
             + (thread.map { [URLQueryItem(name: "thread", value: $0)] } ?? [])
         var streamRequest = authorized(URLRequest(url: components.url!))
         streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")

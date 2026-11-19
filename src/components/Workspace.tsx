@@ -153,6 +153,7 @@ import {
 } from '../timeline'
 import { reuseItems, reuseThread } from '../reuse'
 import { RecentMap } from '../recent-map'
+import { markdownChunks } from '../markdown-chunks'
 import { quote, SelectionActions } from './SelectionActions'
 import { applyThreadPatch, type ThreadPatch } from '../thread-patch'
 import { ThreadPreviewCard, ThreadPreviewTrigger, threadPreview } from './ThreadPreview'
@@ -325,6 +326,11 @@ function parseMarkdown(text: string) {
 }
 const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
   return parseMarkdown(text)
+})
+// A reply still streaming, in pieces that parse alone (markdown-chunks.ts): finished pieces come
+// from the cache, so each update parses only the last one. Finished replies are parsed whole.
+const StreamingMarkdown = memo(function StreamingMarkdown({ text }: { text: string }) {
+  return markdownChunks(text).map((chunk, index) => <MessageMarkdown key={index} text={chunk} />)
 })
 // One message. Live updates parse a fresh copy of the thread every time, so rows compare by
 // content rather than identity; unchanged messages skip rendering entirely.
@@ -560,6 +566,7 @@ const MessageView = memo(
     leading,
     editable = false,
     actions,
+    streaming = false,
   }: {
     message: Message
     meta?: boolean
@@ -567,6 +574,8 @@ const MessageView = memo(
     leading?: Block[]
     editable?: boolean
     actions?: { current: MessageActions | null }
+    // Its turn is still running, so its text may still grow.
+    streaming?: boolean
   }) {
     // Where this thread's uploads live: here, or on its machine (the hub).
     const base = useApiBase()
@@ -628,7 +637,11 @@ const MessageView = memo(
             {leading?.length ? <Blocks blocks={leading} /> : null}
             {message.text ? (
               <div className="markdown">
-                <MessageMarkdown text={message.text} />
+                {streaming ? (
+                  <StreamingMarkdown text={message.text} />
+                ) : (
+                  <MessageMarkdown text={message.text} />
+                )}
               </div>
             ) : null}
             {/* Images and other content added by tools during this reply. */}
@@ -683,6 +696,7 @@ const MessageView = memo(
   (before, after) =>
     before.meta === after.meta &&
     before.editable === after.editable &&
+    before.streaming === after.streaming &&
     before.message.id === after.message.id &&
     before.message.text === after.message.text &&
     before.message.queued === after.message.queued &&
@@ -1396,8 +1410,9 @@ export function Workspace({ threadId }: { threadId?: string }) {
     const connect = () => {
       latest = { projects: [] }
       events = new EventSource(
-        // patch=1: the open thread arrives whole once, then only what changed (thread-patch.ts).
-        `/api/events?patch=1${activeId && !remoteActive ? `&thread=${encodeURIComponent(activeId)}` : ''}`,
+        // patch=1: the open thread arrives whole once, then only what changed (thread-patch.ts);
+        // append=1: a streaming reply as just its new text.
+        `/api/events?patch=1&append=1${activeId && !remoteActive ? `&thread=${encodeURIComponent(activeId)}` : ''}`,
       )
       events.onopen = () => {
         attempts = 0
@@ -1455,12 +1470,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
         if (data.threadPatch) {
           // A patch applies to the thread this stream last sent; if that's missing (it can't
           // be, but just in case), start over and get the whole thread again.
-          if (latest.thread?.id !== data.threadPatch.id) {
+          const patched =
+            latest.thread?.id === data.threadPatch.id
+              ? applyThreadPatch(latest.thread, data.threadPatch)
+              : null
+          if (!patched) {
             events?.close()
             connect()
             return
           }
-          data.thread = applyThreadPatch(latest.thread, data.threadPatch)
+          data.thread = patched
         }
         if (data.thread !== undefined) latest.thread = data.thread
         if (
@@ -3884,12 +3903,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
                             <MessageView
                               key={reply.id}
                               message={reply}
+                              streaming={!turn.done}
                               {...(index === 0 ? { leading: turn.blocks } : {})}
                             />
                           ))}
                           {turn.answer ? (
                             <MessageView
                               message={turn.answer}
+                              streaming={!turn.done}
                               {...(turn.replies.length ? {} : { leading: turn.blocks })}
                             />
                           ) : null}

@@ -1,20 +1,21 @@
 // Benchmark: what live updates cost the server while a reply streams.
 //
-//   bun bench/live-updates.ts [tabs] [updates] [patch|full]
+//   bun bench/live-updates.ts [tabs] [updates] [append|patch|full]
 //
 // Builds a synthetic data folder (no real data): 150 threads, one of them long (400 messages,
 // about 300 KB), opens `tabs` live-update streams (/api/events) on the long thread through the
 // real route, then streams a reply into it: `updates` notifications, like ten a second for a
 // minute by default. Reports server CPU per update, bytes sent per update, memory, and what one
-// tab's browser spends on each update (parse, apply the patch, keep unchanged messages). `full`
-// is the old way: the whole open thread on every update.
+// tab's browser spends on each update (parse, apply the patch, keep unchanged messages). `patch`
+// sends a changed message whole, `append` only its new text (what the app asks for), and `full`
+// is the oldest way: the whole open thread on every update.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const tabs = Number(process.argv[2] || 3)
 const updates = Number(process.argv[3] || 600)
-const mode = process.argv[4] === 'full' ? 'full' : 'patch'
+const mode = (['full', 'patch'] as const).find((name) => name === process.argv[4]) ?? 'append'
 
 const directory = await mkdtemp(join(tmpdir(), 't3-mini-bench-'))
 process.env.T3_MINI_DATA_DIR = directory
@@ -67,9 +68,12 @@ for (let tab = 0; tab < tabs; tab++) {
   const abort = new AbortController()
   controllers.push(abort)
   const response = await handleApi(
-    new Request(`${origin}/api/events?thread=thread-0${mode === 'patch' ? '&patch=1' : ''}`, {
-      signal: abort.signal,
-    }),
+    new Request(
+      `${origin}/api/events?thread=thread-0${mode === 'full' ? '' : '&patch=1'}${mode === 'append' ? '&append=1' : ''}`,
+      {
+        signal: abort.signal,
+      },
+    ),
   )
   void (async () => {
     const reader = response.body!.getReader()
@@ -128,7 +132,7 @@ for (const event of events) {
     threadPatch?: import('../src/thread-patch').ThreadPatch
   }
   const next = data.threadPatch
-    ? applyThreadPatch(current!, data.threadPatch)
+    ? (applyThreadPatch(current!, data.threadPatch) ?? current)
     : data.thread !== undefined
       ? data.thread
       : current

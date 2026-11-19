@@ -49,6 +49,25 @@ struct LiveUpdateTests {
         #expect(patch.apply(to: other) == nil)
     }
 
+    @Test func appliesAppendedText() throws {
+        let thread = try #require(try decode("{\"thread\":\(threadJSON)}").thread ?? nil)
+        let grown = try #require(try replyHello(thread))
+        // "Hello!" plus an emoji (2 UTF-16 units, 1 Character): lengths count as JavaScript does.
+        let first = try #require(try decode(#"{"threadPatch":{"id":"t1","messages":{"count":2,"changed":[],"appended":[[1,\#(grown.messages[1].text.utf16.count)," 👋"]]}}}"#).threadPatch)
+        let waved = try #require(first.apply(to: grown))
+        #expect(waved.messages[1].text == grown.messages[1].text + " 👋")
+        let second = try #require(try decode(#"{"threadPatch":{"id":"t1","messages":{"count":2,"changed":[],"appended":[[1,\#(waved.messages[1].text.utf16.count),"!"]]}}}"#).threadPatch)
+        #expect(second.apply(to: waved)?.messages[1].text == waved.messages[1].text + "!")
+        // An append to text of another length can't be applied: the thread is fetched whole.
+        #expect(second.apply(to: grown) == nil)
+        #expect(waved.messages[0] == thread.messages[0])
+    }
+
+    /// The thread after its reply became "Hello!".
+    private func replyHello(_ thread: ChatThread) throws -> ChatThread? {
+        try #require(try decode(#"{"threadPatch":{"id":"t1","messages":{"count":2,"changed":[[1,{"id":"m2","role":"assistant","text":"Hello!","createdAt":"2026-01-01T00:00:01.000Z"}]]}}}"#).threadPatch).apply(to: thread)
+    }
+
     @Test func unknownStatusStillDecodes() throws {
         let update = try decode(#"{"threads":[{"id":"t","title":"x","provider":"claude","cwd":"/","status":"brand-new","updatedAt":"2026"}]}"#)
         #expect(update.threads?.first?.status == .unknown)

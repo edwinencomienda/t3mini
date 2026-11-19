@@ -98,6 +98,10 @@ export class ListPacer {
     return false
   }
 }
+// A file's bytes as a response body without copying them (new Uint8Array(buffer) copies; this
+// is a view of the same memory, typed the way Response accepts).
+const bodyOf = (bytes: Uint8Array) =>
+  new Uint8Array(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength)
 // Live updates send each tab only the parts of the snapshot that changed since its last update
 // (the whole snapshot on connect). While another thread streams, a tab gets its thread list but
 // not its own open thread again, and nothing at all when none of its parts changed. Missing keys
@@ -671,7 +675,7 @@ export async function handleApi(request: Request) {
       if (parts[1] && !parts[2] && request.method === 'GET') {
         try {
           const { bytes, mimeType } = await service.uploads.read(parts[1])
-          return new Response(new Uint8Array(bytes), {
+          return new Response(bodyOf(bytes), {
             headers: {
               'Content-Type': mimeType,
               'Cache-Control': 'private, max-age=31536000, immutable',
@@ -726,7 +730,7 @@ export async function handleApi(request: Request) {
         return Response.json({ error: 'Project not found.' }, { status: 404 })
       const icon = await service.icons.read(path).catch(() => undefined)
       if (!icon) return Response.json({ error: 'No icon.' }, { status: 404 })
-      return new Response(new Uint8Array(icon.data), {
+      return new Response(bodyOf(icon.data), {
         headers: {
           'content-type': icon.mimeType,
           'cache-control': 'private, max-age=300',
@@ -767,7 +771,10 @@ export async function handleApi(request: Request) {
         start(controller) {
           const encode = new TextEncoder()
           const sent = new Map<string, string>()
-          const diff = new ThreadDiff((value) => sharedJson(service, value))
+          const diff = new ThreadDiff(
+            (value) => sharedJson(service, value),
+            url.searchParams.get('append') === '1',
+          )
           const pacer = new ListPacer()
           const push = () => {
             try {
@@ -842,7 +849,7 @@ export async function handleApi(request: Request) {
         service.get(id)
         const image = await service.browsers.preview(id).catch(() => undefined)
         if (!image) return Response.json({ error: 'No browser page is open.' }, { status: 404 })
-        return new Response(new Uint8Array(image), {
+        return new Response(bodyOf(image), {
           headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' },
         })
       }

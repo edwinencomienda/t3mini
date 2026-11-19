@@ -1150,34 +1150,19 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Shimmer: a brighter band sweeps across the muted text while the agent works. */
-  color: transparent;
-  background: linear-gradient(
-      90deg,
-      var(--muted-foreground) 0%,
-      var(--muted-foreground) 35%,
-      var(--foreground) 50%,
-      var(--muted-foreground) 65%,
-      var(--muted-foreground) 100%
-    )
-    0 0 / 250% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  animation: shimmer 2.2s linear infinite;
+  /* Fades softly while the agent works. Opacity runs on the compositor; the old sweeping
+     highlight (background-position on clipped text) repainted the line every frame. */
+  color: var(--muted-foreground);
+  animation: live-fade 1.6s ease-in-out infinite alternate;
 }
-@keyframes shimmer {
-  from {
-    background-position: 100% 0;
-  }
+@keyframes live-fade {
   to {
-    background-position: 0 0;
+    opacity: 0.45;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .live-text {
     animation: none;
-    color: var(--muted-foreground);
-    background: none;
   }
 }
 .live-time {

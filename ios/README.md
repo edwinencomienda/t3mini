@@ -187,10 +187,10 @@ off afterwards.
 | File                         | What it does                                                                                                                            |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `Services/PairingLink.swift` | Checks a pairing link: `https://` any host, `http://` only private addresses (same rule as `machines.ts`), keeps only scheme/host/port. |
-| `Services/APIClient.swift`   | Pairs (form `POST /pair`, reads the session from the 303's `Set-Cookie`), calls `/api/*`, streams `/api/events?patch=1`.                |
+| `Services/APIClient.swift`   | Pairs (form `POST /pair`, reads the session from the 303's `Set-Cookie`), calls `/api/*`, streams `/api/events?patch=1&append=1`.       |
 | `Services/Keychain.swift`    | The connection (address + session cookie), `AfterFirstUnlockThisDeviceOnly`.                                                            |
 | `Services/AppModel.swift`    | App state: threads, projects, the open thread, one live stream that reconnects with backoff.                                            |
-| `Models/LiveUpdate.swift`    | Live-update events: missing keys mean unchanged; open-thread patches (`src/thread-patch.ts`); the SSE parser.                           |
+| `Models/LiveUpdate.swift`    | Live-update events: missing keys mean unchanged; open-thread patches and text appends (`src/thread-patch.ts`); the SSE parser.          |
 | `Features/…`                 | Pairing + QR scanner, thread list, new thread, settings, chat (bubbles, light Markdown, approvals, composer).                           |
 
 Security notes:

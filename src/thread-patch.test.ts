@@ -76,3 +76,43 @@ it('handles messages added and removed, and switching threads', () => {
 it('starts a tab without an open thread with null', () => {
   expect(new ThreadDiff().next(null)).toEqual({ thread: null })
 })
+it('sends a growing reply as just its new text to tabs that ask, and whole otherwise', () => {
+  const diff = new ThreadDiff(JSON.stringify, true)
+  let state = follow(diff, null, thread('a', ['Fix it', 'Look']))
+  // Its first change goes whole (nothing to compare with yet), then only what it grew by.
+  state = follow(diff, state.base, thread('a', ['Fix it', 'Looking']))
+  expect(state.sent).toMatchObject({
+    threadPatch: { messages: { changed: [[1, expect.anything()]] } },
+  })
+  state = follow(diff, state.base, thread('a', ['Fix it', 'Looking into it']))
+  expect(state.sent).toEqual({
+    threadPatch: { id: 'a', messages: { count: 2, changed: [], appended: [[1, 7, ' into it']] } },
+  })
+  expect(state.base).toEqual(thread('a', ['Fix it', 'Looking into it']))
+  // Text that's rewritten (not just longer), or another field changing too: whole.
+  state = follow(diff, state.base, thread('a', ['Fix it', 'Found it']))
+  expect(state.sent).toMatchObject({
+    threadPatch: { messages: { changed: [[1, expect.anything()]] } },
+  })
+  expect(state.sent).not.toHaveProperty('threadPatch.messages.appended')
+  const withBlocks = thread('a', ['Fix it', 'Found it!'])
+  ;(withBlocks.messages[1] as { blocks?: unknown[] }).blocks = [{ type: 'image', id: 'x' }]
+  state = follow(diff, state.base, withBlocks)
+  expect(state.sent).not.toHaveProperty('threadPatch.messages.appended')
+  expect(state.base).toEqual(withBlocks)
+  // A tab that didn't ask never gets appends.
+  const plain = new ThreadDiff()
+  follow(plain, null, thread('a', ['Fix it', 'Look']))
+  plain.next(thread('a', ['Fix it', 'Looking']))
+  expect(plain.next(thread('a', ['Fix it', 'Looking into it']))).not.toHaveProperty(
+    'threadPatch.messages.appended',
+  )
+})
+it('reports an append that doesn’t fit the copy it lands on, so the thread is fetched whole', () => {
+  const base = thread('a', ['Fix it', 'Look'])
+  const patch: ThreadPatch = {
+    id: 'a',
+    messages: { count: 2, changed: [], appended: [[1, 7, '!']] },
+  }
+  expect(applyThreadPatch(base, patch)).toBeNull()
+})

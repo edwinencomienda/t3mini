@@ -572,4 +572,13 @@ describe.skipIf(!hasBrowser)('show_html’s render check sizes', () => {
     )
     expect(tall.height).toBe(900)
   }, 30_000)
+  it('closes the browser once render checks are done and no thread is using it', async () => {
+    const quick = new BrowserManager()
+    quick.renderIdleMs = 50
+    const running = () => (quick as unknown as { browser?: unknown }).browser !== undefined
+    const theme = themeCss(previewTokens.light, false)
+    await quick.renderPage(pageDocument({ html: '<p>hi</p>', theme, inline: true, still: true }))
+    expect(running()).toBe(true)
+    await vi.waitFor(() => expect(running()).toBe(false))
+  }, 30_000)
 })

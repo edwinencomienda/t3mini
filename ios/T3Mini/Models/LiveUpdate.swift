@@ -45,13 +45,43 @@ struct ListPatch<Item: Decodable & Sendable>: Decodable, Sendable {
     }
 }
 
+/// A streaming reply's new text, sent instead of the whole message (we ask with `append=1`):
+/// `[index, length it had, new text]`. The length is in UTF-16 code units, as JavaScript counts.
+struct TextAppend: Decodable, Sendable {
+    var index: Int
+    var from: Int
+    var text: String
+
+    init(from decoder: Decoder) throws {
+        var item = try decoder.unkeyedContainer()
+        index = try item.decode(Int.self)
+        from = try item.decode(Int.self)
+        text = try item.decode(String.self)
+    }
+}
+
 struct ThreadPatch: Decodable, Sendable {
     var id: String
     var rest: ThreadInfo?
     var messages: ListPatch<Message>?
+    /// Messages that only grew, from the same `messages` object.
+    var appended: [TextAppend]?
     var activities: ListPatch<Activity>?
 
-    /// The thread after this patch, or nil when it can't be applied (another thread, or a gap).
+    private enum Keys: String, CodingKey { case id, rest, messages, activities }
+    private struct Appends: Decodable { var appended: [TextAppend]? }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        id = try container.decode(String.self, forKey: .id)
+        rest = try container.decodeIfPresent(ThreadInfo.self, forKey: .rest)
+        messages = try container.decodeIfPresent(ListPatch<Message>.self, forKey: .messages)
+        appended = try container.decodeIfPresent(Appends.self, forKey: .messages)?.appended
+        activities = try container.decodeIfPresent(ListPatch<Activity>.self, forKey: .activities)
+    }
+
+    /// The thread after this patch, or nil when it can't be applied (another thread, a gap, or
+    /// an append to text of another length).
     func apply(to thread: ChatThread) -> ChatThread? {
         guard thread.id == id else { return nil }
         var next = thread
@@ -59,6 +89,11 @@ struct ThreadPatch: Decodable, Sendable {
         if let messages {
             next.messages = messages.apply(to: thread.messages)
             if next.messages.count != messages.count { return nil }
+            for append in appended ?? [] {
+                guard append.index < next.messages.count,
+                      next.messages[append.index].text.utf16.count == append.from else { return nil }
+                next.messages[append.index].text += append.text
+            }
         }
         if let activities {
             next.activities = activities.apply(to: thread.activities)

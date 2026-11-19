@@ -162,8 +162,8 @@ async function cloneFolder(source: string, target: string) {
   if (process.platform !== 'darwin') return false
   if (await lstat(target).catch(() => null)) return false
   await mkdir(dirname(target), { recursive: true })
-  const clonefile = await systemClonefile()
-  if (clonefile) return clonefile(source, target)
+  const cloned = await clonefileInWorker(source, target)
+  if (cloned !== null) return cloned
   try {
     await exec('/bin/cp', ['-c', '-R', '--', source, target], { timeout: 300_000 })
     return true
@@ -173,25 +173,36 @@ async function cloneFolder(source: string, target: string) {
   }
 }
 
-// clonefile(2) through Bun's FFI, or null under Node (the dev server).
-let clonefileCall: Promise<((source: string, target: string) => boolean) | null> | undefined
-function systemClonefile() {
-  clonefileCall ??= (async () => {
-    if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined') return null
+// clonefile(2) through Bun's FFI, on a worker thread: the call is synchronous and takes ~0.6 s
+// for a big node_modules, which would freeze every live update, tab, and phone meanwhile.
+// null when it can't run here (Node, the dev server): the caller falls back to `cp -c`.
+const clonefileWorker = `
+  import { dlopen, ptr } from 'bun:ffi'
+  const { symbols } = dlopen('/usr/lib/libSystem.B.dylib', {
+    clonefile: { args: ['ptr', 'ptr', 'u32'], returns: 'i32' },
+  })
+  const text = (value) => ptr(Buffer.from(value + '\\0'))
+  self.onmessage = ({ data }) =>
+    postMessage(symbols.clonefile(text(data.source), text(data.target), 0) === 0)
+`
+function clonefileInWorker(source: string, target: string): Promise<boolean | null> {
+  if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    let worker: Worker
     try {
-      // Built at runtime so other bundlers don't try to resolve Bun's module.
-      const ffi = await import(/* @vite-ignore */ ['bun', 'ffi'].join(':'))
-      const { symbols } = ffi.dlopen('/usr/lib/libSystem.B.dylib', {
-        clonefile: { args: ['ptr', 'ptr', 'u32'], returns: 'i32' },
-      })
-      const text = (value: string) => ffi.ptr(Buffer.from(`${value}\0`))
-      return (source: string, target: string) =>
-        symbols.clonefile(text(source), text(target), 0) === 0
+      const url = URL.createObjectURL(new Blob([clonefileWorker], { type: 'text/javascript' }))
+      worker = new Worker(url)
     } catch {
-      return null
+      return resolve(null)
     }
-  })()
-  return clonefileCall
+    const done = (result: boolean | null) => {
+      worker.terminate()
+      resolve(result)
+    }
+    worker.onmessage = (event: MessageEvent<boolean>) => done(event.data === true)
+    worker.onerror = () => done(null)
+    worker.postMessage({ source, target })
+  })
 }
 
 // Uncommitted changes in a worktree (edited, staged, or new files), or null when it's gone.
