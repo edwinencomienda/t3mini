@@ -41,6 +41,8 @@ const lanCookie = 't3m_session'
 // and HTTPS sessions never mix.
 const httpsCookie = '__Host-t3m_session'
 export const remoteHeader = 'x-t3-remote'
+// Set by the gateway only: 'https' over Tailscale, 'http' on the local network.
+export const transportHeader = 'x-t3-transport'
 
 export type Device = {
   id: string
@@ -557,6 +559,9 @@ export class RemoteAccess {
     headers[remoteHeader] = '1'
     // Which paired device is asking (previews are opened for that device).
     headers['x-t3-device'] = device.id
+    // Whether the phone's connection is encrypted: Tailscale (HTTPS) or the local network (plain
+    // HTTP). Secrets are only accepted over HTTPS (request_secret).
+    headers[transportHeader] = this.mode === 'tailscale' ? 'https' : 'http'
     return headers
   }
 

@@ -110,6 +110,13 @@ export type ToolContext = {
   // Shows questions on the question card and waits for the answers (question → answer), or
   // null if the user skipped them (ask_user).
   ask: (input: { title: string; questions: Question[] }) => Promise<Record<string, string> | null>
+  // Shows the secret card (a password field) and waits: the file it was saved to, or null if
+  // the user skipped it. The value itself never comes back (request_secret).
+  askSecret: (input: {
+    name: string
+    reason: string
+    file: string
+  }) => Promise<{ file: string; addedToGitignore: boolean } | null>
   // Replaces this thread's to-do checklist (update_checklist); an empty list clears it.
   setTodos: (todos: Todo[]) => void
   // Adds a status card to this turn, or updates the one with the same id (show_status).

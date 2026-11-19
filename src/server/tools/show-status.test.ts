@@ -19,6 +19,7 @@ const context = (showStatusCard: ToolContext['showStatus']): ToolContext => ({
   rename: vi.fn(),
   setTodos: vi.fn(),
   ask: vi.fn(),
+  askSecret: vi.fn(),
   showStatus: showStatusCard,
 })
 const base = { id: 'push', kind: 'push', status: 'running', title: 'Pushing to GitHub' }

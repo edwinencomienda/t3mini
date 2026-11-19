@@ -104,6 +104,7 @@ import { DictationButton, dictationSupported } from './Dictation'
 import { Modal, ModalTitle } from './Modal'
 import { useConfirm } from './ConfirmDialog'
 import { QuestionCard } from './QuestionCard'
+import { SecretCard } from './SecretCard'
 import { CommandPalette } from './CommandPalette'
 import { ProjectSettings } from './ProjectSettings'
 import { Autocomplete } from '@base-ui/react/autocomplete'
@@ -208,7 +209,7 @@ const labels: Record<Status, string> = {
   idle: 'Ready',
   starting: 'Starting',
   working: 'Working',
-  waiting: 'Needs approval',
+  waiting: 'Waiting for you',
   completed: 'Completed',
   interrupted: 'Stopped',
   failed: 'Failed',
@@ -748,7 +749,12 @@ function relativeTime(iso: string, now: number) {
 // The sidebar's right-hand label for a thread: what it waits for; Done or Failed for a turn that
 // ended while you weren't looking (until you open it); else when it last changed.
 function threadTime(item: ThreadSummary, now: number, unread = false) {
-  if (item.status === 'waiting') return item.waitingFor === 'question' ? 'Question' : 'Approval'
+  if (item.status === 'waiting')
+    return item.waitingFor === 'question'
+      ? 'Question'
+      : item.waitingFor === 'secret'
+        ? 'Secret'
+        : 'Approval'
   if (unread && item.status === 'completed') return 'Done'
   if (unread && item.status === 'failed') return 'Failed'
   return relativeTime(item.updatedAt, now)
@@ -3890,7 +3896,17 @@ export function Workspace({ threadId }: { threadId?: string }) {
                         </div>
                       ))}
                       {thread.approvals.map((approval) =>
-                        approval.questions?.length ? (
+                        approval.secret ? (
+                          <SecretCard
+                            key={approval.id}
+                            approval={{ ...approval, secret: approval.secret }}
+                            disabled={busy || !connected}
+                            onSave={(value) => action('secret', { approvalId: approval.id, value })}
+                            onSkip={() =>
+                              action('approve', { approvalId: approval.id, allow: false })
+                            }
+                          />
+                        ) : approval.questions?.length ? (
                           <QuestionCard
                             key={approval.id}
                             approval={{ ...approval, questions: approval.questions }}

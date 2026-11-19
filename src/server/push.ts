@@ -371,9 +371,11 @@ export function pushFor(event: ThreadEvent, project: string): PushPayload {
         ? 'A thread finished.'
         : event.kind === 'failed'
           ? 'A thread failed.'
-          : event.thread.waitingFor === 'question'
-            ? 'A thread has a question for you.'
-            : 'A thread needs your approval.',
+          : event.thread.waitingFor === 'secret'
+            ? 'A thread needs a secret from you.'
+            : event.thread.waitingFor === 'question'
+              ? 'A thread has a question for you.'
+              : 'A thread needs your approval.',
   }
 }
 

@@ -38,6 +38,7 @@ const context = (uploads: Uploads, render: ToolContext['renderHtml'] = async () 
     setTodos: vi.fn(),
     showStatus: vi.fn(),
     ask: vi.fn(),
+    askSecret: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, showHtml, value }

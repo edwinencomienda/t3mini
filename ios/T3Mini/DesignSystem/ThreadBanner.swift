@@ -5,7 +5,7 @@ import SwiftUI
 /// away. It comes from the live updates, so it shows at once and without Apple's push service.
 struct ThreadBanner: Equatable, Identifiable {
     enum Event: Equatable {
-        case done, failed, question, approval
+        case done, failed, question, approval, secret
 
         /// What a status change means, or nil when it isn't worth a banner (stopped, started…).
         init?(was: ThreadStatus, now: ThreadStatus, waitingFor: String?) {
@@ -14,7 +14,8 @@ struct ThreadBanner: Equatable, Identifiable {
             switch now {
             case .completed where wasActive: self = .done
             case .failed where wasActive: self = .failed
-            case .waiting where was.isRunning: self = waitingFor == "question" ? .question : .approval
+            case .waiting where was.isRunning:
+                self = waitingFor == "question" ? .question : waitingFor == "secret" ? .secret : .approval
             default: return nil
             }
         }
@@ -25,6 +26,7 @@ struct ThreadBanner: Equatable, Identifiable {
             case .failed: "Failed"
             case .question: "Has a question"
             case .approval: "Needs your approval"
+            case .secret: "Needs a secret"
             }
         }
 
@@ -34,6 +36,7 @@ struct ThreadBanner: Equatable, Identifiable {
             case .failed: "exclamationmark.triangle.fill"
             case .question: "questionmark.bubble.fill"
             case .approval: "hand.raised.fill"
+            case .secret: "key.fill"
             }
         }
 
@@ -41,7 +44,7 @@ struct ThreadBanner: Equatable, Identifiable {
             switch self {
             case .done: .green
             case .failed: .red
-            case .question, .approval: .orange
+            case .question, .approval, .secret: .orange
             }
         }
     }

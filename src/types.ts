@@ -107,7 +107,14 @@ export type Question = {
   options: QuestionOption[]
 }
 // Something the agent is waiting on: a yes/no permission, or (with `questions`) answers.
-export type Approval = { id: string; title: string; detail: string; questions?: Question[] }
+export type Approval = {
+  id: string
+  title: string
+  detail: string
+  questions?: Question[]
+  // request_secret: which variable, why, and the env file it goes to. Never the value.
+  secret?: { name: string; reason: string; file: string }
+}
 // A task the agent left running in the background (e.g. a subagent), while the turn is open.
 export type BackgroundTask = { id: string; description: string }
 // A thread's own git worktree (see server/worktrees.ts): a second checkout of the project on
@@ -198,7 +205,7 @@ export type ThreadSummary = Pick<
   // streaming agents don't keep reshuffling the list.
   lastMessageAt: string
   // While waiting: on a yes/no approval, or on answers to the agent's question.
-  waitingFor?: 'approval' | 'question'
+  waitingFor?: 'approval' | 'question' | 'secret'
   // A worktree thread: its branch.
   worktreeBranch?: string
   // A helper thread: its lead.

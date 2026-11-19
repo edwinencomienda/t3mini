@@ -7,12 +7,18 @@ struct ApprovalCard: View {
     @State private var picks: [String: Set<String>] = [:]
     @State private var working = false
     @State private var problem: String?
+    /// A secret card's value: only in this field until it's sent, then cleared.
+    @State private var secretValue = ""
+    @State private var secretShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(approval.title, systemImage: approval.questions == nil ? "hand.raised" : "questionmark.bubble")
+            Label(approval.secret.map { "The agent needs \($0.name)" } ?? approval.title,
+                  systemImage: approval.secret != nil ? "key.fill" : approval.questions == nil ? "hand.raised" : "questionmark.bubble")
                 .font(.subheadline.weight(.semibold))
-            if let questions = approval.questions, !questions.isEmpty {
+            if let secret = approval.secret {
+                secretFields(secret)
+            } else if let questions = approval.questions, !questions.isEmpty {
                 ForEach(questions, id: \.question) { question in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(question.question).font(.callout)
@@ -67,6 +73,51 @@ struct ApprovalCard: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    /// request_secret: a password field. The value goes straight to the env file on the computer;
+    /// the agent never sees it, and it isn't kept in the chat or on the phone.
+    @ViewBuilder private func secretFields(_ secret: SecretRequest) -> some View {
+        Text(secret.reason).font(.callout).foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            Group {
+                if secretShown {
+                    TextField("Paste it here", text: $secretValue)
+                } else {
+                    SecureField("Paste it here", text: $secretValue)
+                }
+            }
+            .font(.system(.callout, design: .monospaced))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .textContentType(.password)
+            .privacySensitive()
+            Button { secretShown.toggle() } label: {
+                Image(systemName: secretShown ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel(secretShown ? "Hide" : "Show")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(.systemBackground), in: .rect(cornerRadius: 10))
+        Text("Saved to \(secret.file) on your computer. The agent never sees it, and it isn't kept in this chat.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        HStack {
+            Button("Save") {
+                let value = secretValue
+                Task {
+                    await act { try await model.provideSecret(approval, value: value) }
+                    if problem == nil { secretValue = "" }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(secretValue.isEmpty)
+            Button("Skip") { Task { await decide(false) } }.buttonStyle(.bordered)
+        }
+        .disabled(working)
     }
 
     private func decide(_ allow: Bool) async {

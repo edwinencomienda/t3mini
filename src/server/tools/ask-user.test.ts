@@ -20,6 +20,7 @@ const context = (ask: ToolContext['ask']): ToolContext => ({
   setTodos: vi.fn(),
   showStatus: vi.fn(),
   ask,
+  askSecret: vi.fn(),
 })
 const question = {
   question: 'Which database should we use?',

@@ -88,6 +88,32 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
   )
   expect(await bootstrap.json()).toMatchObject({ remote: true, phoneAccess: false })
 })
+it('takes secrets from a phone only over HTTPS, and never echoes the value', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  process.env.T3_MINI_DATA_DIR ??= await mkdtemp(join(tmpdir(), 't3-mini-api-'))
+  const { handleApi } = await import('./api')
+  const send = (headers: Record<string, string>) =>
+    handleApi(
+      new Request('http://127.0.0.1:4310/api/threads/no-such-thread/secret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ approvalId: 'secret:x', value: 'sk-live-do-not-echo' }),
+      }),
+    )
+  // A phone on the local network (plain HTTP): refused before anything else.
+  const lan = await send({ 'x-t3-remote': '1', 'x-t3-transport': 'http' })
+  expect(lan.status).toBe(403)
+  expect(await lan.text()).toContain('isn’t encrypted')
+  // Over Tailscale (HTTPS), or on the Mac itself: goes on (here to "thread not found").
+  const allowed: Record<string, string>[] = [{ 'x-t3-remote': '1', 'x-t3-transport': 'https' }, {}]
+  for (const headers of allowed) {
+    const response = await send(headers)
+    expect(response.status).toBe(404)
+    expect(await response.text()).not.toContain('sk-live-do-not-echo')
+  }
+})
 it('ends a live-update stream nobody reads instead of queueing updates forever', async () => {
   const { mkdtemp } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')

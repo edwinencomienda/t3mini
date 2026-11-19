@@ -704,6 +704,12 @@ final class AppModel {
         try await run { try await client.approve(id, approvalId: approval.id, allow: allow, answers: answers) }
     }
 
+    /// A secret card's value, straight to the computer (never kept on the phone).
+    func provideSecret(_ approval: Approval, value: String) async throws {
+        guard let client, let id = openThreadId else { return }
+        try await run { try await client.provideSecret(id, approvalId: approval.id, value: value) }
+    }
+
     /// Starts a thread with the agent defaults from the computer (the last ones used there).
     func createThread(provider: Provider, project: ProjectSummary?) async throws -> String? {
         guard let client else { return nil }

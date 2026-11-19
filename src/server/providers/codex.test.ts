@@ -45,6 +45,7 @@ function context(prompt: string): ProviderContext {
       setTodos: vi.fn(),
       showStatus: vi.fn(),
       ask: vi.fn(),
+      askSecret: vi.fn(),
       rename: vi.fn(),
     },
     signal: new AbortController().signal,
@@ -182,6 +183,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'update_checklist',
     'show_status',
     'ask_user',
+    'request_secret',
     'rename_thread',
     'read_thread',
     'start_thread',
@@ -260,6 +262,7 @@ it('answers item/tool/call by running the tool, and reports refusals as failures
       setTodos: vi.fn(),
       showStatus: vi.fn(),
       ask: vi.fn(),
+      askSecret: vi.fn(),
       rename: vi.fn(),
     }
     await runCodex(ctx)
@@ -316,6 +319,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     setTodos: vi.fn(),
     showStatus: vi.fn(),
     ask: vi.fn(),
+    askSecret: vi.fn(),
     rename: vi.fn(),
   }
   await runCodex(ctx)
@@ -342,6 +346,7 @@ it("shows images from Codex's built-in generator, reading files only from its ow
     setTodos: vi.fn(),
     showStatus: vi.fn(),
     ask: vi.fn(),
+    askSecret: vi.fn(),
     rename: vi.fn(),
   }
   await runCodex(outside)

@@ -9,6 +9,7 @@ import { renameThread } from './rename-thread'
 import { updateChecklist } from './update-checklist'
 import { showStatus } from './show-status'
 import { askUser } from './ask-user'
+import { requestSecret } from './request-secret'
 import { readThread } from './read-thread'
 import { threadTools } from './threads'
 import { delegateTools } from './delegate'
@@ -26,6 +27,7 @@ export const tools: ToolDefinition<any>[] = [
   updateChecklist,
   showStatus,
   askUser,
+  requestSecret,
   renameThread,
   readThread,
   ...threadTools,
@@ -66,6 +68,9 @@ export const toolInstructions = [
     'them.',
   '- start_process runs a dev server in the background (instead of Bash, which would block); ' +
     'browser_check and browser_open then open it without a URL.',
+  '- request_secret asks the user for an API key, token, or password on a secure card and ' +
+    'saves it to an env file without you seeing it. Use it whenever you need a credential, ' +
+    'instead of asking for it in chat.',
   '- show_image, show_diagram, show_html, and show_video put an image, a Mermaid diagram, a ' +
     'small interactive page, or a video in the chat for the user; play_audio plays a sound.',
 ].join('\n')

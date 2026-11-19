@@ -523,7 +523,9 @@ struct ThreadStatusLabel: View {
         }
     }
     nonisolated static func label(_ thread: ThreadSummary, now: Date) -> String {
-        if thread.status == .waiting { return thread.waitingFor == "question" ? "Question" : "Approval" }
+        if thread.status == .waiting {
+            return thread.waitingFor == "question" ? "Question" : thread.waitingFor == "secret" ? "Secret" : "Approval"
+        }
         if thread.unread == true && thread.status == .completed { return "Done" }
         if thread.unread == true && thread.status == .failed { return "Failed" }
         return time(thread, now: now)

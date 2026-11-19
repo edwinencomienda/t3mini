@@ -130,4 +130,13 @@ struct ThreadListTests {
         #expect(data != nil)
         #expect((data?.count ?? .max) <= 2500)
     }
+
+    /// A secret card arrives as an approval with the variable's name, reason, and file (never a value).
+    @Test func secretRequestsDecodeAndBanner() throws {
+        let json = #"{"id":"secret:1","title":"A secret for API_KEY","detail":"","secret":{"name":"API_KEY","reason":"For the client.","file":".env.local"}}"#
+        let approval = try JSONDecoder().decode(Approval.self, from: Data(json.utf8))
+        #expect(approval.secret == SecretRequest(name: "API_KEY", reason: "For the client.", file: ".env.local"))
+        #expect(ThreadBanner.Event(was: .working, now: .waiting, waitingFor: "secret") == .secret)
+        #expect(ThreadBanner.Event.secret.label == "Needs a secret")
+    }
 }

@@ -21,6 +21,7 @@ const context = (setTodos: ToolContext['setTodos']): ToolContext => ({
   setTodos,
   showStatus: vi.fn(),
   ask: vi.fn(),
+  askSecret: vi.fn(),
 })
 
 it('replaces the checklist with the whole list', async () => {

@@ -150,6 +150,15 @@ struct Approval: Codable, Identifiable, Hashable, Sendable {
     var title: String
     var detail: String
     var questions: [Question]?
+    /// request_secret: the variable the agent needs, why, and the env file it goes to.
+    var secret: SecretRequest?
+}
+
+/// What a secret card asks for. The value itself is never part of the thread.
+struct SecretRequest: Codable, Hashable, Sendable {
+    var name: String
+    var reason: String
+    var file: String
 }
 
 /// The fields of a thread other than its messages and steps (a patch's `rest`).

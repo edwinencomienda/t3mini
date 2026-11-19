@@ -301,6 +301,15 @@ final class APIClient: Sendable {
             body: Body(approvalId: approvalId, allow: allow, answers: answers))
     }
 
+    /// request_secret: the value goes to the computer's env file (only over HTTPS: the computer
+    /// refuses it on the plain local network). Nothing is returned or kept here.
+    func provideSecret(_ id: String, approvalId: String, value: String) async throws {
+        struct Body: Encodable { let approvalId: String; let value: String }
+        let _: Empty = try await call(
+            "threads/\(id.urlPathEscaped)/secret", method: "POST",
+            body: Body(approvalId: approvalId, value: value))
+    }
+
     func createThread(project: ProjectSummary?, choice: AgentChoice) async throws -> ChatThread {
         try await createThread(provider: choice.provider, project: project, settings: AgentSettings(
             model: choice.model, effort: choice.effort, permissionMode: choice.permissionMode,

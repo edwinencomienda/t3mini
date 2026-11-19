@@ -20,6 +20,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   setTodos: vi.fn(),
   showStatus: vi.fn(),
   ask: vi.fn(),
+  askSecret: vi.fn(),
   rename,
 })
 

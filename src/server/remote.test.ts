@@ -154,12 +154,16 @@ it('pairs with a one-time code and forwards requests marked as remote', async ()
   const forwarded = await request('/api/bootstrap', {
     cookie: `${cookie}; theme=dark`,
     'x-t3-remote': '0',
+    'x-t3-transport': 'https',
     origin: `http://127.0.0.1:${port}`,
   })
   expect(forwarded).toMatchObject({ status: 200, body: 'ok from app' })
   // The phone can't claim to be local, its session cookie stays at the gateway, and the app
   // sees a same-origin local request.
   expect(seen['x-t3-remote']).toBe('1')
+  // On the local network the connection is plain HTTP, whatever the phone claims (secrets are
+  // only accepted over HTTPS).
+  expect(seen['x-t3-transport']).toBe('http')
   expect(seen.host).toBe(`127.0.0.1:${upstreamPort}`)
   expect(seen.origin).toBe(`http://127.0.0.1:${upstreamPort}`)
   expect(seen.cookie).toBe('theme=dark')

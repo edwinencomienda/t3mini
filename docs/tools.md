@@ -71,6 +71,17 @@ src/components/HtmlView.tsx the sandboxed HTML page in the reply (show_html)
 - Only Codex gets it (`providers: ['codex']`): Claude already has AskUserQuestion. `toolsFor(provider)` and `instructionsFor(provider)` in `tools/index.ts` give each agent its own tool list and note; Codex's note tells it to use the card instead of listing options in its reply and ending the turn (without that firmer line, Codex tended to ask in plain text).
 - Codex declares tools when a thread starts, so only Codex threads started after this get it.
 
+## request_secret
+
+Lets an agent ask you for a credential (an API key, token, password, connection string) without ever seeing it. Both agents get it.
+
+- **Input:** `{ name, reason, file? }`: the environment variable name (`STRIPE_SECRET_KEY`; letters, digits, `_`), one sentence you see (what it's for, where to get it), and the env file, relative to the project (default `.env.local`).
+- **The card:** the thread waits (status **Secret**, sidebar label, push "A thread needs a secret from you.", the phone's in-app banner) on a card with a password field, Show, **Save**, and **Skip** (`components/SecretCard.tsx`, Base UI `Field` + `Input`; on iOS in `ApprovalCard.swift`). It's an `Approval` with `secret: { name, reason, file }` and never a value, going through the same pending-answer path as questions (`context.askSecret` in `service.ts`).
+- **Where the value goes:** `POST /api/threads/:id/secret { approvalId, value }` → `AgentService.provideSecret` → `saveSecret()` (`secret-file.ts`), which writes `NAME=value` (quoted when needed) into the env file and nothing else. The value is never returned to the agent (it gets "saved NAME to .env.local", and whether the file was added to `.gitignore`), saved with the thread, sent in live updates or notifications, or logged; error messages never include it (the route answers a malformed body with a fixed message, since zod's could quote it). The card clears its field once saved; the browser and the phone keep nothing.
+- **File rules:** only env files by name (`.env`, `.env.local`, `.env.development.local`, `.dev.vars`…), inside the project after resolving links, never through a symlink, never a file git already tracks (it would be committed). A git project gets the file added to its `.gitignore` when git doesn't already ignore it. Written atomically, owner-only (0600). Values are one line (no line breaks or control characters), up to 16 KB.
+- **Phones:** only over HTTPS (Tailscale phone access). The gateway marks each request with how it came (`x-t3-transport`: `https` over Tailscale, `http` on the local network; a phone can't set it), and the route refuses a secret over plain HTTP, where it would cross the Wi-Fi unencrypted.
+- **Limits:** the agent can still read the file with its own shell tools if it decides to; the tool's description and the instructions tell it not to (load it from the environment instead), and keeping the value out of the conversation means it isn't in the AI provider's logs unless the agent reads it. Codex threads started before this tool existed don't have it.
+
 ## rename_thread
 
 - Input: `{ title }`, trimmed, 1–120 characters. There is no thread id: the tool can only rename the thread the agent is running in (`context.rename`, which calls `AgentService.rename` for that thread, saves, and pushes a live update so the sidebar changes right away).

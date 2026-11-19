@@ -198,6 +198,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     setTodos: vi.fn(),
     showStatus: vi.fn(),
     ask: vi.fn(),
+    askSecret: vi.fn(),
     processes: {} as never,
     threads: {} as never,
     delegates: {} as never,

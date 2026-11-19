@@ -37,7 +37,9 @@ export const eventText: Record<ThreadEvent['kind'], string> = {
 export const eventLabel = (event: ThreadEvent) =>
   event.kind === 'waiting' && event.thread.waitingFor === 'question'
     ? 'Has a question'
-    : eventText[event.kind]
+    : event.kind === 'waiting' && event.thread.waitingFor === 'secret'
+      ? 'Needs a secret'
+      : eventText[event.kind]
 
 // Compares two snapshots of the thread list and reports threads that just finished a turn or
 // started waiting for approval. Threads seen for the first time are never reported, so loading

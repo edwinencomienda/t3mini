@@ -17,7 +17,7 @@ import {
   type PageLibrary,
 } from '../html-page'
 import QRCode from 'qrcode'
-import { getRemoteAccess, remoteHeader } from './remote'
+import { getRemoteAccess, remoteHeader, transportHeader } from './remote'
 import { pushIn } from './push'
 import { readApnsConfig, writeApnsConfig } from './apns'
 import { defaultStorePath } from './store'
@@ -882,6 +882,24 @@ export async function handleApi(request: Request) {
           return Response.json(await service.rename(id, await request.json()))
         if (parts[2] === 'title') return Response.json(await service.regenerateTitle(id))
         if (parts[2] === 'stop') return Response.json(await service.stop(id))
+        // request_secret: the value you typed, straight to the env file (never stored, returned,
+        // or logged). From a phone only over HTTPS (Tailscale): on the local network it would
+        // cross the Wi-Fi unencrypted.
+        if (parts[2] === 'secret') {
+          if (remote && request.headers.get(transportHeader) !== 'https')
+            throw new HttpError(
+              403,
+              'This connection isn’t encrypted, so secrets can’t be sent over it. Use phone access over Tailscale (HTTPS), or enter it on your computer.',
+            )
+          const body = z
+            .object({ approvalId: z.string().max(200), value: z.string().max(16_384) })
+            .safeParse(await request.json().catch(() => null))
+          // A fixed message: zod's could quote the input.
+          if (!body.success) throw new HttpError(400, 'That secret couldn’t be read.')
+          return Response.json(
+            await service.provideSecret(id, body.data.approvalId, body.data.value),
+          )
+        }
         if (parts[2] === 'approve') {
           const data = z
             .object({

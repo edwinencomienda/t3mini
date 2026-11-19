@@ -23,6 +23,7 @@ const context = () => {
     setTodos: vi.fn(),
     showStatus: vi.fn(),
     ask: vi.fn(),
+    askSecret: vi.fn(),
     rename: vi.fn(),
   }
   return { attach, value }

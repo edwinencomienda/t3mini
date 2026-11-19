@@ -91,6 +91,7 @@ import { defaultPermission } from '../agent-settings'
 import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
 import { replaceHtmlBlock } from './html-pages'
 import { pushIn, watchThreads } from './push'
+import { saveSecret } from './secret-file'
 import { activitiesIn, watchActivities } from './live-activities'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
@@ -154,9 +155,11 @@ const summary = (thread: Thread): ThreadSummary => ({
   ...(thread.chat ? { chat: true } : {}),
   ...(thread.status === 'waiting'
     ? {
-        waitingFor: thread.approvals.some((item) => item.questions?.length)
-          ? ('question' as const)
-          : ('approval' as const),
+        waitingFor: thread.approvals.some((item) => item.secret)
+          ? ('secret' as const)
+          : thread.approvals.some((item) => item.questions?.length)
+            ? ('question' as const)
+            : ('approval' as const),
       }
     : {}),
 })
@@ -1303,6 +1306,33 @@ export class AgentService {
         // ask_user: the same question card and answers as Claude's own AskUserQuestion.
         ask: ({ title, questions }) =>
           context.ask!({ id: `ask:${crypto.randomUUID()}`, title, questions }),
+        // request_secret: waits like a question; the value goes from the card straight to the
+        // env file (provideSecret), and only where it went comes back here.
+        askSecret: ({ name, reason, file }) =>
+          new Promise<{ file: string; addedToGitignore: boolean } | null>((resolve, reject) => {
+            if (run.controller.signal.aborted) {
+              reject(new Error('Turn stopped.'))
+              return
+            }
+            const id = `secret:${crypto.randomUUID()}`
+            thread.approvals.push({
+              id,
+              title: `A secret for ${name}`,
+              detail: '',
+              secret: { name, reason, file },
+            })
+            thread.status = 'waiting'
+            run.approvals.set(id, (answer) =>
+              resolve(
+                typeof answer === 'object' && answer.file
+                  ? { file: answer.file, addedToGitignore: answer.addedToGitignore === 'true' }
+                  : null,
+              ),
+            )
+            touch()
+            if (thread.parentId) void this.reportToLead(thread, 'waiting')
+            if (thread.delegateOf) void this.delegationWaiting(thread)
+          }),
         setTodos: (todos) => {
           thread.todos = todos.length ? todos : undefined
           touch()
@@ -1559,6 +1589,30 @@ export class AgentService {
     resolve(allow ? (answers ?? true) : false)
     this.changed()
     return { ok: true }
+  }
+  // request_secret: the value you typed goes into the env file and is dropped right after; the
+  // agent learns only where it was saved. Never stored, returned, or logged.
+  async provideSecret(id: string, approvalId: string, value: string) {
+    const thread = this.get(id),
+      run = this.runs.get(id),
+      resolve = run?.approvals.get(approvalId),
+      secret = thread.approvals.find((item) => item.id === approvalId)?.secret
+    if (!run || !resolve || !secret) throw new HttpError(409, 'This request is no longer pending.')
+    let saved: Awaited<ReturnType<typeof saveSecret>>
+    try {
+      saved = await saveSecret(workdir(thread), secret.file, secret.name, value)
+    } catch (error) {
+      // By name, not instanceof (hot reloads); its messages never include the value.
+      if (error instanceof Error && error.name === 'SecretFileError')
+        throw new HttpError(400, error.message)
+      throw new HttpError(500, 'Couldn’t save the secret.')
+    }
+    run.approvals.delete(approvalId)
+    thread.approvals = thread.approvals.filter((item) => item.id !== approvalId)
+    thread.status = thread.approvals.length ? 'waiting' : 'working'
+    resolve({ file: saved.file, addedToGitignore: String(saved.addedToGitignore) })
+    this.changed()
+    return { ok: true, file: saved.file, addedToGitignore: saved.addedToGitignore }
   }
   // Orchestration tools (tools/threads.ts): what a lead thread may do with its helper threads.
   // Only its own helpers, and a helper can't start helpers of its own.
