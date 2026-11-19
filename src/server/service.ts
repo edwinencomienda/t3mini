@@ -1091,17 +1091,38 @@ export class AgentService {
     thread.todos = undefined
     const controller = new AbortController()
     const approvals = new Map<string, (answer: boolean | Record<string, string>) => void>()
-    const run: Run = { controller, approvals, done: Promise.resolve(), queued: [], messageId }
+    // `done` stays pending while the run is in `runs`: windDown loops on it, and a settled
+    // `done` for a run still there would spin forever without yielding to the event loop.
+    let ended!: () => void
+    const run: Run = {
+      controller,
+      approvals,
+      done: new Promise<void>((resolve) => (ended = resolve)),
+      queued: [],
+      messageId,
+    }
     // Reserve before any I/O; later messages steer this run instead of starting another.
     this.runs.set(id, run)
     try {
       await this.store.save()
     } catch {
       this.runs.delete(id)
+      ended()
       throw new HttpError(500, 'Could not save the message.')
     }
+    // Stopped while its message was saved: stop() already marked it, so the agent never starts.
+    if (controller.signal.aborted) {
+      this.runs.delete(id)
+      ended()
+      this.notify()
+      return
+    }
     this.notify()
-    run.done = this.execute(thread, text, images, run)
+    run.done = this.execute(thread, text, images, run).finally(() => {
+      // execute leaves `runs` in its finally, but not if it throws before its try.
+      if (this.runs.get(id) === run) this.runs.delete(id)
+      ended()
+    })
   }
   private async execute(thread: Thread, prompt: string, images: PromptImage[], run: Run) {
     const touch = () => {

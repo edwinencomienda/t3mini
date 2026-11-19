@@ -1426,6 +1426,52 @@ it('shows a stop at once, and a message sent while the agent exits waits for it'
   await stopping.windDown(created.id)
   await stopping.close()
 })
+it('waits for a turn stopped while its message is still being saved', async () => {
+  // Holds the turn's first save, so the stop lands before the turn has started running.
+  let saving!: () => void
+  const saveStarted = new Promise<void>((resolve) => (saving = resolve))
+  let release!: () => void
+  const held = new Promise<void>((resolve) => (release = resolve))
+  let hold = false
+  class SlowStore extends ThreadStore {
+    override async save() {
+      if (hold) {
+        saving()
+        await held
+      }
+      return super.save()
+    }
+  }
+  const prompts: string[] = []
+  const runner: Runner = async (ctx) => {
+    prompts.push(ctx.prompt)
+  }
+  const slow = new AgentService(new SlowStore(join(directory, 'slow-threads.json')), {
+    claude: runner,
+    codex: runner,
+  })
+  const created = await slow.create({ provider: 'claude', cwd: directory })
+  hold = true
+  const sending = slow.send(created.id, { text: 'Go' })
+  await saveStarted
+  await slow.stop(created.id)
+  // It used to spin on the stopped run forever, starving the event loop (and the save).
+  let wound = false
+  const winding = slow.windDown(created.id).then((run) => {
+    wound = true
+    return run
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  expect(wound).toBe(false)
+  hold = false
+  release()
+  await sending
+  expect(await winding).toBeUndefined()
+  // Stopped before it started: the agent never runs.
+  expect(prompts).toEqual([])
+  expect(slow.get(created.id).status).toBe('interrupted')
+  await slow.close()
+})
 it('reads a thread the user shared, from any project, as reference only', async () => {
   const { mkdir, realpath } = await import('node:fs/promises')
   await mkdir(join(directory, 'api-project'))
