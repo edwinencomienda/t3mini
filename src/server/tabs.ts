@@ -12,8 +12,10 @@ type Record = {
   // The thread open in it, and whether you're looking at it (visible and focused).
   viewing?: string
   watching?: boolean
+  // This browser's push subscription (its endpoint), when it has one.
+  push?: string
 }
-export type TabView = { viewing?: string; watching?: boolean }
+export type TabView = { viewing?: string; watching?: boolean; push?: string }
 const maxTabs = 200
 
 export class TabRegistry {
@@ -30,6 +32,7 @@ export class TabRegistry {
         aliveAt: now,
         ...(view.viewing ? { viewing: view.viewing } : {}),
         watching: Boolean(view.viewing && view.watching),
+        ...(view.push ? { push: view.push } : {}),
       })
     }
     this.prune(now)
@@ -44,6 +47,14 @@ export class TabRegistry {
     for (const tab of this.tabs.values())
       if (tab.watching && tab.viewing === threadId && now - tab.aliveAt < tabStaleMs) return true
     return false
+  }
+  // Push subscriptions of browsers you're using right now (a t3 mini tab there is visible and
+  // focused): they already show the event in the page, so a push to them would be a second one.
+  pushInUse(now = Date.now()) {
+    const endpoints = new Set<string>()
+    for (const tab of this.tabs.values())
+      if (tab.watching && tab.push && now - tab.aliveAt < tabStaleMs) endpoints.add(tab.push)
+    return endpoints
   }
   private prune(now: number) {
     for (const [id, tab] of this.tabs) if (now - tab.aliveAt >= tabStaleMs) this.tabs.delete(id)

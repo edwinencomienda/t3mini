@@ -77,6 +77,7 @@ import {
   loadNotificationPreferences,
   markTabAlive,
   setServerTab,
+  setTabPush,
   setTabView,
   markTabVisited,
   tabHeartbeatMs,
@@ -1330,7 +1331,14 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // This browser gets the server's push notifications: it shows those instead of its own desktop
   // ones, so an event isn't shown twice.
   const pushOn = useRef(false)
-  useEffect(() => watchPushState((on) => (pushOn.current = on)), [])
+  useEffect(
+    () =>
+      watchPushState((endpoint) => {
+        pushOn.current = Boolean(endpoint)
+        setTabPush(endpoint)
+      }),
+    [],
+  )
   notifyRef.current = notify
   const statuses = useRef(new Map<string, Status>())
   const openThread = useRef<(id: string) => void>(() => {})

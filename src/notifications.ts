@@ -175,6 +175,14 @@ export function setTabView(next: { viewing?: string; watching: boolean }) {
   view = next
   report('alive')
 }
+// This browser's push subscription, sent with the reports so the server doesn't push to this
+// browser while you're using t3 mini in it (the page shows the event already).
+let pushEndpoint: string | null = null
+export function setTabPush(endpoint: string | null) {
+  if (endpoint === pushEndpoint) return
+  pushEndpoint = endpoint
+  report('alive')
+}
 export const setServerTab = (id: string | null | undefined) => {
   serverTab = id
 }
@@ -183,7 +191,12 @@ function report(event: 'visit' | 'alive' | 'leave') {
   void fetch('/api/tabs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: tabId, event, ...view }),
+    body: JSON.stringify({
+      id: tabId,
+      event,
+      ...view,
+      ...(pushEndpoint ? { push: pushEndpoint } : {}),
+    }),
     // Still sent while the page is closing.
     keepalive: true,
   })

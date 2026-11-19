@@ -188,3 +188,19 @@ it('words an approval wait like the web app', () => {
     brief: 'A thread needs your approval.',
   })
 })
+it('skips the browsers you’re using t3 mini in right now, and keeps their subscriptions', async () => {
+  const push = store()
+  const mac = 'https://web.push.apple.com/mac'
+  await push.subscribe({ endpoint: mac, keys })
+  await push.subscribe({ endpoint: apple, keys }, 'phone')
+  const payload = {
+    title: 'Fix login',
+    body: 'Done · app',
+    url: '/threads/t1',
+    tag: 't1',
+    brief: 'A thread finished.',
+  }
+  await push.send(payload, new Set([mac]))
+  expect(sent.map((item) => item.endpoint)).toEqual([apple])
+  expect(await push.subscribed(mac)).toBe(true)
+})

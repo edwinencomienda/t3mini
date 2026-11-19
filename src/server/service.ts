@@ -2447,6 +2447,7 @@ export function getService() {
         subscribe: (listener) => service.subscribe(listener),
         list: () => service.list(),
         isWatching: (id) => service.tabs.isWatching(id),
+        pushInUse: () => service.tabs.pushInUse(),
         projectName: (cwd) => {
           const project = service.projects().find((item) => item.path === cwd)
           return project?.name || basename(cwd)

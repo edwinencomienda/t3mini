@@ -274,7 +274,8 @@ export class PushNotifications {
 
   // Sends to every subscription (encrypted for each). Subscriptions the push service says are
   // gone (404, 410) are dropped; ones from devices that no longer exist are skipped and dropped.
-  async send(payload: PushPayload) {
+  // `skip`: browser subscriptions not to send to (you're using t3 mini there right now).
+  async send(payload: PushPayload, skip: ReadonlySet<string> = new Set()) {
     const saved = await this.load()
     const send = this.options.send ?? (sendNotification as unknown as PushSender)
     const gone = new Set<string>()
@@ -284,6 +285,7 @@ export class PushNotifications {
           gone.add(subscription.endpoint)
           return
         }
+        if (skip.has(subscription.endpoint)) return
         try {
           await send(subscription, JSON.stringify(payload), {
             vapidDetails: {
@@ -348,8 +350,8 @@ export class PushNotifications {
     return true
   }
   // Sends in the background, tracked so tests (and shutdown) can wait for it.
-  queue(payload: PushPayload) {
-    const task = this.send(payload).catch(() => {})
+  queue(payload: PushPayload, skip?: ReadonlySet<string>) {
+    const task = this.send(payload, skip).catch(() => {})
     this.sending.add(task)
     void task.finally(() => this.sending.delete(task))
   }
@@ -388,6 +390,8 @@ export function watchThreads(
     list: () => ThreadSummary[]
     isWatching: (threadId: string) => boolean
     projectName: (cwd: string) => string
+    // Browsers you're using t3 mini in right now: no push there (the page shows it already).
+    pushInUse?: () => ReadonlySet<string>
   },
   push: Pick<PushNotifications, 'queue'>,
   delay = 500,
@@ -400,7 +404,7 @@ export function watchThreads(
     for (const event of threadEvents(previous, threads)) {
       if (event.kind === 'interrupted' || event.thread.parentId) continue
       if (service.isWatching(event.thread.id)) continue
-      push.queue(pushFor(event, service.projectName(event.thread.cwd)))
+      push.queue(pushFor(event, service.projectName(event.thread.cwd)), service.pushInUse?.())
     }
     previous = new Map(threads.map((item) => [item.id, item.status]))
   }

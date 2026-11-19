@@ -30,3 +30,17 @@ it('forgets tabs that stopped checking in', () => {
   tabs.report('still-open', 'leave', tabStaleMs + 2)
   expect(tabs.leader(tabStaleMs + 2)).toBeUndefined()
 })
+
+it('knows which browsers’ push subscriptions you’re using t3 mini in right now', () => {
+  const tabs = new TabRegistry()
+  const mac = 'https://web.push.apple.com/mac'
+  // Focused on a thread in a browser that gets push: that browser is in use.
+  tabs.report('mac-tab', 'visit', 1000, { viewing: 't1', watching: true, push: mac })
+  expect([...tabs.pushInUse(1000)]).toEqual([mac])
+  // In the background (not watching): push goes to it again.
+  tabs.report('mac-tab', 'alive', 2000, { viewing: 't1', watching: false, push: mac })
+  expect(tabs.pushInUse(2000).size).toBe(0)
+  // Focused again, then gone quiet past the stale time: not in use.
+  tabs.report('mac-tab', 'alive', 3000, { viewing: 't1', watching: true, push: mac })
+  expect(tabs.pushInUse(3000 + tabStaleMs).size).toBe(0)
+})
