@@ -294,7 +294,7 @@ struct MediaCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if kind == .video, let player {
-                VideoPlayer(player: player)
+                SystemVideoPlayer(player: player)
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .clipShape(.rect(cornerRadius: 12))
             } else {
@@ -360,5 +360,26 @@ struct MediaCard: View {
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
         playing = true
+    }
+}
+
+/// iOS's full player (`AVPlayerViewController`): unlike SwiftUI's `VideoPlayer`, its controls have
+/// the full-screen button (and pinch to expand), plus Picture in Picture.
+struct SystemVideoPlayer: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.entersFullScreenWhenPlaybackBegins = false
+        controller.exitsFullScreenWhenPlaybackEnds = false
+        controller.allowsPictureInPicturePlayback = true
+        controller.videoGravity = .resizeAspect
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== player { controller.player = player }
     }
 }

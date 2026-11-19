@@ -8,7 +8,10 @@ struct ChatView: View {
     @State private var editingSettings = false
     /// How many of the latest turns are drawn; "Show earlier" adds more (like the web app's
     /// firstTurns / OlderTurns).
-    @State private var shownTurns = ChatView.turnPage
+    /// Opening starts with only the latest few (`firstPaint`): iOS lays out the whole screen
+    /// before the slide-in starts, and drawing 20 turns of Markdown there held the slide back.
+    /// The rest are added once it has slid in (`fillIn`), above what's on screen.
+    @State private var shownTurns = ChatView.firstPaint
     /// Near the bottom: new replies are followed, and the jump-to-latest button hides.
     @State private var atBottom = true
     /// Following the bottom: anything that grows below (an image or diagram loading, a reply
@@ -32,6 +35,7 @@ struct ChatView: View {
     @State private var showingDetails = false
     @State private var showingChanges = false
     static let turnPage = 20
+    static let firstPaint = 3
 
     private var thread: ChatThread? { model.openThread?.id == threadId ? model.openThread : nil }
     private var summary: ThreadSummary? { model.threads.first { $0.id == threadId } }
@@ -290,6 +294,11 @@ struct ChatView: View {
             Text(problem ?? "")
         }
         .onAppear { model.open(threadId) }
+        // After the slide-in (about 0.35 s): the rest of the latest turns, kept in place at the end.
+        .task {
+            try? await Task.sleep(for: .milliseconds(450))
+            if shownTurns < Self.turnPage { shownTurns = Self.turnPage }
+        }
         // The branch (GET /api/threads/:id/git): on opening, even while the agent works, and again
         // whenever a turn ends (it may have switched branches). The last one known shows at once.
         .task(id: "\(threadId)|\(thread?.info.status.isRunning == true)") {
@@ -326,7 +335,9 @@ struct ChatView: View {
         position.scrollTo(edge: .bottom)
         guard landing == nil else { return }
         landing = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1))
+            // Normally it's shown as soon as it's at the end (onScrollGeometryChange); this only
+            // catches a thread whose end never measures exactly, without a long blank wait.
+            try? await Task.sleep(for: .milliseconds(300))
             if !landed {
                 position.scrollTo(edge: .bottom)
                 landed = true

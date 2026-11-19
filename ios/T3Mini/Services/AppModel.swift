@@ -79,6 +79,7 @@ final class AppModel {
         listedThreads = threads.filter { $0.parentId == nil && !hiddenForUndo.contains($0.id) }.sorted(by: newest)
         helpersByLead = Dictionary(grouping: threads.filter { $0.parentId != nil }, by: { $0.parentId! })
             .mapValues { $0.sorted(by: newest) }
+        prefetchSoon()
     }
     private(set) var ui: UiSettings?
     private(set) var link: LinkState = .connecting
@@ -337,9 +338,50 @@ final class AppModel {
 
     private func remember(_ thread: ChatThread) {
         opened[thread.id] = thread
+        if let summary = threads.first(where: { $0.id == thread.id }) { openedVersion[thread.id] = Self.version(summary) }
         openedOrder.removeAll { $0 == thread.id }
         openedOrder.append(thread.id)
         while openedOrder.count > 30 { opened[openedOrder.removeFirst()] = nil }
+    }
+
+    /// The list's version of each kept thread when it was kept (its last message or update time),
+    /// to tell when a kept copy is behind.
+    @ObservationIgnored private var openedVersion: [String: String] = [:]
+    @ObservationIgnored private var prefetchTask: Task<Void, Never>?
+    /// How many of the newest threads are fetched ahead.
+    static let prefetchCount = 8
+
+    private static func version(_ summary: ThreadSummary) -> String {
+        summary.lastMessageAt ?? summary.updatedAt
+    }
+
+    /// Tapping a thread in the list shows it at once: the newest few are fetched ahead in the
+    /// background (one at a time, a moment after the list settles) and kept with the threads
+    /// you've opened, so opening one draws it straight away and live updates bring it up to date.
+    /// A kept copy is fetched again once the thread has moved on, unless the agent is still on it
+    /// (that changes every moment; the copy on hand still opens instantly and is updated live).
+    private func prefetchSoon() {
+        guard client != nil, prefetchTask == nil else { return }
+        prefetchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            await self?.prefetch()
+            self?.prefetchTask = nil
+        }
+    }
+
+    private func prefetch() async {
+        for summary in listedThreads.prefix(Self.prefetchCount) {
+            guard !Task.isCancelled, let client else { return }
+            let id = summary.id
+            if id == openThreadId { continue }
+            if let known = openedVersion[id], opened[id] != nil,
+               known == Self.version(summary) || summary.status.isRunning { continue }
+            guard let thread = try? await client.thread(id) else { continue }
+            // Opened meanwhile: the live copy is newer.
+            if id == openThreadId { continue }
+            remember(thread)
+            openedVersion[id] = Self.version(summary)
+        }
     }
 
     // MARK: Push notifications (Services/Notifications.swift)
@@ -453,6 +495,9 @@ final class AppModel {
         openThreadId = nil
         opened = [:]
         openedOrder = []
+        openedVersion = [:]
+        prefetchTask?.cancel()
+        prefetchTask = nil
         pages = [:]
         images.removeAllObjects()
         avatarImages.removeAllObjects()
