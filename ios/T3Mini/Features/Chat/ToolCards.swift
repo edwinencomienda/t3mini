@@ -24,7 +24,9 @@ struct TodoCard: View {
             .foregroundStyle(.secondary)
             ForEach(todos) { todo in
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    icon(todo).frame(width: 16)
+                    // Centered on the first line of text: a hidden letter in the row's font sets
+                    // the line (a spinner has no baseline of its own, so it dropped below it).
+                    Text("X").font(.footnote).hidden().frame(width: 16).overlay { icon(todo) }
                     Text(todo.status == "in_progress" && !ended ? (todo.activeText ?? todo.text) : todo.text)
                         .font(.footnote)
                         .strikethrough(todo.status == "completed", color: .secondary)

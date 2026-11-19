@@ -69,6 +69,10 @@ final class LiveDictation {
 
     /// On this iPhone (iOS 26): Apple's speech analyzer and its feed (`OnDeviceSpeech`).
     private var onDevice: AnyObject?
+    /// The computer without live words (AssemblyAI's Dictation API): the audio so far, sent whole
+    /// on stop through `upload`.
+    private var recording: AudioRecording?
+    private var upload: ((Data) async throws -> String)?
 
     /// Starts listening, on this iPhone or through the computer (`DictationEngine.current`; the
     /// computer needs `request`). Returns why it couldn't, or nil.
@@ -152,6 +156,7 @@ final class LiveDictation {
     func stop() async -> String {
         guard active else { return text }
         if #available(iOS 26, *), let speech = onDevice as? OnDeviceSpeech { return await stopOnDevice(speech) }
+        if let recording { return await stopRecording(recording) }
         stopMicrophone()
         finishing = true
         socket?.send(.string(#"{"type":"stop"}"#)) { @Sendable _ in }
@@ -177,6 +182,12 @@ final class LiveDictation {
     func cancel() {
         guard active else { return }
         stopMicrophone()
+        if let recording {
+            recording.discard()
+            self.recording = nil
+            upload = nil
+            return
+        }
         if #available(iOS 26, *), let speech = onDevice as? OnDeviceSpeech {
             onDevice = nil
             Task { await speech.cancel() }
@@ -488,6 +499,166 @@ private final class OnDeviceSpeech: @unchecked Sendable {
     }
 
     // About ten times a second: -50 dB (quiet) … 0 dB (loud) → 0…1, as for the computer.
+    private func reportLevel(_ buffer: AVAudioPCMBuffer) {
+        guard Date().timeIntervalSince(lastLevel) > 0.1, let channel = buffer.floatChannelData?[0] else { return }
+        lastLevel = Date()
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+        var sum: Float = 0
+        for index in 0..<count { sum += channel[index] * channel[index] }
+        let rms = (sum / Float(count)).squareRoot()
+        onLevel(max(0, min(1, (20 * log10(max(rms, 0.000_01)) + 50) / 50)))
+    }
+}
+
+// MARK: Recorded, then sent whole (AssemblyAI's Dictation API)
+
+extension LiveDictation {
+    /// Records while you talk into a small compressed file (AAC, 16 kHz mono, about 3 KB a
+    /// second, roughly a tenth of raw audio); on stop it's handed to `upload` (straight to
+    /// AssemblyAI, or through the computer), which returns cleaned-up, send-ready text. No words
+    /// show while you talk.
+    func startRecording(upload: @escaping (Data) async throws -> String) async -> String? {
+        guard !active, !preparing else { return nil }
+        guard await AVAudioApplication.requestRecordPermission() else {
+            return "Microphone not available. Allow it in iOS Settings → t3 mini."
+        }
+        let audio = AVAudioSession.sharedInstance()
+        do {
+            try audio.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try audio.setActive(true)
+        } catch {
+            return "Couldn’t start the microphone."
+        }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0,
+              let recording = try? AudioRecording(inputFormat: inputFormat, onLevel: { [weak self] level in
+                  Task { @MainActor in self?.level = level }
+              })
+        else { return "Couldn’t read the microphone." }
+        committed = ""
+        interim = ""
+        problem = nil
+        // The microphone calls this on its own audio thread (@Sendable, as for the other engines).
+        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable buffer, _ in
+            recording.append(buffer)
+        }
+        do {
+            engine.prepare()
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            recording.discard()
+            return "Couldn’t start the microphone."
+        }
+        self.engine = engine
+        self.recording = recording
+        self.upload = upload
+        beginRecording()
+        return nil
+    }
+
+    fileprivate func stopRecording(_ recording: AudioRecording) async -> String {
+        stopMicrophone()
+        finishing = true
+        defer {
+            finishing = false
+            self.recording = nil
+            upload = nil
+        }
+        // Under about a quarter of a second there's nothing to send.
+        guard let file = recording.finish(), recording.seconds > 0.25, let upload else { return text }
+        do {
+            committed = try await upload(file)
+        } catch {
+            problem = error.localizedDescription
+        }
+        return text
+    }
+}
+
+/// The microphone, converted to 16 kHz mono and written to a temporary AAC (.m4a) file as it
+/// comes. `append` runs on the audio thread; the file is read once and deleted on `finish`.
+final class AudioRecording: @unchecked Sendable {
+    private let file: AVAudioFile
+    private let url: URL
+    private let converter: AVAudioConverter
+    private let format: AVAudioFormat
+    private let onLevel: @Sendable (Float) -> Void
+    private let lock = NSLock()
+    private var frames: AVAudioFramePosition = 0
+    private var lastLevel = Date.distantPast
+    private var closed = false
+    /// Five minutes at most (the dictation limit).
+    private static let maxSeconds: Double = 300
+    static let mimeType = "audio/mp4"
+
+    init(inputFormat: AVAudioFormat, onLevel: @escaping @Sendable (Float) -> Void) throws {
+        url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation-\(UUID().uuidString).m4a")
+        file = try AVAudioFile(forWriting: url, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 24_000,
+        ])
+        format = file.processingFormat
+        guard let converter = AVAudioConverter(from: inputFormat, to: format) else {
+            try? FileManager.default.removeItem(at: url)
+            throw CocoaError(.fileWriteUnknown)
+        }
+        self.converter = converter
+        self.onLevel = onLevel
+    }
+
+    var seconds: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return Double(frames) / format.sampleRate
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        reportLevel(buffer)
+        let ratio = format.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+        var supplied = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if supplied {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, out.frameLength > 0 else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, Double(frames) / format.sampleRate < Self.maxSeconds else { return }
+        if (try? file.write(from: out)) != nil { frames += AVAudioFramePosition(out.frameLength) }
+    }
+
+    /// The finished file's bytes (nil if nothing could be read); the file is deleted.
+    func finish() -> Data? {
+        lock.lock()
+        closed = true
+        file.close()
+        lock.unlock()
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try? Data(contentsOf: url)
+    }
+
+    func discard() {
+        lock.lock()
+        closed = true
+        file.close()
+        lock.unlock()
+        try? FileManager.default.removeItem(at: url)
+    }
+
     private func reportLevel(_ buffer: AVAudioPCMBuffer) {
         guard Date().timeIntervalSince(lastLevel) > 0.1, let channel = buffer.floatChannelData?[0] else { return }
         lastLevel = Date()

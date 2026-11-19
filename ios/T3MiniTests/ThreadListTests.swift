@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import UIKit
 import Testing
@@ -138,5 +139,37 @@ struct ThreadListTests {
         #expect(approval.secret == SecretRequest(name: "API_KEY", reason: "For the client.", file: ".env.local"))
         #expect(ThreadBanner.Event(was: .working, now: .waiting, waitingFor: "secret") == .secret)
         #expect(ThreadBanner.Event.secret.label == "Needs a secret")
+    }
+
+    /// Recordings sent straight to AssemblyAI: multipart with the config first, then the audio.
+    @Test func dictationMultipartBody() throws {
+        let body = APIClient.multipart(config: Data(#"{"rewrite_mode":"fast"}"#.utf8), audio: Data([1, 2, 3]),
+                                       mimeType: "audio/mp4", boundary: "B")
+        let text = String(decoding: body, as: UTF8.self)
+        let config = try #require(text.range(of: "name=\"config\""))
+        let audio = try #require(text.range(of: "name=\"audio\"; filename=\"recording.m4a\""))
+        #expect(config.lowerBound < audio.lowerBound)
+        #expect(text.contains("Content-Type: audio/mp4"))
+        #expect(text.contains(#"{"rewrite_mode":"fast"}"#))
+        #expect(text.hasPrefix("--B\r\n") && text.hasSuffix("--B--\r\n"))
+    }
+
+    /// The recording is a small AAC (.m4a) file: an MP4 container, far smaller than raw audio.
+    @Test func recordingWritesAnAACFile() throws {
+        let input = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let recording = try AudioRecording(inputFormat: input, onLevel: { _ in })
+        // Ten seconds.
+        for _ in 0..<100 {
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: input, frameCapacity: 4800))
+            buffer.frameLength = 4800
+            let samples = try #require(buffer.floatChannelData?[0])
+            for index in 0..<4800 { samples[index] = sin(Float(index) * 0.06) * 0.5 }
+            recording.append(buffer)
+        }
+        #expect(recording.seconds > 9.5)
+        let file = try #require(recording.finish())
+        #expect(String(decoding: file[4..<8], as: UTF8.self) == "ftyp")
+        // Raw 16 kHz 16-bit audio would be ~320 KB; AAC at 24 kbps is ~30 KB.
+        #expect(file.count < 80_000, "size \(file.count)")
     }
 }

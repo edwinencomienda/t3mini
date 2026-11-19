@@ -123,8 +123,10 @@ struct SettingsSheet: View {
                         Text("Dictation goes through your computer's Deepgram key. Dictating on the iPhone itself needs iOS 26.")
                     } else if dictationEngine == DictationEngine.computer.rawValue {
                         Text(model.dictationAvailable
-                             ? "Your voice goes to your computer, which turns it into text with its Deepgram key."
-                             : "Your computer has no Deepgram key yet (t3 mini → Settings → Dictation), so the mic is off.")
+                             ? (model.dictationLive
+                                ? "Your voice goes to your computer, which turns it into text with Deepgram as you talk."
+                                : "Your voice goes to your computer when you stop, and AssemblyAI turns it into clean, ready-to-send text.")
+                             : "Your computer has no dictation key yet (t3 mini → Settings → Dictation), so the mic is off.")
                     } else {
                         Text("Apple's speech recognition, right on this iPhone: free, no key, and your voice never leaves the phone. The first time, iOS downloads your language's model.")
                     }

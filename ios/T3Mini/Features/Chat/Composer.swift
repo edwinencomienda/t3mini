@@ -326,7 +326,8 @@ struct Composer: View {
                 Text("Getting dictation ready…").foregroundStyle(.secondary)
             } else if dictation.finishing {
                 ProgressView().controlSize(.small)
-                Text("Finishing…").foregroundStyle(.secondary)
+                Text(model.dictationLive || DictationEngine.current == .iphone ? "Finishing…" : "Transcribing…")
+                    .foregroundStyle(.secondary)
             } else {
                 Circle().fill(.red).frame(width: 8, height: 8)
                     .opacity(0.4 + Double(dictation.level) * 0.6)
@@ -353,7 +354,23 @@ struct Composer: View {
             guard onDevice || request != nil else { return }
             focused = false
             dictationBase = draft
-            if let failure = await dictation.start(request) { problem = failure }
+            // The computer without live words (AssemblyAI): record now, send it whole on stop.
+            if !onDevice && !model.dictationLive {
+                // AssemblyAI: a token is fetched while you talk, so on stop the recording goes
+                // straight there from the phone (much quicker than through the computer). Without
+                // one, or if that fails, it goes through the computer as before.
+                let token = Task { await model.dictationToken() }
+                if let failure = await dictation.startRecording(upload: { audio in
+                    if let token = await token.value,
+                       let text = try? await APIClient.dictate(audio, mimeType: AudioRecording.mimeType, with: token) {
+                        return text
+                    }
+                    return try await model.transcribe(audio, mimeType: AudioRecording.mimeType)
+                }) {
+                    token.cancel()
+                    problem = failure
+                }
+            } else if let failure = await dictation.start(request) { problem = failure }
         }
     }
 

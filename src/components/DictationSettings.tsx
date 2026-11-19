@@ -10,12 +10,12 @@ import {
   saveThreadWords,
   saveMicrophone,
 } from './Dictation'
-import { Toggle } from './ui'
+import { Segmented, Toggle } from './ui'
 import { playCue } from '../sound'
 
 // Which microphone dictation records from. Browsers only reveal device names after the page
 // has had microphone permission once, so until then this offers to ask.
-function MicrophonePicker() {
+function MicrophonePicker({ provider }: { provider: string }) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selected, setSelected] = useState(loadMicrophone)
   const [sounds, setSounds] = useState(loadDictationSounds)
@@ -134,8 +134,8 @@ function MicrophonePicker() {
           <strong>Use words from the thread</strong>
           <small>
             Helps spell names and code terms: up to 40 unusual words from the agent’s last two
-            replies go to Deepgram with your audio. Code blocks, links, and anything that looks like
-            a key are never included.
+            replies go to {provider} with your audio. Code blocks, links, and anything that looks
+            like a key are never included.
           </small>
         </div>
         <Toggle
@@ -152,14 +152,41 @@ function MicrophonePicker() {
   )
 }
 
-type Status = {
+type Provider = 'deepgram' | 'assemblyai'
+type KeyStatus = {
   configured: boolean
   source: 'environment' | 'settings' | null
   hint: string | null
 }
+type Status = KeyStatus & {
+  provider: Provider
+  live: boolean
+  keys: Record<Provider, KeyStatus>
+}
 
-async function call<T>(method: string, body?: unknown): Promise<T> {
-  const response = await fetch('/api/dictation', {
+const services: Record<
+  Provider,
+  { name: string; env: string; site: string; about: string; privacy: string }
+> = {
+  deepgram: {
+    name: 'Deepgram',
+    env: 'DEEPGRAM_API_KEY',
+    site: 'console.deepgram.com',
+    about: 'Words appear as you talk.',
+    privacy: 'Deepgram',
+  },
+  assemblyai: {
+    name: 'AssemblyAI',
+    env: 'ASSEMBLYAI_API_KEY',
+    site: 'assemblyai.com/dashboard',
+    about:
+      'Its Dictation API: when you stop, the recording becomes clean, ready-to-send text (filler words and self-corrections tidied, fast mode). Nothing shows while you talk.',
+    privacy: 'AssemblyAI',
+  },
+}
+
+async function call<T>(method: string, body?: unknown, path = '/api/dictation'): Promise<T> {
+  const response = await fetch(path, {
     method,
     headers: { 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -169,9 +196,14 @@ async function call<T>(method: string, body?: unknown): Promise<T> {
   return data as T
 }
 
-// Settings → Dictation: paste a Deepgram API key. The server checks it with Deepgram and keeps
-// it; this page only ever sees whether one is set and its last four characters.
-export function DictationSettings({ onChange }: { onChange: (configured: boolean) => void }) {
+// Settings → Dictation: which service turns speech into text (Deepgram or AssemblyAI), and its
+// API key. The server checks a key with its service and keeps it; this page only ever sees
+// whether one is set and its last four characters.
+export function DictationSettings({
+  onChange,
+}: {
+  onChange: (configured: boolean, live: boolean) => void
+}) {
   const [status, setStatus] = useState<Status | null>(null)
   const [editing, setEditing] = useState(false)
   const [key, setKey] = useState('')
@@ -188,33 +220,57 @@ export function DictationSettings({ onChange }: { onChange: (configured: boolean
       setStatus(next)
       setEditing(false)
       setKey('')
-      onChange(next.configured)
+      onChange(next.configured, next.live)
     } catch (error) {
       setError((error as Error).message)
     } finally {
       setBusy(false)
     }
   }
+  const provider = status?.provider ?? 'deepgram'
+  const service = services[provider]
+  const keyStatus = status?.keys?.[provider] ?? status
   const save = (event: FormEvent) => {
     event.preventDefault()
-    if (key.trim()) void run(() => call<Status>('POST', { apiKey: key.trim() }))
+    if (key.trim()) void run(() => call<Status>('POST', { provider, apiKey: key.trim() }))
   }
-  const showForm = status && status.source !== 'environment' && (!status.configured || editing)
+  const showForm =
+    keyStatus && keyStatus.source !== 'environment' && (!keyStatus.configured || editing)
   return (
     <section className="settings-section">
       <h3>Dictation</h3>
       <div className="setting-row">
         <div>
-          <strong>Deepgram API key</strong>
+          <strong>Service</strong>
+          <small>{service.about}</small>
+        </div>
+        <Segmented
+          label="Dictation service"
+          value={provider}
+          options={[
+            { value: 'deepgram', label: 'Deepgram' },
+            { value: 'assemblyai', label: 'AssemblyAI' },
+          ]}
+          onChange={(next) => {
+            if (next === provider || busy) return
+            setEditing(false)
+            setKey('')
+            void run(() => call<Status>('POST', { provider: next }, '/api/dictation/provider'))
+          }}
+        />
+      </div>
+      <div className="setting-row">
+        <div>
+          <strong>{service.name} API key</strong>
           <small>
-            {status?.source === 'environment'
-              ? `Set by the DEEPGRAM_API_KEY environment variable (ends in ${status.hint}).`
-              : status?.configured
-                ? `Saved on this Mac (ends in ${status.hint}). The microphone button is on.`
-                : 'Paste a key from console.deepgram.com to turn on the microphone button. It stays on this Mac and is never shown again.'}
+            {keyStatus?.source === 'environment'
+              ? `Set by the ${service.env} environment variable (ends in ${keyStatus.hint}).`
+              : keyStatus?.configured
+                ? `Saved on this Mac (ends in ${keyStatus.hint}). The microphone button is on.`
+                : `Paste a key from ${service.site} to turn on the microphone button. It stays on this Mac and is never shown again.`}
           </small>
         </div>
-        {status?.source === 'settings' && !editing ? (
+        {keyStatus?.source === 'settings' && !editing ? (
           <div className="key-actions">
             <button
               className="secondary"
@@ -228,7 +284,7 @@ export function DictationSettings({ onChange }: { onChange: (configured: boolean
               className="secondary"
               type="button"
               disabled={busy}
-              onClick={() => void run(() => call<Status>('DELETE'))}
+              onClick={() => void run(() => call<Status>('DELETE', { provider }))}
             >
               Remove
             </button>
@@ -241,8 +297,8 @@ export function DictationSettings({ onChange }: { onChange: (configured: boolean
             type="password"
             autoComplete="off"
             spellCheck={false}
-            aria-label="Deepgram API key"
-            placeholder="Deepgram API key"
+            aria-label={`${service.name} API key`}
+            placeholder={`${service.name} API key`}
             value={key}
             onChange={(event) => setKey(event.target.value)}
             disabled={busy}
@@ -266,7 +322,7 @@ export function DictationSettings({ onChange }: { onChange: (configured: boolean
         </form>
       ) : null}
       {error ? <p className="phone-error">{error}</p> : null}
-      {dictationSupported() ? <MicrophonePicker /> : null}
+      {dictationSupported() ? <MicrophonePicker provider={service.privacy} /> : null}
     </section>
   )
 }

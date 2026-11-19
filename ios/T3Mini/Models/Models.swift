@@ -84,8 +84,13 @@ struct Bootstrap: Codable, Sendable {
     var projects: [ProjectSummary]
     var ui: UiSettings?
     var defaultCwd: String?
-    /// The computer has a Deepgram key, so the message box offers dictation.
+    /// The computer has a dictation key (Deepgram or AssemblyAI), so the message box offers it.
     var dictation: Bool?
+    /// Words stream in while you talk (Deepgram); false: the recording is sent whole when you
+    /// stop (AssemblyAI's Dictation API).
+    var dictationLive: Bool?
+    /// AssemblyAI: the recording can go straight to AssemblyAI with a short-lived token.
+    var dictationDirect: Bool?
 }
 
 struct Attachment: Codable, Hashable, Sendable {
@@ -455,4 +460,16 @@ struct DiffResult: Codable, Hashable, Sendable {
 struct GitInfo: Codable, Hashable, Sendable {
     var branch: String?
     var detached: Bool?
+}
+
+/// A short-lived, Dictation-only AssemblyAI token from the computer (never its API key), where
+/// to send the recording, and the config to send with it.
+struct DictationToken: Decodable, Sendable {
+    struct Config: Codable, Sendable {
+        var rewrite_mode: String?
+        var keyterms_prompt: [String]?
+    }
+    let token: String
+    let url: URL
+    let config: Config
 }

@@ -207,7 +207,7 @@ export function SettingsDialog({
   providers?: Bootstrap['providers']
   remote?: boolean
   onPhoneAccessChange?: (enabled: boolean) => void
-  onDictationChange?: (configured: boolean) => void
+  onDictationChange?: (configured: boolean, live: boolean) => void
   theme: Theme
   onThemeChange: (theme: Theme) => void
   onChange: (preferences: NotificationPreferences) => void
@@ -471,7 +471,9 @@ export function SettingsDialog({
             ) : null}
             {/* Dictation and phone access are managed only on the Mac. */}
             {tab === 'dictation' && !remote ? (
-              <DictationSettings onChange={(configured) => onDictationChange?.(configured)} />
+              <DictationSettings
+                onChange={(configured, live) => onDictationChange?.(configured, live)}
+              />
             ) : null}
             {tab === 'phone' && !remote ? (
               <PhoneAccess onChange={(enabled) => onPhoneAccessChange?.(enabled)} />

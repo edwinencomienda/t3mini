@@ -246,28 +246,56 @@ final class AppModel {
             return await SVGIcon.rasterizeIfNeeded(data)
         }
         guard project.avatar != "letter", project.icon == true, ui?.projectIcons != false else { return nil }
-        let path = project.path
-        // SVG icons are drawn into a PNG once (iOS can't decode SVG); the PNG is what's saved.
-        guard let data = try? await cachedImage("icon:" + path, revalidate: true, load: { client in
-            await SVGIcon.rasterizeIfNeeded(try await client.projectIcon(path))
-        }) else { return nil }
-        // A copy saved before this change may still be SVG.
-        return await SVGIcon.rasterizeIfNeeded(data)
+        let path = project.path, key = "icon:" + path
+        // Saved: shown at once, and checked against the computer once per launch (revalidateIcon).
+        let disk = disk
+        var saved = images.object(forKey: key as NSString) as Data?
+        if saved == nil { saved = await Task.detached(operation: { disk?.read(key) }).value }
+        if let saved {
+            images.setObject(saved as NSData, forKey: key as NSString, cost: saved.count)
+            revalidateIcon(path)
+            // A copy saved before SVGs were drawn into PNGs may still be SVG.
+            return await SVGIcon.rasterizeIfNeeded(saved)
+        }
+        guard let client, let source = try? await client.projectIcon(path) else { return nil }
+        // SVG icons are drawn into a PNG once (iOS can't decode SVG); the PNG is what's shown,
+        // and the computer's own file is kept beside it to compare against later.
+        let data = await SVGIcon.rasterizeIfNeeded(source)
+        revalidated.insert(key)
+        store(key, data)
+        Task.detached(priority: .utility) { disk?.write("iconsrc:" + path, source) }
+        return data
+    }
+
+    /// Once per launch, in the background: has the project's icon file on the computer changed?
+    /// Compared by the file itself, not the drawn copy (an SVG drawn again isn't byte-identical,
+    /// which made every avatar reload after the app was away for a while). Only a real change
+    /// redraws avatars.
+    private func revalidateIcon(_ path: String) {
+        let key = "icon:" + path, sourceKey = "iconsrc:" + path
+        guard let client, revalidated.insert(key).inserted else { return }
+        let disk = disk
+        Task {
+            guard let fresh = try? await client.projectIcon(path) else { return }
+            let saved = await Task.detached(operation: { disk?.read(sourceKey) }).value
+            if saved == fresh { return }
+            Task.detached(priority: .utility) { disk?.write(sourceKey, fresh) }
+            // Saved before this check existed: keep the picture we have and remember the file.
+            guard saved != nil else { return }
+            store(key, await SVGIcon.rasterizeIfNeeded(fresh))
+            avatarImages.removeAllObjects()
+            avatarMisses.removeAll()
+            avatarRevision += 1
+        }
     }
 
     /// Memory, then this phone's disk, then the computer. Uploads never change, so a saved copy is
-    /// final. Icons can (`revalidate`): the saved copy is used at once and checked against the
-    /// computer once per launch in the background; if it changed, avatars redraw with the new one.
-    private func cachedImage(_ key: String, revalidate: Bool = false,
-                             load: @escaping (APIClient) async throws -> Data) async throws -> Data {
-        if let cached = images.object(forKey: key as NSString) as Data? {
-            if revalidate { refreshInBackground(key, load: load, current: cached) }
-            return cached
-        }
+    /// final. (Project icons can change: see `revalidateIcon`.)
+    private func cachedImage(_ key: String, load: @escaping (APIClient) async throws -> Data) async throws -> Data {
+        if let cached = images.object(forKey: key as NSString) as Data? { return cached }
         let disk = disk
         if let saved = await Task.detached(operation: { disk?.read(key) }).value {
             images.setObject(saved as NSData, forKey: key as NSString, cost: saved.count)
-            if revalidate { refreshInBackground(key, load: load, current: saved) }
             return saved
         }
         guard let client else { throw APIError.unpaired }
@@ -281,17 +309,6 @@ final class AppModel {
         images.setObject(data as NSData, forKey: key as NSString, cost: data.count)
         let disk = disk
         Task.detached(priority: .utility) { disk?.write(key, data) }
-    }
-
-    private func refreshInBackground(_ key: String, load: @escaping (APIClient) async throws -> Data, current: Data) {
-        guard let client, revalidated.insert(key).inserted else { return }
-        Task {
-            guard let fresh = try? await load(client), fresh != current else { return }
-            store(key, fresh)
-            avatarImages.removeAllObjects()
-            avatarMisses.removeAll()
-            avatarRevision += 1
-        }
     }
 
     /// Built pages by id and look, kept while the app runs (a page's HTML never changes).
@@ -488,6 +505,8 @@ final class AppModel {
             if bootstrap.projects != projects { projects = bootstrap.projects }
             if bootstrap.ui != ui { ui = bootstrap.ui }
             if (bootstrap.dictation ?? false) != dictationAvailable { dictationAvailable = bootstrap.dictation ?? false }
+            if (bootstrap.dictationLive ?? true) != dictationLive { dictationLive = bootstrap.dictationLive ?? true }
+            if (bootstrap.dictationDirect ?? false) != dictationDirect { dictationDirect = bootstrap.dictationDirect ?? false }
             if let id = openThreadId { openThread = try await client.thread(id) }
         } catch APIError.unpaired {
             sessionEnded()
@@ -559,9 +578,19 @@ final class AppModel {
 
     /// Whether the computer can turn speech into text (it has a Deepgram key).
     private(set) var dictationAvailable = false
+    /// The computer's dictation streams live (Deepgram); otherwise it takes the whole recording.
+    private(set) var dictationLive = true
+    /// AssemblyAI: the recording can go straight there (with a token from the computer).
+    private(set) var dictationDirect = false
 
     func dictationRequest() -> URLRequest? {
         client?.dictationRequest(thread: openThreadId)
+    }
+
+    /// A Dictation-only AssemblyAI token for this thread's dictation (nil if it can't be had).
+    func dictationToken() async -> DictationToken? {
+        guard dictationDirect, let client else { return nil }
+        return try? await client.dictationToken(thread: openThreadId)
     }
 
     func transcribe(_ audio: Data, mimeType: String) async throws -> String {

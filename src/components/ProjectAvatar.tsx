@@ -71,7 +71,13 @@ export function ProjectAvatar({
           height={16}
         />
       ) : null}
-      <Avatar.Fallback className="project-avatar-letter" aria-hidden>
+      {/* With an image, the letter waits a moment: a cached icon shows first, with no letter
+          flashing in between (e.g. after reconnecting). */}
+      <Avatar.Fallback
+        className="project-avatar-letter"
+        aria-hidden
+        {...(src ? { delay: 600 } : {})}
+      >
         {initial(name)}
       </Avatar.Fallback>
     </Avatar.Root>

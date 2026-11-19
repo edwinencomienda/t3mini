@@ -81,6 +81,7 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
     ['dictation', 'GET'],
     ['dictation', 'POST'],
     ['dictation', 'DELETE'],
+    ['dictation/provider', 'POST'],
   ] as const)
     expect((await remote(path, method)).status).toBe(403)
   const bootstrap = await handleApi(
@@ -113,6 +114,21 @@ it('takes secrets from a phone only over HTTPS, and never echoes the value', asy
     expect(response.status).toBe(404)
     expect(await response.text()).not.toContain('sk-live-do-not-echo')
   }
+})
+it('hands a phone a dictation token only over HTTPS', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  process.env.T3_MINI_DATA_DIR ??= await mkdtemp(join(tmpdir(), 't3-mini-api-'))
+  const { handleApi } = await import('./api')
+  const response = await handleApi(
+    new Request('http://127.0.0.1:4310/api/dictation/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-t3-remote': '1', 'x-t3-transport': 'http' },
+      body: '{}',
+    }),
+  )
+  expect(response.status).toBe(403)
 })
 it('ends a live-update stream nobody reads instead of queueing updates forever', async () => {
   const { mkdtemp } = await import('node:fs/promises')

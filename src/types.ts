@@ -318,6 +318,11 @@ export type Bootstrap = {
   phoneAccess?: boolean
   // A Deepgram key is configured, so the composer can offer dictation.
   dictation?: boolean
+  // Dictation streams live (Deepgram); false: the recording is sent whole when you stop
+  // (AssemblyAI's Dictation API).
+  dictationLive?: boolean
+  // AssemblyAI: the iPhone app can send its recording straight there with a short-lived token.
+  dictationDirect?: boolean
   defaultCwd: string
 }
 // A thread project's git state for the composer. detached: branch is a short commit hash.

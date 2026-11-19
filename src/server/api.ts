@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { activitiesFor, getService, HttpError } from './service'
 import { ThreadDiff } from '../thread-patch'
@@ -27,7 +28,11 @@ import { providerAccount } from './accounts'
 import {
   clearDictationKey,
   dictationAvailable,
+  dictationDirect,
+  dictationLive,
+  dictationToken,
   dictationStatus,
+  setDictationProvider,
   loadDictationKey,
   maxAudioBytes,
   saveDictationKey,
@@ -309,13 +314,33 @@ export async function handleApi(request: Request) {
         )
       }
     }
-    // The Deepgram key is managed from the Mac only, and never returned.
+    // Dictation keys (Deepgram, AssemblyAI) and which one is used: managed from the Mac only,
+    // and never returned.
     if (parts[0] === 'dictation' && !parts[1]) {
       macOnly('Managing the dictation key')
       if (request.method === 'GET') return Response.json(dictationStatus())
       if (request.method === 'POST')
         return Response.json(await saveDictationKey(secretsPath, await request.json()))
-      if (request.method === 'DELETE') return Response.json(await clearDictationKey(secretsPath))
+      if (request.method === 'DELETE')
+        return Response.json(
+          await clearDictationKey(secretsPath, await request.json().catch(() => ({}))),
+        )
+    }
+    // A Dictation-only AssemblyAI token for the iPhone app, to send its recording straight to
+    // AssemblyAI. From a phone only over HTTPS (the token is a credential, if a short-lived one).
+    if (parts[0] === 'dictation' && parts[1] === 'token' && request.method === 'POST') {
+      if (remote && request.headers.get(transportHeader) !== 'https')
+        throw new HttpError(403, 'Dictation tokens are only sent over an encrypted connection.')
+      const body = z
+        .object({ thread: z.string().max(100).optional() })
+        .safeParse(await request.json().catch(() => ({})))
+      const thread = body.success ? body.data.thread : undefined
+      const keyterms = thread ? await service.dictationKeyterms(thread).catch(() => []) : []
+      return Response.json(await dictationToken(keyterms))
+    }
+    if (parts[0] === 'dictation' && parts[1] === 'provider' && request.method === 'POST') {
+      macOnly('Choosing the dictation service')
+      return Response.json(await setDictationProvider(secretsPath, await request.json()))
     }
     if (parts[0] === 'transcribe' && !parts[1] && request.method === 'POST') {
       // base64 + JSON overhead on top of the audio limit; refuse bigger bodies before reading.
@@ -324,9 +349,9 @@ export async function handleApi(request: Request) {
         throw new HttpError(413, 'The recording is too long.')
       const body = await request.json()
       const thread = transcriptionThread(body)
-      return Response.json(
-        await transcribe(body, thread ? await service.dictationKeyterms(thread) : []),
-      )
+      // The thread's words only help spelling: without them, still transcribe (as live does).
+      const keyterms = thread ? await service.dictationKeyterms(thread).catch(() => []) : []
+      return Response.json(await transcribe(body, keyterms))
     }
     // Long-running processes agents started (the list itself comes with the live updates).
     if (parts[0] === 'processes' && parts[1]) {
@@ -730,10 +755,20 @@ export async function handleApi(request: Request) {
         return Response.json({ error: 'Project not found.' }, { status: 404 })
       const icon = await service.icons.read(path).catch(() => undefined)
       if (!icon) return Response.json({ error: 'No icon.' }, { status: 404 })
+      // Stale-while-revalidate: after a while away the browser shows the copy it has at once and
+      // checks for a newer one in the background (a 304 when it's the same), instead of the
+      // letter flashing while every icon loads again.
+      const etag = `"${createHash('sha256').update(icon.data).digest('base64url').slice(0, 22)}"`
+      const caching = {
+        'cache-control': 'private, max-age=300, stale-while-revalidate=2592000',
+        etag,
+      }
+      if (request.headers.get('if-none-match') === etag)
+        return new Response(null, { status: 304, headers: caching })
       return new Response(bodyOf(icon.data), {
         headers: {
           'content-type': icon.mimeType,
-          'cache-control': 'private, max-age=300',
+          ...caching,
           'x-content-type-options': 'nosniff',
           // An SVG opened directly could run scripts on this origin; this keeps it inert.
           'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
@@ -758,6 +793,10 @@ export async function handleApi(request: Request) {
         remote,
         phoneAccess: access.enabled,
         dictation: dictationAvailable(),
+        // Words stream in while you talk (Deepgram); otherwise the recording goes whole on stop.
+        dictationLive: dictationLive(),
+        // The iPhone app may send its recording straight to AssemblyAI (POST /api/dictation/token).
+        dictationDirect: dictationDirect(),
       })
     }
     if (parts[0] === 'events' && request.method === 'GET') {

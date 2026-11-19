@@ -180,8 +180,18 @@ function openStream(onWords: (text: string) => void, thread?: string) {
   }
 }
 
+// No live words (AssemblyAI's Dictation API): the recording is only sent, whole, when you stop.
+const recordOnly = {
+  send() {},
+  onOpen() {},
+  ready: false,
+  finish: async () => null,
+  cancel() {},
+}
+
 export function DictationButton({
   threadId,
+  live: streaming = true,
   onText,
   onPreview,
   onError,
@@ -189,6 +199,8 @@ export function DictationButton({
 }: {
   // The thread being dictated into, for its vocabulary.
   threadId?: string
+  // Words stream in while you talk (Deepgram); false: sent whole on stop (AssemblyAI).
+  live?: boolean
   onText: (text: string) => void
   // The words so far while recording ('' when done), e.g. for the composer placeholder.
   onPreview?: (text: string) => void
@@ -241,9 +253,11 @@ export function DictationButton({
     // Every chunk is kept, so the fallback can still send the whole recording.
     const chunks: Blob[] = []
     const thread = vocabularyThread(threadId)
-    const live = openStream((words) => {
-      if (!cancelled.current) handlers.current.onPreview?.(words)
-    }, thread)
+    const live = streaming
+      ? openStream((words) => {
+          if (!cancelled.current) handlers.current.onPreview?.(words)
+        }, thread)
+      : recordOnly
     live.onOpen(() => chunks.forEach((chunk) => live.send(chunk)))
     media.ondataavailable = (event) => {
       if (!event.data.size) return

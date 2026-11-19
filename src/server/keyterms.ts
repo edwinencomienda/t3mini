@@ -1,7 +1,3 @@
-import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
-
 // Dictation vocabulary from the thread: the unusual words in the agent's last replies (names,
 // code identifiers, jargon) that speech recognition tends to mangle, sent to Deepgram as
 // keyterms. Ordinary English words are left out, since Deepgram already gets those right.
@@ -31,21 +27,40 @@ const everyday = [
 // Common English words (SCOWL sizes 10–60, with American and British spellings, inflections
 // included, plus the everyday words above). Loaded once, lazily.
 let common: Promise<Set<string>> | undefined
+// Imported (lazily), not read from node_modules at run time: the installed t3mini binary has no
+// node_modules, and reading them there failed every transcription that used the thread's words.
+const wordLists: (() => Promise<{ default: string[] }>)[] = [
+  () => import('wordlist-english/english-words-10.json'),
+  () => import('wordlist-english/english-words-20.json'),
+  () => import('wordlist-english/english-words-35.json'),
+  () => import('wordlist-english/english-words-40.json'),
+  () => import('wordlist-english/english-words-50.json'),
+  () => import('wordlist-english/english-words-55.json'),
+  () => import('wordlist-english/english-words-60.json'),
+  () => import('wordlist-english/american-words-10.json'),
+  () => import('wordlist-english/american-words-20.json'),
+  () => import('wordlist-english/american-words-35.json'),
+  () => import('wordlist-english/american-words-40.json'),
+  () => import('wordlist-english/american-words-50.json'),
+  () => import('wordlist-english/american-words-55.json'),
+  () => import('wordlist-english/american-words-60.json'),
+  () => import('wordlist-english/british-words-10.json'),
+  () => import('wordlist-english/british-words-20.json'),
+  () => import('wordlist-english/british-words-35.json'),
+  () => import('wordlist-english/british-words-40.json'),
+  () => import('wordlist-english/british-words-50.json'),
+  () => import('wordlist-english/british-words-55.json'),
+  () => import('wordlist-english/british-words-60.json'),
+]
 export function commonWords() {
   return (common ??= (async () => {
-    const folder = dirname(createRequire(import.meta.url).resolve('wordlist-english/package.json'))
-    const lists = await Promise.all(
-      ['english', 'american', 'british'].flatMap((dialect) =>
-        [10, 20, 35, 40, 50, 55, 60].map(
-          async (size) =>
-            JSON.parse(
-              await readFile(join(folder, `${dialect}-words-${size}.json`), 'utf8'),
-            ) as string[],
-        ),
-      ),
-    )
+    const lists = await Promise.all(wordLists.map(async (load) => (await load()).default))
     return new Set([...lists.flat(), ...everyday].map((word) => word.toLowerCase()))
-  })())
+  })().catch((error: unknown) => {
+    // Try again next time rather than keep a failure.
+    common = undefined
+    throw error
+  }))
 }
 
 // Prefixes of API keys and tokens (OpenAI/Anthropic, GitHub, Slack, AWS, Google, Stripe, JWTs…).

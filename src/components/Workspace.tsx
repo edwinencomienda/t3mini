@@ -4212,6 +4212,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
                           {bootstrap?.dictation && dictationSupported() ? (
                             <DictationButton
                               threadId={thread.id}
+                              live={bootstrap.dictationLive !== false}
                               onText={(text) => {
                                 const element = composer.current
                                 const before =
@@ -4549,8 +4550,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
             preferences={notify}
             providers={bootstrap?.providers}
             remote={Boolean(bootstrap?.remote)}
-            onDictationChange={(dictation) =>
-              setBootstrap((current) => (current ? { ...current, dictation } : current))
+            onDictationChange={(dictation, dictationLive) =>
+              setBootstrap((current) =>
+                current ? { ...current, dictation, dictationLive } : current,
+              )
             }
             onPhoneAccessChange={(phoneAccess) =>
               setBootstrap((current) => (current ? { ...current, phoneAccess } : current))

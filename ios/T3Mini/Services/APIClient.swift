@@ -264,6 +264,59 @@ final class APIClient: Sendable {
 
     /// Speech to text on the computer (POST /api/transcribe, its Deepgram key), with the thread's
     /// vocabulary for names and terms.
+    /// A Dictation-only token to send a recording straight to AssemblyAI (the computer mints it).
+    func dictationToken(thread: String?) async throws -> DictationToken {
+        var body: [String: String] = [:]
+        if let thread { body["thread"] = thread }
+        return try await call("dictation/token", method: "POST", body: body)
+    }
+
+    /// The recording, straight to AssemblyAI's Dictation API with the short-lived token. Its
+    /// cleaned-up text (or the verbatim one when the cleanup didn't come back).
+    nonisolated static func dictate(_ audio: Data, mimeType: String, with token: DictationToken) async throws -> String {
+        guard token.url.scheme == "https", token.url.host?.hasSuffix(".assemblyai.com") == true else {
+            throw APIError.badResponse
+        }
+        let boundary = "t3mini-\(UUID().uuidString)"
+        var request = URLRequest(url: token.url, timeoutInterval: 90)
+        request.httpMethod = "POST"
+        request.setValue(token.token, forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = multipart(config: try JSONEncoder().encode(token.config), audio: audio,
+                                     mimeType: mimeType, boundary: boundary)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.server(http.statusCode, http.statusCode == 401
+                ? "AssemblyAI didn’t accept the dictation token."
+                : "AssemblyAI could not transcribe this (\(http.statusCode)).")
+        }
+        struct Result: Decodable { let text: String?; let llm_response: String? }
+        let result = try JSONDecoder().decode(Result.self, from: data)
+        let cleaned = result.llm_response?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return cleaned.isEmpty ? (result.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+    }
+
+    /// multipart/form-data with the config first, then the audio (AssemblyAI's order).
+    nonisolated static func multipart(config: Data, audio: Data, mimeType: String, boundary: String) -> Data {
+        var body = Data()
+        func line(_ text: String) { body.append(Data((text + "\r\n").utf8)) }
+        line("--\(boundary)")
+        line("Content-Disposition: form-data; name=\"config\"")
+        line("Content-Type: application/json")
+        line("")
+        body.append(config)
+        line("")
+        line("--\(boundary)")
+        line("Content-Disposition: form-data; name=\"audio\"; filename=\"recording.m4a\"")
+        line("Content-Type: \(mimeType)")
+        line("")
+        body.append(audio)
+        line("")
+        line("--\(boundary)--")
+        return body
+    }
+
     func transcribe(_ audio: Data, mimeType: String, thread: String?) async throws -> String {
         struct Result: Decodable { let text: String }
         var body = ["mimeType": mimeType, "data": audio.base64EncodedString()]
