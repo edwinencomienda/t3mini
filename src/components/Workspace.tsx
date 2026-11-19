@@ -58,7 +58,7 @@ import {
 } from 'lucide-react'
 import Markdown, { type Components } from 'react-markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { listenForPushOpens } from '../push'
+import { listenForPushOpens, watchPushState } from '../push'
 import {
   AgentSettingsControls,
   Picker,
@@ -1327,6 +1327,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     prompted: true,
   })
   const notifyRef = useRef(notify)
+  // This browser gets the server's push notifications: it shows those instead of its own desktop
+  // ones, so an event isn't shown twice.
+  const pushOn = useRef(false)
+  useEffect(() => watchPushState((on) => (pushOn.current = on)), [])
   notifyRef.current = notify
   const statuses = useRef(new Map<string, Status>())
   const openThread = useRef<(id: string) => void>(() => {})
@@ -1855,7 +1859,13 @@ export function Workspace({ threadId }: { threadId?: string }) {
           ...current.filter((item) => item.thread.id !== event.thread.id),
           event,
         ])
-      if (notifier && preferences.desktop && !focused && desktopPermission() === 'granted') {
+      if (
+        notifier &&
+        preferences.desktop &&
+        !pushOn.current &&
+        !focused &&
+        desktopPermission() === 'granted'
+      ) {
         try {
           // e.g. "t3-mini · Claude finished", with the thread's title underneath.
           const notification = new Notification(

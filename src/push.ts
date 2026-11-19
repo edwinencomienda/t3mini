@@ -99,6 +99,7 @@ export async function enablePush(): Promise<PushState> {
     applicationServerKey: keyBytes(publicKey),
   })
   await api('push', 'POST', subscription.toJSON())
+  announcePush('on')
   return 'on'
 }
 
@@ -108,7 +109,31 @@ export async function disablePush(): Promise<PushState> {
     await api('push', 'DELETE', { endpoint: subscription.endpoint }).catch(() => {})
     await subscription.unsubscribe().catch(() => false)
   }
-  return pushState()
+  const state = await pushState()
+  announcePush(state)
+  return state
+}
+
+// This browser's push turned on or off (Settings), for the page's own desktop notifications.
+const pushEvent = 't3-push-state'
+function announcePush(state: PushState) {
+  window.dispatchEvent(new CustomEvent(pushEvent, { detail: state }))
+}
+
+/**
+ * Whether this browser gets push notifications (now, and whenever that changes). The page then
+ * skips its own desktop notification for the same event: the server's push already shows one
+ * (and it was showing two). Returns a function that stops listening.
+ */
+export function watchPushState(listener: (on: boolean) => void) {
+  let live = true
+  void pushState().then((state) => live && listener(state === 'on'))
+  const changed = (event: Event) => listener((event as CustomEvent<PushState>).detail === 'on')
+  window.addEventListener(pushEvent, changed)
+  return () => {
+    live = false
+    window.removeEventListener(pushEvent, changed)
+  }
 }
 
 export async function testPush() {
