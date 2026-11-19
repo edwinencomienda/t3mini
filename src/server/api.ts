@@ -72,6 +72,32 @@ export function isHttpError(error: unknown): error is HttpError {
     typeof (error as { status?: unknown }).status === 'number'
   )
 }
+// A streaming reply bumps its thread's updatedAt on every update, which would resend the whole
+// thread list to every tab ten times a second, though the sidebar shows those times to the
+// minute. A list that differs from the last one sent only in updatedAt waits up to
+// `listTimesEvery`; any other change (status, title, unread, a new thread) goes out at once.
+export const listTimesEvery = 5_000
+// Updates a live-update stream may have waiting for a reader (~20 s of a streaming reply).
+export const maxQueuedUpdates = 200
+// The list's JSON without its updatedAt values. In JSON a quote inside a string is escaped, so
+// the pattern only ever matches the field itself. One per notification (all tabs share it).
+let lastList: { json: string; shape: string } | undefined
+const listShape = (json: string) => {
+  if (lastList?.json !== json) lastList = { json, shape: json.replace(/"updatedAt":"[^"]*"/g, '') }
+  return lastList.shape
+}
+export class ListPacer {
+  private shape?: string
+  private sentAt = -Infinity
+  // True: leave the list (its JSON, as sent) out of this update.
+  hold(json: string, now = Date.now()) {
+    const shape = listShape(json)
+    if (shape === this.shape && now - this.sentAt < listTimesEvery) return true
+    this.shape = shape
+    this.sentAt = now
+    return false
+  }
+}
 // Live updates send each tab only the parts of the snapshot that changed since its last update
 // (the whole snapshot on connect). While another thread streams, a tab gets its thread list but
 // not its own open thread again, and nothing at all when none of its parts changed. Missing keys
@@ -742,13 +768,15 @@ export async function handleApi(request: Request) {
           const encode = new TextEncoder()
           const sent = new Map<string, string>()
           const diff = new ThreadDiff((value) => sharedJson(service, value))
+          const pacer = new ListPacer()
           const push = () => {
             try {
-              const { thread, ...snapshot } = sharedSnapshot(service, id)
+              const { thread, threads, ...snapshot } = sharedSnapshot(service, id)
               const changes = changedParts(
                 sent,
                 {
                   ...snapshot,
+                  ...(pacer.hold(sharedJson(service, threads)) ? {} : { threads }),
                   ...(patches ? {} : { thread }),
                   // A newer t3mini installed (app-update.ts), on the Mac only.
                   ...(remote ? {} : { appUpdate: latestAppUpdate() }),
@@ -756,7 +784,11 @@ export async function handleApi(request: Request) {
                 patches ? diff.next(thread) : undefined,
                 (value) => sharedJson(service, value),
               )
-              if (changes) controller.enqueue(encode.encode(`data: ${changes}\n\n`))
+              if (!changes) return
+              // A tab that stopped reading (a stalled connection) would queue every update in
+              // memory; end it instead. EventSource reconnects and gets the whole snapshot.
+              if ((controller.desiredSize ?? 0) < -maxQueuedUpdates) return close()
+              controller.enqueue(encode.encode(`data: ${changes}\n\n`))
             } catch {
               cleanup()
             }

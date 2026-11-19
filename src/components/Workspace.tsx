@@ -294,7 +294,8 @@ const parsedMarkdown = new Map<string, ReactNode>()
 let parsedChars = 0
 let lastParsed: string | undefined
 const maxParsed = 3000
-const maxParsedChars = 4_000_000
+// Parsed trees keep ~18 bytes per character of text: 1 M characters is ~18 MB (4 M was ~70 MB).
+const maxParsedChars = 1_000_000
 function parseMarkdown(text: string) {
   const cached = parsedMarkdown.get(text)
   if (cached !== undefined) {

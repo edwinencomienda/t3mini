@@ -1114,13 +1114,18 @@ export class AgentService {
     if (controller.signal.aborted) {
       this.runs.delete(id)
       ended()
+      // A lead's delegate_task may be waiting on this sub-agent.
+      if (thread.delegateOf) void this.delegationEnded(thread)
       this.notify()
       return
     }
     this.notify()
     run.done = this.execute(thread, text, images, run).finally(() => {
       // execute leaves `runs` in its finally, but not if it throws before its try.
-      if (this.runs.get(id) === run) this.runs.delete(id)
+      if (this.runs.get(id) === run) {
+        this.runs.delete(id)
+        if (thread.delegateOf) void this.delegationEnded(thread)
+      }
       ended()
     })
   }
@@ -1829,6 +1834,8 @@ export class AgentService {
         // Stopping this turn stops the sub-agent it waits on.
         const stopIt = () => void this.stop(delegate.id).catch(() => {})
         run.controller.signal.addEventListener('abort', stopIt, { once: true })
+        // Stopped while the sub-agent was starting: the abort event has already fired.
+        if (run.controller.signal.aborted) stopIt()
         await finished
         run.controller.signal.removeEventListener('abort', stopIt)
         const final = findDelegationCard(lead.messages, delegate.id)?.block
@@ -2261,7 +2268,14 @@ export class AgentService {
   async diffVersion(id: string): Promise<{ version: string | null }> {
     const cwd = workdir(this.get(id))
     const git = (args: string[]) =>
-      exec('git', args, { cwd, timeout: 5_000, maxBuffer: 4 * 1024 * 1024 })
+      // Polled every 2 s: GIT_OPTIONAL_LOCKS=0 keeps status from taking index.lock to refresh the
+      // index, which would make the agent's own git commands fail with "index.lock exists".
+      exec('git', args, {
+        cwd,
+        timeout: 5_000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+      })
     try {
       const [{ stdout: status }, head] = await Promise.all([
         git(['status', '--porcelain=v1', '-z', '--untracked-files=all']),

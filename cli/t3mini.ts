@@ -287,7 +287,8 @@ async function importData() {
   const from = args[0]
   if (!from)
     fail('Usage: t3mini import <data folder>   e.g. t3mini import ~/projects/t3-mini/.data')
-  if (!existsSync(join(from, 'threads.json'))) fail(`${from} doesn’t look like t3 mini data.`)
+  if (!existsSync(join(from, 'threads')) && !existsSync(join(from, 'threads.json')))
+    fail(`${from} doesn’t look like t3 mini data.`)
   if (runningPid()) fail('Stop t3 mini first (t3mini stop).')
   if ((await readdir(dataDir).catch(() => [])).length)
     fail(`${dataDir} already has data; not overwriting it.`)

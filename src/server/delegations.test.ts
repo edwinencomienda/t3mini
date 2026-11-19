@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DelegationBlock } from '../blocks'
 import type { Activity, Thread } from '../types'
 import {
@@ -313,5 +313,56 @@ describe('sub-agents (delegate_task)', () => {
     await until(() => lead.status === 'completed')
     await service.remove(lead.id)
     expect(() => service.get(id)).toThrow('Thread not found')
+  })
+
+  // Holds the sub-agent's first save, so a stop lands before its turn has started.
+  const holdSubAgentStart = () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let saving!: (id: string) => void
+    const starting = new Promise<string>((resolve) => (saving = resolve))
+    const save = ThreadStore.prototype.save
+    const spy = vi.spyOn(ThreadStore.prototype, 'save').mockImplementation(async function (
+      this: ThreadStore,
+    ) {
+      const delegate = [...this.threads.values()].find(
+        (thread) => thread.delegateOf && thread.status === 'starting',
+      )
+      if (delegate) {
+        saving(delegate.id)
+        await held
+      }
+      return save.call(this)
+    })
+    return { starting, release: () => (spy.mockRestore(), release()) }
+  }
+
+  it('answers a lead whose sub-agent was stopped before it started', async () => {
+    const lead = await service.create({ provider: 'claude', cwd: directory })
+    await service.send(lead.id, { text: 'Go' })
+    const leadTurn = await nextTurn(lead.id, 0)
+    const hold = holdSubAgentStart()
+    const result = leadTurn.ctx.tools.delegates.start({ task: 'Write the tests', title: 'Tests' })
+    const id = await hold.starting
+    await service.stop(id)
+    hold.release()
+    expect(await result).toContain('was stopped')
+    expect(card(lead, id)?.status).toBe('stopped')
+    expect(turnCount(id)).toBe(0)
+    leadTurn.end('Done.')
+  })
+
+  it('stops a sub-agent that was starting when its lead was stopped', async () => {
+    const lead = await service.create({ provider: 'claude', cwd: directory })
+    await service.send(lead.id, { text: 'Go' })
+    const leadTurn = await nextTurn(lead.id, 0)
+    const hold = holdSubAgentStart()
+    const result = leadTurn.ctx.tools.delegates.start({ task: 'Write the tests', title: 'Tests' })
+    const id = await hold.starting
+    await service.stop(lead.id)
+    hold.release()
+    expect(await result).toContain('was stopped')
+    expect(card(lead, id)?.status).toBe('stopped')
+    expect(turns.get(id)?.every((turn) => turn.ctx.signal.aborted) ?? true).toBe(true)
   })
 })

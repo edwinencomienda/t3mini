@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { RecentMap } from '../recent-map'
 import { useApiBase } from '../hub'
 import { AppWindow, Code2, Maximize2, RotateCcw, TriangleAlert } from 'lucide-react'
 import { CopyButton } from './CopyButton'
@@ -20,10 +21,10 @@ import { loadLibraries, pageDocument, pageTokens, themeCss, type PageLibrary } f
 // passed in as CSS variables. A page that asked for a bundled library (Chart.js) gets it
 // inlined, still with no network.
 
-const pages = new Map<string, Promise<string>>()
+const pages = new RecentMap<string, Promise<string>>(30)
 // Pages already fetched, and each frame's last height, so coming back to a thread draws the card
 // straight away at its size instead of going Loading… → 160px → real height every time.
-const loaded = new Map<string, string>()
+const loaded = new RecentMap<string, string>(30)
 const heights = new Map<string, number>()
 // `base`: where the thread lives, here or on a machine (the hub's ApiBase).
 const loadPage = (base: string, id: string) => {

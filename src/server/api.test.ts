@@ -1,5 +1,23 @@
 import { expect, it } from 'vitest'
-import { changedParts, checkRequest } from './api'
+import { changedParts, checkRequest, ListPacer, listTimesEvery } from './api'
+it('holds back a thread list whose only change is updatedAt, for a few seconds', () => {
+  const pacer = new ListPacer()
+  // A title that looks like the field must still count as a change of its own.
+  const list = (updatedAt: string, status = 'working', title = 'Say "updatedAt":"x"') =>
+    JSON.stringify([{ id: 'a', title, status, updatedAt }])
+  expect(pacer.hold(list('1'), 0)).toBe(false)
+  // A streaming reply bumps updatedAt: held.
+  expect(pacer.hold(list('2'), 100)).toBe(true)
+  expect(pacer.hold(list('3'), listTimesEvery - 1)).toBe(true)
+  // Any other change goes out at once.
+  expect(pacer.hold(list('4', 'completed'), listTimesEvery)).toBe(false)
+  // Times alone still go out every listTimesEvery.
+  expect(pacer.hold(list('5', 'completed'), listTimesEvery + 1)).toBe(true)
+  expect(pacer.hold(list('6', 'completed'), listTimesEvery * 2)).toBe(false)
+  expect(pacer.hold(list('6', 'completed', 'Say "updatedAt":"y"'), listTimesEvery * 2 + 1)).toBe(
+    false,
+  )
+})
 it('accepts same-origin loopback requests', () => {
   expect(() =>
     checkRequest(
@@ -69,6 +87,32 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
     new Request('http://127.0.0.1:4310/api/bootstrap', { headers: { 'x-t3-remote': '1' } }),
   )
   expect(await bootstrap.json()).toMatchObject({ remote: true, phoneAccess: false })
+})
+it('ends a live-update stream nobody reads instead of queueing updates forever', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  process.env.T3_MINI_DATA_DIR ??= await mkdtemp(join(tmpdir(), 't3-mini-api-'))
+  const { handleApi, maxQueuedUpdates } = await import('./api')
+  const { getService } = await import('./service')
+  const service = await getService()
+  const stalled = await handleApi(new Request('http://127.0.0.1:4310/api/events'))
+  const notify = () => (service as unknown as { notify(): void }).notify()
+  // Each update changes what the tab sees, and nobody reads.
+  for (let index = 0; index < maxQueuedUpdates * 2; index++) {
+    service.ui.settings = { ...service.ui.settings, theme: index % 2 ? 'light' : 'dark' }
+    notify()
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  // What was queued is still there to read, then the stream ends.
+  const reader = stalled.body!.getReader()
+  let events = 0
+  for (;;) {
+    const { done } = await reader.read()
+    if (done) break
+    events++
+  }
+  expect(events).toBeLessThanOrEqual(maxQueuedUpdates + 2)
 })
 it('keeps HTTP statuses for errors from another copy of HttpError (dev hot reload)', async () => {
   const { isHttpError, handleApi } = await import('./api')

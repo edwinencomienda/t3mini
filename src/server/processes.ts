@@ -60,7 +60,13 @@ function hookShutdown() {
     })
 }
 
-type Entry = { info: ProcessInfo; child?: ChildProcess; log: string; killTimer?: NodeJS.Timeout }
+type Entry = {
+  info: ProcessInfo
+  child?: ChildProcess
+  log: string
+  // A stop in progress: a second stop (or a restart) waits for it instead of racing it.
+  stopping?: Promise<void>
+}
 
 export class ProcessManager {
   private entries = new Map<string, Entry>()
@@ -161,17 +167,20 @@ export class ProcessManager {
     }
     child.stdout?.on('data', append)
     child.stderr?.on('data', append)
+    // Only the current child settles the entry: after a restart, the old one exiting late
+    // must not mark the new run as ended (and lose track of it).
     child.on('error', (error) => {
+      if (entry.child !== child) return
       entry.log += `\n[t3 mini] Could not start: ${error.message}\n`
       this.finish(entry, null)
     })
-    child.on('exit', (code) => this.finish(entry, code))
+    child.on('exit', (code) => {
+      if (entry.child === child) this.finish(entry, code)
+    })
     this.changed()
   }
 
   private finish(entry: Entry, code: number | null) {
-    if (entry.killTimer) clearTimeout(entry.killTimer)
-    entry.killTimer = undefined
     const wasStopping = entry.info.status === 'stopping'
     entry.info.status = wasStopping ? 'stopped' : code === 0 ? 'exited' : 'failed'
     entry.info.exitCode = code
@@ -184,11 +193,11 @@ export class ProcessManager {
   async stop(id: string) {
     const entry = this.entries.get(id)
     if (!entry) throw new Error('Process not found.')
+    if (entry.stopping) await entry.stopping
     const child = entry.child
     if (!child || entry.info.status !== 'running') return entry.info
     entry.info.status = 'stopping'
     this.changed()
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
     const signal = (name: NodeJS.Signals) => {
       try {
         if (child.pid) process.kill(-child.pid, name)
@@ -196,9 +205,16 @@ export class ProcessManager {
         child.kill(name)
       }
     }
+    entry.stopping = new Promise<void>((resolve) => child.once('exit', () => resolve()))
     signal('SIGTERM')
-    entry.killTimer = setTimeout(() => signal('SIGKILL'), stopGraceMs)
-    await exited
+    // Not cancelled when the shell leading the group exits: what it started may ignore SIGTERM.
+    // (A group that's already gone just makes this a no-op.)
+    setTimeout(() => signal('SIGKILL'), stopGraceMs).unref()
+    try {
+      await entry.stopping
+    } finally {
+      entry.stopping = undefined
+    }
     return entry.info
   }
 

@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { RecentMap } from '../recent-map'
 import { AlertTriangle, Download, Maximize2, Minus, Plus, Workflow, X } from 'lucide-react'
 import { diagramKind, verticalFlowchart } from '../diagrams'
 import { CopyButton } from './CopyButton'
@@ -181,7 +182,8 @@ function config(dark: boolean) {
 // Draws one diagram at a time: Mermaid's config is global, so renders mustn't interleave.
 let queue: Promise<unknown> = Promise.resolve()
 let counter = 0
-const cache = new Map<string, string>()
+// Drawn SVGs, by theme and source (the most recent; each can be tens of KB).
+const cache = new RecentMap<string, string>(100)
 const cacheKey = (source: string, dark: boolean) => `${dark ? 'dark' : 'light'}\n${source}`
 function draw(source: string, dark: boolean): Promise<string> {
   const key = cacheKey(source, dark)

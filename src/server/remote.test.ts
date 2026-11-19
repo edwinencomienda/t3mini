@@ -478,3 +478,38 @@ describe('over Tailscale (HTTPS)', () => {
     expect(served).toContain(`stop ${port}`)
   })
 })
+
+it('ends the app’s live-update stream when the device goes away mid-stream', async () => {
+  // The app streams forever, like /api/events; it notes when its side is closed.
+  let closed!: () => void
+  const appSideClosed = new Promise<void>((resolve) => (closed = resolve))
+  const streaming = http.createServer((incoming, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.write('data: {}\n\n')
+    response.on('close', closed)
+  })
+  await new Promise<void>((resolve) => streaming.listen(0, '127.0.0.1', resolve))
+  await access.enable((streaming.address() as { port: number }).port)
+  const { cookie } = await pair()
+  // The phone opens the stream, gets the first event, then drops (asleep, new network).
+  await new Promise<void>((resolve, reject) => {
+    const outgoing = http.get(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/api/events',
+        headers: { host: `127.0.0.1:${port}`, cookie },
+      },
+      (response) => {
+        response.once('data', () => {
+          outgoing.destroy()
+          resolve()
+        })
+      },
+    )
+    outgoing.on('error', () => {})
+    setTimeout(() => reject(new Error('No event arrived.')), 2_000)
+  })
+  await appSideClosed
+  await new Promise((resolve) => streaming.close(resolve))
+})

@@ -4282,13 +4282,23 @@ body.resizing {
   background: var(--faint);
 }
 .process-chip.running .process-dot {
+  position: relative;
   background: var(--success);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 50%, transparent);
+}
+/* The pulse is a ring scaled and faded on the compositor (a box-shadow pulse repainted every
+   frame for as long as any process ran, even with the app idle). */
+.process-chip.running .process-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--success) 50%, transparent);
   animation: process-pulse 2s ease-in-out infinite;
 }
 @keyframes process-pulse {
   50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
+    transform: scale(2.15);
+    opacity: 0;
   }
 }
 .process-menu {
@@ -5652,22 +5662,22 @@ body.resizing {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -30%;
+  left: 0;
   width: 30%;
   background: var(--primary);
+  /* transform, not left: moves on the compositor without a layout every frame. */
   animation: status-slide 1.4s ease-in-out infinite;
 }
 .status-progress i.known {
-  left: 0;
   animation: none;
   transition: width 0.4s ease;
 }
 @keyframes status-slide {
   from {
-    left: -30%;
+    transform: translateX(-100%);
   }
   to {
-    left: 100%;
+    transform: translateX(333.33%);
   }
 }
 @media (prefers-reduced-motion: reduce) {

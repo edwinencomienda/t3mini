@@ -98,3 +98,42 @@ it('lists by project and caps running processes per project', async () => {
   expect(manager.list(project)).toHaveLength(10)
   expect(manager.list('/elsewhere')).toHaveLength(0)
 })
+it('restarting a process that is still stopping waits for it, and keeps track of the new run', async () => {
+  // Takes a moment to exit after SIGTERM, like a dev server shutting down.
+  const info = manager.start({
+    name: 'Slow to stop',
+    command: "trap 'sleep 0.3; exit 0' TERM; echo ready; while :; do sleep 0.05; done",
+    cwd: project,
+    project,
+  })
+  await until(() => manager.logs(info.id)?.includes('ready') ?? false)
+  const oldPid = manager.get(info.id)!.pid!
+  const stopping = manager.stop(info.id)
+  await manager.restart(info.id)
+  await stopping
+  expect(alive(oldPid)).toBe(false)
+  const newPid = manager.get(info.id)!.pid!
+  expect(newPid).not.toBe(oldPid)
+  // The old run ending didn't mark the new one as ended.
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  expect(manager.get(info.id)?.status).toBe('running')
+  await manager.stop(info.id)
+  expect(alive(newPid)).toBe(false)
+})
+it('still kills what a stopped shell started when it ignores SIGTERM', async () => {
+  const info = manager.start({
+    name: 'Stubborn child',
+    command: `sh -c 'trap "" TERM; echo "stubborn $$"; exec sleep 60' & exec sleep 60`,
+    cwd: project,
+    project,
+  })
+  await until(() => /stubborn \d+/.test(manager.logs(info.id) ?? ''))
+  const stubborn = Number(/stubborn (\d+)/.exec(manager.logs(info.id)!)![1])
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  // The shell exits on SIGTERM; the child it started doesn't.
+  await manager.stop(info.id)
+  expect(alive(stubborn)).toBe(true)
+  vi.advanceTimersByTime(5_000)
+  vi.useRealTimers()
+  await until(() => !alive(stubborn))
+})

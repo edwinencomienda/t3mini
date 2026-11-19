@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { RecentMap } from '../recent-map'
 import { threadApi } from '../hub'
 import { PreviewCard } from '@base-ui/react/preview-card'
 import { LoaderCircle } from 'lucide-react'
@@ -15,7 +16,7 @@ import { ProviderMark, providerNames } from './AgentSettingsControls'
 export const threadPreview = PreviewCard.createHandle<string>()
 export const ThreadPreviewTrigger = PreviewCard.Trigger
 
-const glances = new Map<string, ThreadGlance>()
+const glances = new RecentMap<string, ThreadGlance>(100)
 
 const dateTime = (iso: string) =>
   new Date(iso).toLocaleString([], {

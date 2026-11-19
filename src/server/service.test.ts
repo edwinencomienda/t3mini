@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,14 @@ import type { TitleWriter } from './titles'
 import type { ProviderContext, Runner, Steer } from './providers/types'
 
 let directory: string
+// What the thread store has on disk: one file per thread in threads/.
+const savedThreads = async () => {
+  const folder = join(directory, 'threads')
+  const names = (await readdir(folder)).filter((name) => name.endsWith('.json'))
+  return Promise.all(
+    names.map(async (name) => JSON.parse(await readFile(join(folder, name), 'utf8'))),
+  )
+}
 let service: AgentService
 let context: ProviderContext
 let finish: () => void
@@ -60,9 +68,7 @@ async function settle(id: string, action: () => void) {
 describe('agent lifecycle', () => {
   it('creates and persists threads with a validated project folder', async () => {
     const created = await thread()
-    expect(JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))[0].id).toBe(
-      created.id,
-    )
+    expect((await savedThreads())[0].id).toBe(created.id)
     await expect(
       service.create({ provider: 'codex', cwd: join(directory, 'missing') }),
     ).rejects.toThrow('does not exist')
@@ -149,7 +155,7 @@ it('saves thread settings and supplies them to the next provider run', async () 
   const created = await thread()
   const settings = { model: 'custom-model', effort: '', permissionMode: 'full-access' }
   await service.updateSettings(created.id, settings)
-  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))[0]
+  const saved = (await savedThreads())[0]
   expect(saved).toMatchObject(settings)
   await service.send(created.id, { text: 'Use these settings' })
   await started
@@ -204,7 +210,7 @@ it('renames a thread, trims the title, and rejects empty names', async () => {
   const created = await thread()
   const renamed = await service.rename(created.id, { title: '  Release prep  ' })
   expect(renamed.title).toBe('Release prep')
-  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
+  const saved = await savedThreads()
   expect(saved.find((item: { id: string }) => item.id === created.id).title).toBe('Release prep')
   await expect(service.rename(created.id, { title: '   ' })).rejects.toThrow()
   await service.send(created.id, { text: 'This should not replace a custom title' })
@@ -218,7 +224,7 @@ it('lets the agent rename only its own thread through the rename tool', async ()
   expect(await context.tools.rename('Login bug')).toBe('Login bug')
   expect(service.get(created.id).title).toBe('Login bug')
   expect(service.get(other.id).title).toBe('New thread')
-  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
+  const saved = await savedThreads()
   expect(saved.find((item: { id: string }) => item.id === created.id).title).toBe('Login bug')
   await settle(created.id, () => finish())
 })
@@ -588,7 +594,7 @@ it('removes a project together with its threads, unless one is running', async (
   expect(service.projects().map((project) => project.path)).not.toContain(busy)
   // Other projects' threads stay, and the deletion is saved.
   expect(service.get(elsewhere.id)).toBeTruthy()
-  const saved = JSON.parse(await readFile(join(directory, 'threads.json'), 'utf8'))
+  const saved = await savedThreads()
   expect(saved.map((item: { id: string }) => item.id)).toEqual([elsewhere.id])
 })
 it('switches agents mid-thread with a recap, and resumes a parked session on switching back', async () => {

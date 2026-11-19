@@ -647,6 +647,9 @@ export class RemoteAccess {
       if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain' })
       response.end('t3 mini is not reachable.')
     })
+    // The device went away (a phone sleeping or switching networks): end the app's side too,
+    // or its live-update stream keeps running for nobody.
+    response.on('close', () => upstream.destroy())
     request.pipe(upstream)
   }
 

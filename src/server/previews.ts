@@ -314,6 +314,7 @@ export class Previews {
       if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain' })
       response.end(`Nothing is answering on localhost:${preview.target}.`)
     })
+    response.on('close', () => upstream.destroy())
     request.pipe(upstream)
   }
 

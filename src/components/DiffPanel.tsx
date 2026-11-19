@@ -1,4 +1,5 @@
 import { Fragment, memo, useEffect, useRef, useState } from 'react'
+import { RecentMap } from '../recent-map'
 import { threadApi } from '../hub'
 import {
   ChevronRight,
@@ -34,7 +35,7 @@ function loadWidth() {
 }
 // Last diff per project (changes belong to the folder, not the thread), shown instantly on
 // switching while a fresh one loads. Every thread in a project shares it, so it is never stale.
-const diffs = new Map<string, DiffResult>()
+const diffs = new RecentMap<string, DiffResult>(10)
 // Files you opened, per project, so switching projects (or reloading) keeps them open.
 const openedKey = 't3-mini:diff-opened'
 type Opened = Record<string, boolean>
