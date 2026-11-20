@@ -189,14 +189,33 @@ struct DelegationCard: View {
             HStack(alignment: .top, spacing: 10) {
                 AgentLogo(provider: info.agent ?? .claude, size: 18).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(info.title).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-                    Text(meta).font(.caption).foregroundStyle(.secondary)
+                    Text(info.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                badge
+                // Status, and how long under it (counting up while it works).
+                VStack(alignment: .trailing, spacing: 3) {
+                    badge
+                    if active {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            if let time = elapsed(now: context.date) { timeText(time) }
+                        }
+                    } else if let time = elapsed(now: Date()) {
+                        timeText(time)
+                    }
+                }
             }
-            if let step = info.step, !step.isEmpty, info.status == "running" || info.status == "waiting" {
-                Text(step).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            // What it's doing now (often a command): one quiet line.
+            if let step = info.step, !step.isEmpty, active {
+                Text(step)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 8))
             }
             if let progress = info.todos, progress.total > 0 {
                 ProgressView(value: Double(progress.done), total: Double(progress.total)) {
@@ -235,26 +254,41 @@ struct DelegationCard: View {
             } else if let answer = info.answer, !answer.isEmpty, info.status == "done" {
                 Text(answer).font(.footnote).foregroundStyle(.secondary).lineLimit(4)
             }
-            if let id = info.id {
-                Button { model.pushThread = id } label: {
-                    Label("Open its thread", systemImage: "arrow.right.circle").font(.footnote.weight(.medium))
-                }
-                .buttonStyle(.borderless)
-            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.appSurface, in: .rect(cornerRadius: 14))
+        // The whole card opens its thread (the files toggle keeps its own tap).
+        .contentShape(.rect(cornerRadius: 14))
+        .onTapGesture { if let id = info.id { model.pushThread = id } }
+        .accessibilityAddTraits(info.id == nil ? [] : .isButton)
+        .accessibilityHint(info.id == nil ? "" : "Opens its thread")
     }
 
+    private func timeText(_ time: String) -> some View {
+        Text(time).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+    }
+
+    private var active: Bool { info.status == "running" || info.status == "waiting" }
+
+    /// "Claude · Can edit · Background": short, so it stays on one line.
     private var meta: String {
-        var parts = ["Sub-agent", info.agent == .codex ? "Codex" : "Claude"]
+        var parts = [info.agent == .codex ? "Codex" : "Claude"]
         parts.append(info.access == "read-only" ? "Read-only" : "Can edit")
-        if info.background == true { parts.append("In the background") }
-        if let start = info.startedAt.flatMap(RelativeTime.parse), let end = info.endedAt.flatMap(RelativeTime.parse), end >= start {
-            parts.append(Turn.duration(end.timeIntervalSince(start)))
-        }
+        if info.background == true { parts.append("Background") }
         return parts.joined(separator: " · ")
+    }
+
+    /// How long it took, or so far while it works ("4s", "14m 33s").
+    private func elapsed(now: Date) -> String? {
+        guard let start = info.startedAt.flatMap(RelativeTime.parse) else { return nil }
+        if let end = info.endedAt.flatMap(RelativeTime.parse), end >= start {
+            return Turn.duration(end.timeIntervalSince(start))
+        }
+        guard active else { return nil }
+        // Counting up once a second: whole seconds ("4s", not "4.3s").
+        let seconds = max(0, now.timeIntervalSince(start).rounded(.down))
+        return seconds < 10 ? "\(Int(seconds))s" : Turn.duration(seconds)
     }
 
     private var statusColor: Color {
@@ -273,6 +307,9 @@ struct DelegationCard: View {
             Text(info.status == "done" ? "Done" : info.status == "failed" ? "Failed" : info.status == "waiting" ? "Waiting"
                  : info.status == "stopped" ? "Stopped" : "Working")
                 .font(.caption.weight(.medium))
+            if info.id != nil {
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            }
         }
         .foregroundStyle(statusColor)
     }
