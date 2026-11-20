@@ -5002,11 +5002,18 @@ body.resizing {
 .new-thread-dialog .dialog-top {
   padding: 0.85rem 0.85rem 0.35rem 1rem;
 }
+.new-thread-machine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem 0.75rem;
+}
 .new-thread-dialog .project-search {
   border-top: 1px solid var(--border);
 }
 .new-thread-dialog .project-list {
-  max-height: min(22rem, calc(100dvh - 14rem));
+  max-height: min(22rem, calc(100dvh - 18rem));
 }
 .project-item-icon {
   display: inline-flex;

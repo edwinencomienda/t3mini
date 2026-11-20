@@ -109,6 +109,7 @@ import { SecretCard } from './SecretCard'
 import { CommandPalette } from './CommandPalette'
 import { ProjectSettings } from './ProjectSettings'
 import { Autocomplete } from '@base-ui/react/autocomplete'
+import { Select } from '@base-ui/react/select'
 import { SidebarResize } from './SidebarResize'
 import { ProjectFilter } from './ProjectFilter'
 import { CopyButton } from './CopyButton'
@@ -4628,6 +4629,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           <NewThread
             bootstrap={bootstrap}
             projects={projects}
+            machines={machines}
             projectName={projectName}
             projectIcons={projectIcons}
             initialProject={newThreadProject}
@@ -4678,6 +4680,7 @@ const noProject = ':no-project'
 function NewThread({
   bootstrap,
   projects,
+  machines,
   projectName,
   projectIcons,
   initialProject,
@@ -4688,6 +4691,7 @@ function NewThread({
   bootstrap: Bootstrap
   // Most recently active first.
   projects: ProjectSummary[]
+  machines: HubMachine[]
   projectName: (path: string) => string
   projectIcons: boolean
   initialProject: string
@@ -4696,6 +4700,7 @@ function NewThread({
   onCreated: (thread: Thread) => void
 }) {
   const [query, setQuery] = useState('')
+  const [machineFilter, setMachineFilter] = useState('all')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [now] = useState(() => Date.now())
@@ -4765,8 +4770,31 @@ function NewThread({
       project.path === noProject
         ? 'no project chat without'
         : `${projectName(project.path)} ${project.path}`.toLowerCase()
-    return words.every((word) => text.includes(word))
+    const machine = parseRemote(project.path)?.machine ?? ''
+    return (
+      (machineFilter === 'all' || machineFilter === `machine:${machine}`) &&
+      words.every((word) =>
+        `${text} ${project.machine ?? 'this computer'}`.toLowerCase().includes(word),
+      )
+    )
   })
+  const groups = [
+    {
+      label: 'This computer',
+      id: '',
+      items: shown.filter((project) => !parseRemote(project.path)),
+    },
+    ...machines.map((machine) => ({
+      label: machine.name,
+      id: machine.id,
+      items: shown.filter((project) => parseRemote(project.path)?.machine === machine.id),
+    })),
+  ].filter((group) => group.items.length)
+  const machineOptions = [
+    { value: 'all', label: 'All machines' },
+    { value: 'machine:', label: 'This computer' },
+    ...machines.map((machine) => ({ value: `machine:${machine.id}`, label: machine.name })),
+  ]
   return (
     <Modal
       className="new-dialog new-thread-dialog"
@@ -4786,12 +4814,49 @@ function NewThread({
           <X size={16} />
         </button>
       </div>
+      {machines.length ? (
+        <div className="new-thread-machine">
+          <span className="field-label" id="new-thread-where">
+            Where
+          </span>
+          <Select.Root
+            items={machineOptions}
+            value={machineFilter}
+            onValueChange={(value) => setMachineFilter(value ?? 'all')}
+          >
+            <Select.Trigger
+              className="mic-select"
+              aria-labelledby="new-thread-where"
+              disabled={Boolean(busy)}
+            >
+              <Select.Value className="mic-select-value" />
+              <Select.Icon className="mic-select-icon">
+                <ChevronsUpDown size={13} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Positioner className="picker-positioner" sideOffset={4} collisionPadding={8}>
+                <Select.Popup className="picker-menu mic-select-menu">
+                  {machineOptions.map((option) => (
+                    <Select.Item key={option.value} value={option.value} className="mic-option">
+                      <Select.ItemText>{option.label}</Select.ItemText>
+                      <Select.ItemIndicator className="picker-check">
+                        <Check size={14} />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  ))}
+                </Select.Popup>
+              </Select.Positioner>
+            </Select.Portal>
+          </Select.Root>
+        </div>
+      ) : null}
       {/* Base UI Autocomplete, inline: type to filter, ↑/↓ to move, Enter or click to create. */}
       <Autocomplete.Root
         inline
         open
-        items={shown}
-        filteredItems={shown}
+        items={groups}
+        filteredItems={groups}
         // The first match is always the one Enter picks (the current project when not searching).
         autoHighlight="always"
         value={query}
@@ -4811,45 +4876,60 @@ function NewThread({
           />
         </label>
         <Autocomplete.Empty className="palette-empty">
-          {query ? 'No project matches.' : 'No projects yet.'}
+          {query ? 'No project matches.' : 'No projects on this machine.'}
         </Autocomplete.Empty>
         <Autocomplete.List className="palette-list project-list">
-          {(project: ProjectSummary) => (
-            <Autocomplete.Item
-              key={project.path}
-              value={project}
-              className="palette-item project-item"
-              onClick={() => void create(project.path)}
-              disabled={Boolean(busy)}
-            >
-              <span className="project-item-icon">
-                {projectIcons || project.chats ? (
-                  <ProjectAvatar path={project.path} name={label(project)} project={project} />
-                ) : (
-                  <Folder size={15} />
+          {(group: { label: string; id: string; items: ProjectSummary[] }) => (
+            <Autocomplete.Group key={group.id} items={group.items} className="palette-group">
+              {machines.length ? (
+                <Autocomplete.GroupLabel className="palette-group-label">
+                  {group.label}
+                </Autocomplete.GroupLabel>
+              ) : null}
+              <Autocomplete.Collection>
+                {(project: ProjectSummary) => (
+                  <Autocomplete.Item
+                    key={project.path}
+                    value={project}
+                    className="palette-item project-item"
+                    onClick={() => void create(project.path)}
+                    disabled={Boolean(busy)}
+                  >
+                    <span className="project-item-icon">
+                      {projectIcons || project.chats ? (
+                        <ProjectAvatar
+                          path={project.path}
+                          name={label(project)}
+                          project={project}
+                        />
+                      ) : (
+                        <Folder size={15} />
+                      )}
+                    </span>
+                    <span className="palette-text">
+                      <span className="palette-label">
+                        {label(project)}
+                        {project.machine ? <MachineTag name={project.machine} /> : null}
+                      </span>
+                      <span className="palette-detail" title={machinePath(project.path)}>
+                        {project.path === noProject
+                          ? 'A chat with its own folder, outside your projects'
+                          : machinePath(project.path)}
+                      </span>
+                    </span>
+                    <span className="palette-hint">
+                      {busy === project.path ? (
+                        <LoaderCircle size={13} className="status-spinner" aria-label="Creating" />
+                      ) : project.path === current ? (
+                        'Current'
+                      ) : project.lastActiveAt ? (
+                        relativeTime(project.lastActiveAt, now)
+                      ) : null}
+                    </span>
+                  </Autocomplete.Item>
                 )}
-              </span>
-              <span className="palette-text">
-                <span className="palette-label">
-                  {label(project)}
-                  {project.machine ? <MachineTag name={project.machine} /> : null}
-                </span>
-                <span className="palette-detail" title={machinePath(project.path)}>
-                  {project.path === noProject
-                    ? 'A chat with its own folder, outside your projects'
-                    : machinePath(project.path)}
-                </span>
-              </span>
-              <span className="palette-hint">
-                {busy === project.path ? (
-                  <LoaderCircle size={13} className="status-spinner" aria-label="Creating" />
-                ) : project.path === current ? (
-                  'Current'
-                ) : project.lastActiveAt ? (
-                  relativeTime(project.lastActiveAt, now)
-                ) : null}
-              </span>
-            </Autocomplete.Item>
+              </Autocomplete.Collection>
+            </Autocomplete.Group>
           )}
         </Autocomplete.List>
       </Autocomplete.Root>

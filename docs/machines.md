@@ -7,7 +7,8 @@ Use t3 mini on another computer (a VPS, another Mac) from this one. Pair a machi
 1. On the other machine, install and start `t3mini` (see the README's **Install**) with Claude Code and/or Codex signed in there, and Tailscale signed in to the same tailnet as this Mac.
 2. Get a pairing link there: in its t3 mini, **Settings → Machines → Add this computer to another t3 mini → Get a pairing link** (pick Tailscale or Local network; **Copy link**), or run `t3mini pair` in a terminal (`--lan` for the local network). Either way it turns on that machine's gateway for other devices if it's off and makes a one-time link, valid 5 minutes, usable once. (Switching an active connection to the other kind asks first, since it drops devices using the old one.)
 3. On this Mac: **Settings → Machines**, paste the link (and a name if you like), **Add machine**.
-4. **Open** shows the machine's t3 mini in a new tab at a local address, `http://127.0.0.1:<port>`. Its threads, projects, agents, and files are all on that machine.
+4. To start a thread on it, open **New thread** and choose its project. Use **Where** to filter by machine; the combined list groups projects by machine.
+5. **Open** shows the machine's t3 mini in a new tab at a local address, `http://127.0.0.1:<port>`. Its threads, projects, agents, and files are all on that machine.
 
 **Remove** forgets the machine here and closes its address. To disconnect fully, also revoke this Mac on the other machine (Settings → Devices, where it's listed as `t3 mini · <this Mac's name>`).
 
