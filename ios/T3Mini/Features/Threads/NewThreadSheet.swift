@@ -14,17 +14,21 @@ struct NewThreadSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Project") {
-                    ForEach(projects) { project in
-                        Button {
-                            projectPath = project.path
-                        } label: {
-                            HStack(spacing: 12) {
-                                ProjectAvatar(name: project.displayName, project: project, size: 32)
-                                Text(project.displayName).foregroundStyle(.primary)
-                                Spacer()
-                                if projectPath == project.path {
-                                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                // One section per computer: this one first, then each machine paired to it (its
+                // threads run there; Hub.swift).
+                ForEach(groups, id: \.title) { group in
+                    Section(group.title) {
+                        ForEach(group.projects) { project in
+                            Button {
+                                projectPath = project.path
+                            } label: {
+                                HStack(spacing: 12) {
+                                    ProjectAvatar(name: project.displayName, project: project, size: 32)
+                                    Text(project.displayName).foregroundStyle(.primary)
+                                    Spacer()
+                                    if projectPath == project.path {
+                                        Image(systemName: "checkmark").foregroundStyle(.tint)
+                                    }
                                 }
                             }
                         }
@@ -57,6 +61,16 @@ struct NewThreadSheet: View {
         model.projects.sorted { a, b in
             if (a.chats == true) != (b.chats == true) { return a.chats == true }
             return (a.lastActiveAt ?? "") > (b.lastActiveAt ?? "")
+        }
+    }
+
+    /// The computer's own projects, then each machine's. With no machines, one "Project" list.
+    private var groups: [(title: String, projects: [ProjectSummary])] {
+        let mine = projects.filter { $0.machine == nil }
+        guard !model.machines.isEmpty else { return [("Project", mine)] }
+        return [("This computer", mine)] + model.machines.compactMap { machine in
+            let theirs = projects.filter { Hub.machine(of: $0.path) == machine.id }
+            return theirs.isEmpty ? nil : (machine.name, theirs)
         }
     }
 

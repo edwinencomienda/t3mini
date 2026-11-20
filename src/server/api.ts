@@ -23,6 +23,7 @@ import { pushIn } from './push'
 import { readApnsConfig, writeApnsConfig } from './apns'
 import { defaultStorePath } from './store'
 import { getMachines, isMachineError } from './machines'
+import { parseHubId } from './hub-watch'
 import { tailscaleStatus } from './tailscale'
 import { providerAccount } from './accounts'
 import {
@@ -236,11 +237,35 @@ export async function handleApi(request: Request) {
     // The hub: a machine's threads in this sidebar. /api/m/<machine>/<path> goes to that machine's
     // /api/<path> with its session (machines.ts forward(); only thread-related paths).
     if (parts[0] === 'm' && parts[1] && parts[2]) {
+      // A secret for a machine's thread (request_secret) from a paired device: like this
+      // computer's own secret route, only over HTTPS, so it never crosses the local network in
+      // plain text on its way to the machine.
+      if (
+        remote &&
+        parts[2] === 'threads' &&
+        parts[4] === 'secret' &&
+        request.headers.get(transportHeader) !== 'https'
+      )
+        throw new HttpError(
+          403,
+          'Secrets can only be sent from this device over HTTPS (Tailscale). Enter it on the computer instead.',
+        )
       const prefix = `/api/m/${parts[1]}/`
       return await machines.forward(
         decodeURIComponent(parts[1]),
         url.pathname.slice(prefix.length),
         request,
+      )
+    }
+    // The hub for paired devices (the iPhone app): the machines that are online, by id and name
+    // only, so it can show their threads through /api/m/<machine>/ like this computer's sidebar.
+    // Never their addresses or sessions; adding and removing machines stays Mac-only.
+    if (parts[0] === 'machines' && parts[1] === 'hub' && !parts[2] && request.method === 'GET') {
+      const list = await machines.list()
+      return Response.json(
+        list
+          .filter((machine) => machine.status === 'online')
+          .map((machine) => ({ id: machine.id, name: machine.name })),
       )
     }
     if (parts[0] === 'machines') {
@@ -506,8 +531,12 @@ export async function handleApi(request: Request) {
         const activities = activitiesFor(await getService())
         const deviceId = remote ? request.headers.get('x-t3-device') || undefined : undefined
         if (request.method === 'POST') {
+          const body = (await request.json()) as { thread?: unknown }
+          // A machine's thread: fetched now, and followed from then on (hub-watch.ts).
+          if (typeof body?.thread === 'string' && parseHubId(body.thread))
+            await (await getService()).hub?.load(body.thread)
           try {
-            await activities.register(await request.json(), deviceId)
+            await activities.register(body, deviceId)
           } catch (error) {
             if (error instanceof z.ZodError) throw error
             throw new HttpError(404, 'Thread not found.')

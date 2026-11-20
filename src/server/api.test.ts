@@ -115,6 +115,39 @@ it('takes secrets from a phone only over HTTPS, and never echoes the value', asy
     expect(await response.text()).not.toContain('sk-live-do-not-echo')
   }
 })
+it('lists machines to a phone by name only, and keeps machine secrets off plain HTTP', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  process.env.T3_MINI_DATA_DIR ??= await mkdtemp(join(tmpdir(), 't3-mini-api-'))
+  const { handleApi } = await import('./api')
+  const phone = (path: string, method = 'GET', transport = 'http') =>
+    handleApi(
+      new Request(`http://127.0.0.1:4310/api/${path}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-t3-remote': '1',
+          'x-t3-transport': transport,
+        },
+        ...(method === 'GET'
+          ? {}
+          : { body: JSON.stringify({ approvalId: 'secret:x', value: 'sk-x' }) }),
+      }),
+    )
+  // The hub list is open to a paired device (no machines here: an empty list)…
+  const hub = await phone('machines/hub')
+  expect(hub.status).toBe(200)
+  expect(await hub.json()).toEqual([])
+  // …managing machines isn't.
+  expect((await phone('machines')).status).toBe(403)
+  // A secret for a machine's thread from a phone on the local network: refused before it's sent.
+  const secret = await phone('m/some-machine/threads/t1/secret', 'POST')
+  expect(secret.status).toBe(403)
+  expect(await secret.text()).not.toContain('sk-x')
+  // Over HTTPS it goes on (here to "that machine isn't added").
+  expect((await phone('m/some-machine/threads/t1/secret', 'POST', 'https')).status).toBe(404)
+})
 it('hands a phone a dictation token only over HTTPS', async () => {
   const { mkdtemp } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')

@@ -108,6 +108,9 @@ export class LiveActivities {
     readonly path: string,
     private options: {
       thread: (id: string) => Thread | undefined
+      // A thread that isn't known yet but may be soon (a machine's, still being fetched after a
+      // restart): its activity waits instead of being dropped (until it's too old).
+      later?: (id: string) => boolean
       apns: { config: () => Promise<ApnsConfig | null>; send: ApnsSender }
       deviceExists?: (id: string) => boolean | Promise<boolean>
       now?: () => number
@@ -182,7 +185,8 @@ export class LiveActivities {
     await Promise.all(
       entries.map(async (entry) => {
         const thread = this.options.thread(entry.thread)
-        if (!thread || now - Date.parse(entry.createdAt) > maxAge) return void drop.add(entry.token)
+        if (now - Date.parse(entry.createdAt) > maxAge) return void drop.add(entry.token)
+        if (!thread) return void (this.options.later?.(entry.thread) || drop.add(entry.token))
         if (entry.deviceId && !(await this.options.deviceExists?.(entry.deviceId)))
           return void drop.add(entry.token)
         if (isRunning(thread.status) && !entry.active) {
@@ -257,9 +261,14 @@ export function watchActivities(
 
 // One per server process (kept across dev reloads, like push notifications).
 const globals = globalThis as typeof globalThis & { t3MiniActivities?: LiveActivities }
-export function activitiesIn(data: string, thread: (id: string) => Thread | undefined) {
+export function activitiesIn(
+  data: string,
+  thread: (id: string) => Thread | undefined,
+  later?: (id: string) => boolean,
+) {
   return (globals.t3MiniActivities ??= new LiveActivities(join(data, 'live-activities.json'), {
     thread,
+    ...(later ? { later } : {}),
     apns: { config: () => readApnsConfig(join(data, 'apns.json')), send: createApnsSender() },
     deviceExists: async (id) => (await getRemoteAccess(join(data, 'devices.json'))).devices.has(id),
   }))

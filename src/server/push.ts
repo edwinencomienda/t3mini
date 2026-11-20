@@ -392,6 +392,8 @@ export function watchThreads(
     projectName: (cwd: string) => string
     // Browsers you're using t3 mini in right now: no push there (the page shows it already).
     pushInUse?: () => ReadonlySet<string>
+    // An event for a thread you were looking at (not pushed), e.g. to mark it read.
+    watched?: (event: ThreadEvent) => void
   },
   push: Pick<PushNotifications, 'queue'>,
   delay = 500,
@@ -403,7 +405,10 @@ export function watchThreads(
     const threads = service.list()
     for (const event of threadEvents(previous, threads)) {
       if (event.kind === 'interrupted' || event.thread.parentId) continue
-      if (service.isWatching(event.thread.id)) continue
+      if (service.isWatching(event.thread.id)) {
+        service.watched?.(event)
+        continue
+      }
       push.queue(pushFor(event, service.projectName(event.thread.cwd)), service.pushInUse?.())
     }
     previous = new Map(threads.map((item) => [item.id, item.status]))

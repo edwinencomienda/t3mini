@@ -190,3 +190,32 @@ it('drops tokens Apple says are gone, from revoked devices, and when push isn’
   await activities.removeDevice('phone')
   expect(await activities.registered(token)).toBe(false)
 })
+it('keeps a machine thread’s activity while its thread is still being fetched', async () => {
+  const pending = new Set(['m~vps1~t1'])
+  const activities = new LiveActivities(join(directory, 'live-activities.json'), {
+    thread: (id) => threads.get(id),
+    later: (id) => pending.has(id),
+    apns: {
+      config: async () => config,
+      send: async (_config, message) => (sent.push(message), result),
+    },
+    deviceExists: (id) => devices.has(id),
+    now: () => now,
+  })
+  threads.set('m~vps1~t1', { ...thread('working', 1), id: 'm~vps1~t1' } as Thread)
+  await register(activities, { thread: 'm~vps1~t1' })
+  // After a restart the machine's thread isn't fetched yet: kept, nothing sent.
+  threads.delete('m~vps1~t1')
+  await activities.update()
+  expect(await activities.registered(token)).toBe(true)
+  expect(sent).toHaveLength(0)
+  // Fetched: updated as usual.
+  threads.set('m~vps1~t1', { ...thread('working', 2), id: 'm~vps1~t1' } as Thread)
+  await activities.update()
+  expect(sent).toHaveLength(1)
+  // Gone for good (not a thread that may come back): dropped.
+  pending.clear()
+  threads.delete('m~vps1~t1')
+  await activities.update()
+  expect(await activities.registered(token)).toBe(false)
+})

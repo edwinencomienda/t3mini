@@ -18,8 +18,30 @@ Use t3 mini on another computer (a VPS, another Mac) from this one. Pair a machi
 - **Creating:** **New thread** lists every machine's projects; picking one creates the thread there. The **+** on a machine's project does the same. **Add project** has an **On: This Mac | <machine>** choice; on a machine you type the path (Browse is this Mac's Finder). If the folder doesn't exist, **Create it and add** makes it (with any missing parents), only inside that computer's home folder. Add project always starts at `~/`.
 - **How:** the browser only talks to this server. `/api/m/<machine>/<path>` (`Machines.forward()` in `machines.ts`) forwards to the machine's `/api/<path>` with the session this server holds, streaming both ways (Server-Sent Events, media). Only what threads need is forwarded (`hubPaths`: bootstrap, events, threads, uploads, media, html, projects, models, search); device access, machines, settings, and dictation aren't. Request cookies and `x-t3-*` headers aren't passed on, and the machine's `Set-Cookie` never comes back.
 - **Ids:** in the browser a machine's thread is `m~<machine id>~<thread id>`, and its project folder `m~<machine id>~<path>` (`src/hub.ts`), so a machine's `/home/me/app` never merges with this computer's, and every call for it goes to the right place (`threadApi()`; content via the `ApiBase` context). Each machine has its own live stream (`/api/m/<id>/events`), merged in `Workspace.tsx`; the open machine thread's details come from its machine's stream.
-- **Only on this computer** for a machine's thread: Open in VS Code, Project settings, renaming or removing its project, and Copy link (`read_thread` here can't read a machine's threads). A paired phone doesn't see machines (managing them is Mac-only).
+- **Only on this computer** for a machine's thread: Open in VS Code, Project settings, renaming or removing its project, and Copy link (`read_thread` here can't read a machine's threads). Managing machines is Mac-only. The iPhone app shows them like the hub: see **On the iPhone** below.
 - **Versions:** creating folders needs the machine to run a t3 mini with this feature; an older one ignores `create` and answers "does not exist".
+
+## On the iPhone
+
+The iPhone app (paired with this computer) shows every online machine's threads and projects too, tagged with the machine's name, and starts threads on them from **New thread** (a section per machine). It works the same way as the web hub, through this computer: the phone never gets a machine's address or session.
+
+- `GET /api/machines/hub`: the online machines by id and name only, open to paired devices (adding, removing, and listing addresses stays Mac-only). The app checks it on connect and every minute.
+- Each machine streams through `/api/m/<machine>/events` (the app keeps one stream per machine; the machine whose thread is open also streams that thread), and every call for a machine's thread, upload, picture, video, or page goes through `/api/m/<machine>/…` (`ios/T3Mini/Models/Hub.swift`, `APIClient.threadPath`), with the same `m~<machine>~<id>` ids as the web.
+- A secret (`request_secret`) for a machine's thread is refused from a phone on the plain local network, like the computer's own secret route: only over HTTPS.
+- A machine that refuses this computer's session (expired or revoked) answers 502 through `/api/m/`, never 401, so the phone (and browsers) don't take it as their own pairing having ended.
+- `forward()` checks the resolved path too, so `threads/../remote` (or `%2e%2e`) can't reach the rest of a machine's API.
+- A machine's threads behave like this computer's on the phone: push notifications, Live Activities, and dictation words come from this computer (next section).
+
+## Push notifications and Live Activities for machines
+
+This computer follows every online machine itself (`src/server/hub-watch.ts`, started with the service), so a machine's threads get the same notifications as its own, with no browser or app open and **nothing new on the machine**:
+
+- **One live connection per online machine** to its `/api/events`, through `forward()` with the session this server holds; machines are checked every minute, and a dropped connection reconnects with a growing wait. Its threads get hub ids (`m~<machine>~<id>`).
+- **Push notifications:** a second `watchThreads()` over those threads (`push.ts`), with the same rules: finished, failed, or waiting; not helper threads or stopped turns; not a thread you're looking at in a tab here, and not to a browser you're using t3 mini in. The body names the machine ("Done · app · vps"), and tapping it opens the thread on the phone or in the browser.
+- **Read marks:** a machine's thread that finishes while you're looking at it here is marked read on the machine (`POST threads/<id>/read`), since the machine can't see this computer's tabs.
+- **Live Activities:** the app registers a machine's thread like any other; this computer fetches the whole thread then and again whenever it changes in the list (`HubWatch.load`, the 50 most recent), and `live-activities.ts` updates the activity from it. After a restart an activity waits for its thread to be fetched again instead of being dropped.
+- **Dictation words:** `dictationKeyterms()` fetches a machine's thread for its last replies.
+- They only arrive while this computer is on and can reach the machine, which is also when the phone can open those threads.
 
 ## How it works
 

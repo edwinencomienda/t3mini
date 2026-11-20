@@ -66,8 +66,11 @@ struct ThreadDetailsSheet: View {
 
                 Section("Project") {
                     LabeledContent("Project", value: model.projectName(for: info.cwd))
+                    if let machine = model.project(at: info.cwd)?.machine {
+                        LabeledContent("Machine") { MachineTag(name: machine) }
+                    }
                     Button {
-                        UIPasteboard.general.string = info.cwd
+                        UIPasteboard.general.string = Hub.local(info.cwd)
                         copiedPath = true
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
@@ -76,7 +79,7 @@ struct ThreadDetailsSheet: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Folder").foregroundStyle(.primary)
-                                Text(info.cwd)
+                                Text(Hub.local(info.cwd))
                                     .font(.footnote.monospaced())
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)

@@ -28,6 +28,131 @@ final class AppModel {
     private(set) var helpersByLead: [String: [ThreadSummary]] = [:]
     private(set) var projectsByPath: [String: ProjectSummary] = [:]
 
+    // MARK: Other machines (Hub.swift)
+
+    /// The machines paired to the computer that are online: their threads and projects join the
+    /// lists above, through the computer (one live stream each).
+    private(set) var machines: [HubMachine] = []
+    /// The computer's own threads and projects, and each machine's, merged into `threads` and
+    /// `projects`.
+    @ObservationIgnored private var localThreads: [ThreadSummary] = []
+    @ObservationIgnored private var localProjects: [ProjectSummary] = []
+    @ObservationIgnored private var hubThreads: [String: [ThreadSummary]] = [:]
+    @ObservationIgnored private var hubProjects: [String: [ProjectSummary]] = [:]
+    @ObservationIgnored private var hubStreams: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var machinesTask: Task<Void, Never>?
+
+    /// The machine the open thread is on (nil: the computer's own): where its pictures, media,
+    /// pages, and uploads are.
+    var openMachine: String? { Hub.machine(of: openThreadId) }
+
+    private func mergedThreads() -> [ThreadSummary] {
+        localThreads + machines.flatMap { hubThreads[$0.id] ?? [] }
+    }
+
+    private func mergedProjects() -> [ProjectSummary] {
+        localProjects + machines.flatMap { hubProjects[$0.id] ?? [] }
+    }
+
+    private func setProjects(local: [ProjectSummary]? = nil) {
+        if let local { localProjects = local }
+        let next = mergedProjects()
+        if next != projects { projects = next }
+    }
+
+    /// Which machines are online: now, then every minute. Offline ones drop out of the list until
+    /// they answer again (like the web app's sidebar).
+    private func watchMachines() {
+        machinesTask?.cancel()
+        machinesTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let client = self?.client, let list = try? await client.hubMachines() {
+                    self?.useMachines(list)
+                }
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+    }
+
+    private func useMachines(_ list: [HubMachine]) {
+        guard list != machines else { return }
+        machines = list
+        let ids = Set(list.map(\.id))
+        hubThreads = hubThreads.filter { ids.contains($0.key) }
+        hubProjects = hubProjects.filter { ids.contains($0.key) }
+        restartHubStreams()
+        receiveThreads(mergedThreads())
+        setProjects()
+    }
+
+    /// One live stream per machine (its threads and projects); the machine whose thread is open
+    /// also streams that thread, by its own id there.
+    private func restartHubStreams() {
+        for task in hubStreams.values { task.cancel() }
+        hubStreams = [:]
+        guard let client else { return }
+        let open = Hub.parse(openThreadId)
+        for machine in machines {
+            let followed = open?.machine == machine.id ? openThreadId : nil
+            hubStreams[machine.id] = Task { [weak self] in
+                var wait: UInt64 = 1
+                while !Task.isCancelled {
+                    do {
+                        for try await update in client.events(thread: followed.map(Hub.local), machine: machine.id) {
+                            guard let self else { return }
+                            wait = 1
+                            await self.applyHub(update, machine: machine, followed: followed, client: client)
+                        }
+                    } catch {
+                        // Unreachable for now (or its pairing ended): its threads stay as they were
+                        // until the next try, and the minute check drops it if it's offline.
+                        if Task.isCancelled { return }
+                    }
+                    if Task.isCancelled { return }
+                    try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
+                    wait = min(wait * 2, 30)
+                }
+            }
+        }
+    }
+
+    private func stopHubStreams() {
+        for task in hubStreams.values { task.cancel() }
+        hubStreams = [:]
+        machinesTask?.cancel()
+        machinesTask = nil
+    }
+
+    private func applyHub(_ update: LiveUpdate, machine: HubMachine, followed: String?, client: APIClient) async {
+        guard machines.contains(machine) else { return }
+        if let list = update.threads {
+            let mapped = list.map { $0.onMachine(machine) }
+            if mapped != hubThreads[machine.id] {
+                hubThreads[machine.id] = mapped
+                receiveThreads(mergedThreads())
+            }
+        }
+        if let list = update.projects {
+            let mapped = list.map { $0.onMachine(machine) }
+            if mapped != hubProjects[machine.id] {
+                hubProjects[machine.id] = mapped
+                setProjects()
+            }
+        }
+        guard let followed, followed == openThreadId else { return }
+        if threads.first(where: { $0.id == followed })?.unread == true {
+            Task { try? await client.markRead(followed) }
+        }
+        if let thread = update.thread { openThread = thread.map { $0.onMachine(machine.id) } }
+        if let patch = update.threadPatch {
+            if let current = openThread, let next = patch.onMachine(machine.id).apply(to: current) {
+                openThread = next
+            } else {
+                openThread = try? await client.thread(followed)
+            }
+        }
+    }
+
     // MARK: Swipe to delete, with Undo (like Mail and Gmail)
 
     /// Threads swiped away: hidden at once, deleted on the computer a few seconds later unless
@@ -121,7 +246,8 @@ final class AppModel {
         let target = folder.appending(path: DiskCache.hash(id) + "." + ext)
         if !FileManager.default.fileExists(atPath: target.path) {
             var temp: URL?
-            try await run { temp = try await client.downloadMedia(id) }
+            let machine = openMachine
+            try await run { temp = try await client.downloadMedia(id, machine: machine) }
             guard let temp else { throw APIError.badResponse }
             try? FileManager.default.removeItem(at: target)
             try FileManager.default.moveItem(at: temp, to: target)
@@ -162,8 +288,10 @@ final class AppModel {
     /// Bumped when a project's icon changed on the computer, so avatars redraw.
     private(set) var avatarRevision = 0
 
+    /// A picture in the open thread (on its machine, for a machine's thread).
     func imageData(_ id: String) async throws -> Data {
-        try await cachedImage("upload:" + id) { try await $0.image(id) }
+        let machine = openMachine
+        return try await cachedImage("upload:" + id) { try await $0.image(id, machine: machine) }
     }
 
     /// Images already decoded (shrunk for the conversation, or full size for the viewer), so a
@@ -243,7 +371,9 @@ final class AppModel {
     /// icon (unless icons are off on the computer, or it's set to its letter), else nil (letter).
     func projectAvatar(_ project: ProjectSummary) async -> Data? {
         if project.avatar == "image", let image = project.image {
-            guard let data = try? await imageData(image) else { return nil }
+            let machine = Hub.machine(of: project.path)
+            guard let data = try? await cachedImage("upload:" + image, load: { try await $0.image(image, machine: machine) })
+            else { return nil }
             return await SVGIcon.rasterizeIfNeeded(data)
         }
         guard project.avatar != "letter", project.icon == true, ui?.projectIcons != false else { return nil }
@@ -319,7 +449,7 @@ final class AppModel {
         let key = "\(id)|\(dark)|\(inline)"
         if let page = pages[key] { return page }
         guard let client else { throw APIError.unpaired }
-        let page = try await client.htmlPage(id, dark: dark, inline: inline, libraries: libraries)
+        let page = try await client.htmlPage(id, dark: dark, inline: inline, libraries: libraries, machine: openMachine)
         if pages.count > 40 { pages.removeAll() }
         pages[key] = page
         return page
@@ -487,6 +617,12 @@ final class AppModel {
         push = .off
         Keychain.delete()
         stopStream()
+        stopHubStreams()
+        machines = []
+        localThreads = []
+        localProjects = []
+        hubThreads = [:]
+        hubProjects = [:]
         client = nil
         connection = nil
         threads = []
@@ -514,6 +650,7 @@ final class AppModel {
         disk = cache
         Task.detached(priority: .background) { cache.trim() }
         restartStream()
+        watchMachines()
         startNotifications()
         // The bootstrap's extras (dictation available) aren't in live updates.
         Task { await refresh() }
@@ -531,6 +668,7 @@ final class AppModel {
         openThreadId = id
         openThread = id.flatMap { opened[$0] }
         restartStream()
+        if !machines.isEmpty { restartHubStreams() }
         if let id { Task { try? await client?.markRead(id) } }
     }
 
@@ -542,12 +680,14 @@ final class AppModel {
             heldTimer?.cancel()
             heldTimer = nil
             heldThreads = nil
-            if bootstrap.threads != threads {
-                announceFinished(bootstrap.threads)
-                threads = bootstrap.threads
+            localThreads = bootstrap.threads
+            let merged = mergedThreads()
+            if merged != threads {
+                announceFinished(merged)
+                threads = merged
                 LiveActivities.shared.sync(threads)
             }
-            if bootstrap.projects != projects { projects = bootstrap.projects }
+            setProjects(local: bootstrap.projects)
             if bootstrap.ui != ui { ui = bootstrap.ui }
             if (bootstrap.dictation ?? false) != dictationAvailable { dictationAvailable = bootstrap.dictation ?? false }
             if (bootstrap.dictationLive ?? true) != dictationLive { dictationLive = bootstrap.dictationLive ?? true }
@@ -573,7 +713,8 @@ final class AppModel {
             throw error
         }
         if let openThread, openThread.id == id { settleOutgoing(openThread) }
-        // On the lock screen while the agent works on it.
+        // On the lock screen while the agent works on it (a machine's thread too: the computer
+        // follows it and updates the activity, src/server/hub-watch.ts).
         let info = openThread?.id == id ? openThread?.info : nil
         let summary = threads.first { $0.id == id }
         let cwd = info?.cwd ?? summary?.cwd ?? ""
@@ -609,14 +750,16 @@ final class AppModel {
     func uploadFile(_ data: Data, name: String, mimeType: String) async throws -> String {
         guard let client else { throw APIError.unpaired }
         var path = ""
-        try await run { path = try await client.uploadFile(data, name: name, mimeType: mimeType) }
+        let machine = openMachine
+        try await run { path = try await client.uploadFile(data, name: name, mimeType: mimeType, machine: machine) }
         return path
     }
 
     func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
         guard let client else { throw APIError.unpaired }
         var saved: Attachment?
-        try await run { saved = try await client.uploadImage(data, name: name, mimeType: mimeType) }
+        let machine = openMachine
+        try await run { saved = try await client.uploadImage(data, name: name, mimeType: mimeType, machine: machine) }
         guard let saved else { throw APIError.badResponse }
         return saved
     }
@@ -886,7 +1029,8 @@ final class AppModel {
     private func restartStream() {
         stopStream()
         guard let client else { return }
-        let threadId = openThreadId
+        // A machine's thread streams from its machine (restartHubStreams).
+        let threadId = openMachine == nil ? openThreadId : nil
         streamTask = Task { [weak self] in
             var wait: UInt64 = 1
             while !Task.isCancelled {
@@ -976,21 +1120,24 @@ final class AppModel {
     private func apply(_ update: LiveUpdate, threadId: String?, client: APIClient) async {
         // Only real changes: @Observable redraws whatever reads a property on every assignment, and
         // while an agent works the thread list arrives several times a second.
-        if let threads = update.threads { receiveThreads(threads) }
-        if let projects = update.projects, projects != self.projects { self.projects = projects }
+        if let threads = update.threads, threads != localThreads {
+            localThreads = threads
+            receiveThreads(mergedThreads())
+        }
+        if let projects = update.projects { setProjects(local: projects) }
         if let ui = update.ui, ui != self.ui { self.ui = ui }
-        guard threadId == openThreadId else { return }
+        guard let threadId, threadId == openThreadId else { return }
         // It finished while you're looking at it: not unread.
-        if let id = threadId, threads.first(where: { $0.id == id })?.unread == true {
-            Task { try? await client.markRead(id) }
+        if threads.first(where: { $0.id == threadId })?.unread == true {
+            Task { try? await client.markRead(threadId) }
         }
         if let thread = update.thread { openThread = thread }
         if let patch = update.threadPatch {
             if let current = openThread, let next = patch.apply(to: current) {
                 openThread = next
-            } else if let id = threadId {
+            } else {
                 // A gap or a mismatch: load it whole again.
-                openThread = try? await client.thread(id)
+                openThread = try? await client.thread(threadId)
             }
         }
     }

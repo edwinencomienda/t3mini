@@ -166,7 +166,7 @@ struct ThreadListView: View {
             Picker("Show threads from", selection: $onlyProject) {
                 Text("All projects").tag(String?.none)
                 ForEach(model.projects.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }) { project in
-                    Text(project.displayName).tag(Optional(project.path))
+                    Text(project.listName).tag(Optional(project.path))
                 }
             }
         } label: {
@@ -293,7 +293,7 @@ extension ThreadListView {
         Button { attempt { try await model.regenerateTitle(thread.id) } } label: {
             Label("Regenerate title", systemImage: "sparkles")
         }
-        Button { UIPasteboard.general.string = thread.cwd } label: {
+        Button { UIPasteboard.general.string = Hub.local(thread.cwd) } label: {
             Label("Copy project path", systemImage: "doc.on.doc")
         }
         if thread.unread == true {
@@ -333,6 +333,24 @@ extension ThreadListView {
 
 /// The thread row's pressed look: a soft rounded highlight inset from the edges and a slight
 /// press-in, instead of the list's full-width grey flash.
+/// Another machine's thread or project (Hub.swift): a small tag with the machine's name, like
+/// the web sidebar's.
+struct MachineTag: View {
+    let name: String
+
+    var body: some View {
+        Label(name, systemImage: "server.rack")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            .accessibilityLabel("On \(name)")
+    }
+}
+
 struct ThreadRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -410,6 +428,7 @@ private struct SectionHeader: View {
                 case .project(let project, let name):
                     ProjectAvatar(name: name, project: project, size: 20, square: true)
                     Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    if let machine = project?.machine { MachineTag(name: machine) }
                 case .date(let label):
                     Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 }
@@ -450,11 +469,14 @@ struct ThreadRow: View, Equatable {
             // medium-weight title (semibold when unread), like a well-set mail list.
             VStack(alignment: .leading, spacing: 3) {
                 if showProject {
-                    Text(projectName)
-                        .font(.footnote)
-                        .tracking(0.1)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(projectName)
+                            .font(.footnote)
+                            .tracking(0.1)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if let machine = thread.machine { MachineTag(name: machine) }
+                    }
                 }
                 Text(thread.title)
                     .font(.callout.weight(unread ? .semibold : .medium))

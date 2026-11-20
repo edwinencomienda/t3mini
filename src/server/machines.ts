@@ -418,6 +418,11 @@ export class Machines {
     const first = path.split('/')[0] ?? ''
     if (!hubPaths.has(first)) return Response.json({ error: 'Not available.' }, { status: 404 })
     const target = new URL(`/api/${path}`, machine.origin)
+    // Checked again on the address as resolved: "threads/../remote" (or its %2e%2e spelling)
+    // passes the check above but would reach another part of the machine's API.
+    const parts = target.pathname.split('/')
+    if (target.origin !== machine.origin || parts[1] !== 'api' || !hubPaths.has(parts[2] ?? ''))
+      return Response.json({ error: 'Not available.' }, { status: 404 })
     target.search = new URL(request.url).search
     const headers = new Headers({
       cookie: `${machine.cookie}=${machine.token}`,
@@ -441,6 +446,18 @@ export class Machines {
     } catch {
       return Response.json(
         { error: `Can’t reach ${machine.name}. Is it on, and on the same tailnet?` },
+        { status: 502 },
+      )
+    }
+    // The machine refused this computer's session (expired or revoked): said as the machine
+    // being unreachable, not as a 401, which a browser or the iPhone app would take as its own
+    // session to this computer having ended.
+    if (reply.status === 401) {
+      await reply.body?.cancel()
+      return Response.json(
+        {
+          error: `${machine.name}’s pairing expired or was revoked. Pair it again under Settings → Machines.`,
+        },
         { status: 502 },
       )
     }

@@ -93,6 +93,8 @@ import { replaceHtmlBlock } from './html-pages'
 import { pushIn, watchThreads } from './push'
 import { saveSecret } from './secret-file'
 import { activitiesIn, watchActivities } from './live-activities'
+import { getHubWatch, parseHubId, type HubWatch } from './hub-watch'
+import { getMachines } from './machines'
 import { settingsSchema } from './provider-settings'
 import { cachedModels, checkEffort, getModels, validateEffort, warmModels } from './models'
 
@@ -277,6 +279,8 @@ export class AgentService {
   readonly icons: ProjectIcons
   // Open tabs everywhere, to pick the one that notifies (see tabs.ts).
   readonly tabs = new TabRegistry(() => this.notify())
+  // Other machines' threads, followed by this server (hub-watch.ts); set by getService().
+  hub?: HubWatch
   // View settings shared by every browser (Group by…).
   readonly ui: UiStore
   // How often agents check UI changes in the browser (Settings → Agents).
@@ -2123,7 +2127,8 @@ export class AgentService {
   // Unusual words from the agent's last two replies, to help dictation spell them (see
   // keyterms.ts for what is and isn't sent). Unknown threads simply get none.
   async dictationKeyterms(id: string) {
-    const thread = this.store.threads.get(id)
+    // A machine's thread (the iPhone app's hub): its replies, fetched from the machine.
+    const thread = parseHubId(id) ? await this.hub?.load(id) : this.store.threads.get(id)
     const replies = (thread?.messages ?? [])
       .filter((message) => message.role === 'assistant' && message.text)
       .slice(-2)
@@ -2420,13 +2425,24 @@ export class AgentService {
 }
 // The Live Activities store, reading threads from this service.
 export function activitiesFor(service: AgentService) {
-  return activitiesIn(dirname(service.store.path), (id) => {
-    try {
-      return service.get(id)
-    } catch {
-      return undefined
-    }
-  })
+  return activitiesIn(
+    dirname(service.store.path),
+    (id) => {
+      // A machine's thread: its latest whole copy, kept current by the hub watch.
+      if (parseHubId(id)) return service.hub?.thread(id)
+      try {
+        return service.get(id)
+      } catch {
+        return undefined
+      }
+    },
+    (id) => {
+      // Not fetched yet (e.g. just restarted): fetch it, and keep its activity meanwhile.
+      if (!parseHubId(id) || !service.hub) return false
+      void service.hub.load(id)
+      return true
+    },
+  )
 }
 const globals = globalThis as typeof globalThis & { t3MiniService?: Promise<AgentService> }
 export function getService() {
@@ -2457,6 +2473,26 @@ export function getService() {
     )
     // Live Activities on the iPhone app's lock screen (live-activities.ts): kept current too.
     watchActivities(service, activitiesFor(service))
+    // Other machines (hub-watch.ts): this server follows each one's threads, so they get the same
+    // push notifications, Live Activities, and read marks as this computer's own.
+    const hub = getHubWatch(getMachines(join(dirname(store.path), 'machines.json')))
+    service.hub = hub
+    hub.start()
+    watchThreads(
+      {
+        subscribe: (listener) => hub.subscribe(listener),
+        list: () => hub.list(),
+        isWatching: (id) => service.tabs.isWatching(id),
+        pushInUse: () => service.tabs.pushInUse(),
+        projectName: (cwd) => hub.projectName(cwd),
+        // Finished while you were looking at it here: read on the machine too.
+        watched: (event) => {
+          if (event.kind !== 'waiting') void hub.markRead(event.thread.id)
+        },
+      },
+      push,
+    )
+    watchActivities(hub, activitiesFor(service))
     return service
   })())
 }

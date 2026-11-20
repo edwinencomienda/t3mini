@@ -32,6 +32,8 @@ beforeEach(async () => {
       return
     }
     if (request.headers.cookie !== 't3m_session=secret-token') return response.writeHead(401).end()
+    // As if this computer's session on the machine had been revoked.
+    if (request.url?.startsWith('/api/threads/revoked')) return response.writeHead(401).end()
     if (request.url === '/go') {
       response.writeHead(302, { Location: `${origin}/api/bootstrap`, 'Set-Cookie': 'x=1' }).end()
       return
@@ -168,4 +170,38 @@ it('keeps the machine’s cookies out of forwarded replies and says when it’s 
   )
   expect(down.status).toBe(502)
   gateway = http.createServer().listen(0)
+})
+it('reports a machine that refused this computer’s session as unreachable, never as a 401', async () => {
+  const added = await machines.add({ link: `${origin}/pair?code=${code}` })
+  const reply = await machines.forward(
+    added.id,
+    'threads/x',
+    new Request(`http://127.0.0.1:4011/api/m/${added.id}/threads/x`),
+  )
+  expect(reply.status).toBe(200)
+  // The iPhone app and browsers take a 401 as their own pairing to this computer having ended.
+  const refused = await machines.forward(
+    added.id,
+    'threads/revoked',
+    new Request(`http://127.0.0.1:4011/api/m/${added.id}/threads/revoked`),
+  )
+  expect(refused.status).toBe(502)
+  expect(await refused.text()).toContain('Pair it again')
+})
+it('checks the resolved path, so dot segments can’t reach the rest of a machine’s API', async () => {
+  const added = await machines.add({ link: `${origin}/pair?code=${code}` })
+  for (const path of [
+    'threads/../remote/pair',
+    'threads/%2e%2e/machines',
+    'threads/%2E%2E/dictation',
+  ])
+    expect(
+      (
+        await machines.forward(
+          added.id,
+          path,
+          new Request(`http://127.0.0.1:4011/api/m/${added.id}/threads/x`),
+        )
+      ).status,
+    ).toBe(404)
 })

@@ -104,14 +104,33 @@ final class APIClient: Sendable {
     }
 
     func thread(_ id: String) async throws -> ChatThread {
-        try await call("threads/\(id.urlPathEscaped)")
+        let thread: ChatThread = try await call(threadPath(id))
+        return Hub.machine(of: id).map { thread.onMachine($0) } ?? thread
+    }
+
+    /// The machines paired to the computer that are online (names only; GET /api/machines/hub).
+    func hubMachines() async throws -> [HubMachine] {
+        try await call("machines/hub")
+    }
+
+    // MARK: Other machines (Hub.swift)
+
+    /// Where a machine's calls go: "m/<machine>/" before the API path; nothing for the computer's own.
+    private func base(_ machine: String?) -> String {
+        machine.map { "m/\($0.urlPathEscaped)/" } ?? ""
+    }
+
+    /// "threads/<id>" here, "m/<machine>/threads/<id>" for a machine's thread.
+    private func threadPath(_ id: String) -> String {
+        guard let hub = Hub.parse(id) else { return "threads/\(id.urlPathEscaped)" }
+        return "\(base(hub.machine))threads/\(hub.id.urlPathEscaped)"
     }
 
     /// A saved image (an attachment, or one a tool showed), by its generated id.
     /// A saved video or sound (show_video, play_audio: GET /api/media/:id), downloaded with this
     /// phone's session to a temporary file. The caller moves it somewhere to keep.
-    func downloadMedia(_ id: String) async throws -> URL {
-        let url = URL(string: "api/media/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL
+    func downloadMedia(_ id: String, machine: String? = nil) async throws -> URL {
+        let url = URL(string: "api/\(base(machine))media/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL
         let (file, response) = try await session.download(for: authorized(URLRequest(url: url)))
         guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
         if http.statusCode == 401 { throw APIError.unpaired }
@@ -119,15 +138,16 @@ final class APIClient: Sendable {
         return file
     }
 
-    func image(_ id: String) async throws -> Data {
-        try await imageAt(URL(string: "api/uploads/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL)
+    func image(_ id: String, machine: String? = nil) async throws -> Data {
+        try await imageAt(URL(string: "api/\(base(machine))uploads/\(id.urlPathEscaped)", relativeTo: connection.server)!.absoluteURL)
     }
 
     /// An agent's HTML page (show_html), finished by the server: its CSP first (no network), the
     /// theme, and bundled libraries. Loaded into a sealed web view by HtmlPageView.
-    func htmlPage(_ id: String, dark: Bool, inline: Bool, libraries: [String]) async throws -> String {
+    func htmlPage(_ id: String, dark: Bool, inline: Bool, libraries: [String], machine: String? = nil) async throws -> String {
         var components = URLComponents(
-            url: connection.server.appending(path: "api/html/\(id.urlPathEscaped)/page"), resolvingAgainstBaseURL: false)!
+            url: URL(string: "api/\(base(machine))html/\(id.urlPathEscaped)/page", relativeTo: connection.server)!.absoluteURL,
+            resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "theme", value: dark ? "dark" : "light"),
             URLQueryItem(name: "inline", value: inline ? "1" : "0"),
@@ -141,8 +161,11 @@ final class APIClient: Sendable {
 
     /// A project's own icon (its favicon or app icon).
     func projectIcon(_ path: String) async throws -> Data {
-        var components = URLComponents(url: connection.server.appending(path: "api/projects/icon"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        let machine = Hub.machine(of: path)
+        var components = URLComponents(
+            url: URL(string: "api/\(base(machine))projects/icon", relativeTo: connection.server)!.absoluteURL,
+            resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "path", value: Hub.local(path))]
         return try await imageAt(components.url!)
     }
 
@@ -186,8 +209,8 @@ final class APIClient: Sendable {
 
     func models(provider: Provider, cwd: String?) async throws -> [ModelOption] {
         struct Catalog: Decodable { let models: [ModelOption] }
-        var query = "models?provider=\(provider.rawValue)"
-        if let cwd, let escaped = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))) {
+        var query = "\(base(Hub.machine(of: cwd)))models?provider=\(provider.rawValue)"
+        if let cwd = cwd.map(Hub.local), let escaped = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))) {
             query += "&cwd=\(escaped)"
         }
         let catalog: Catalog = try await call(query)
@@ -195,7 +218,7 @@ final class APIClient: Sendable {
     }
 
     func updateSettings(_ id: String, to choice: AgentChoice) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/settings", method: "POST", body: [
+        let _: Empty = try await call("\(threadPath(id))/settings", method: "POST", body: [
             "provider": choice.provider.rawValue, "model": choice.model, "effort": choice.effort,
             "serviceTier": choice.serviceTier, "permissionMode": choice.permissionMode,
         ])
@@ -203,16 +226,16 @@ final class APIClient: Sendable {
 
     func pullRequest(_ id: String) async throws -> PullRequest? {
         struct Result: Decodable { let pullRequest: PullRequest? }
-        let result: Result = try await call("threads/\(id.urlPathEscaped)/pull-request")
+        let result: Result = try await call("\(threadPath(id))/pull-request")
         return result.pullRequest
     }
 
     func diff(_ id: String) async throws -> DiffResult {
-        try await call("threads/\(id.urlPathEscaped)/diff")
+        try await call("\(threadPath(id))/diff")
     }
 
     func git(_ id: String) async throws -> GitInfo {
-        try await call("threads/\(id.urlPathEscaped)/git")
+        try await call("\(threadPath(id))/git")
     }
 
     func send(_ text: String, attachments: [Attachment] = [], to id: String) async throws {
@@ -221,24 +244,24 @@ final class APIClient: Sendable {
             let attachments: [Item]
             struct Item: Encodable { let id: String; let name: String }
         }
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/send", method: "POST",
+        let _: Empty = try await call("\(threadPath(id))/send", method: "POST",
                                       body: Body(text: text, attachments: attachments.map { .init(id: $0.id, name: $0.name) }))
     }
 
     /// Saves a photo on the computer (POST /api/uploads); send it with a message by its id.
     /// Any other file: saved on the computer (like dropping a file on the web); returns its path
     /// there, for the message.
-    func uploadFile(_ data: Data, name: String, mimeType: String) async throws -> String {
+    func uploadFile(_ data: Data, name: String, mimeType: String, machine: String? = nil) async throws -> String {
         struct Saved: Decodable { let path: String }
-        let saved: Saved = try await call("uploads", method: "POST", body: [
+        let saved: Saved = try await call("\(base(machine))uploads", method: "POST", body: [
             "kind": "file", "name": name, "mimeType": mimeType, "data": data.base64EncodedString(),
         ])
         return saved.path
     }
 
-    func uploadImage(_ data: Data, name: String, mimeType: String) async throws -> Attachment {
+    func uploadImage(_ data: Data, name: String, mimeType: String, machine: String? = nil) async throws -> Attachment {
         struct Saved: Decodable { let id: String; let mimeType: String }
-        let saved: Saved = try await call("uploads", method: "POST", body: [
+        let saved: Saved = try await call("\(base(machine))uploads", method: "POST", body: [
             "kind": "image", "name": name, "mimeType": mimeType, "data": data.base64EncodedString(),
         ])
         return Attachment(id: saved.id, name: name, mimeType: saved.mimeType)
@@ -326,31 +349,31 @@ final class APIClient: Sendable {
     }
 
     func stop(_ id: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/stop", method: "POST", body: [String: String]())
+        let _: Empty = try await call("\(threadPath(id))/stop", method: "POST", body: [String: String]())
     }
 
     func rename(_ id: String, title: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/rename", method: "POST", body: ["title": title])
+        let _: Empty = try await call("\(threadPath(id))/rename", method: "POST", body: ["title": title])
     }
 
     /// A fresh AI title from the conversation (Claude's session title, Luna for Codex).
     func regenerateTitle(_ id: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/title", method: "POST", body: [String: String]())
+        let _: Empty = try await call("\(threadPath(id))/title", method: "POST", body: [String: String]())
     }
 
     /// Deletes the thread on the computer (refused while its agent works).
     func deleteThread(_ id: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)", method: "DELETE")
+        let _: Empty = try await call("\(threadPath(id))", method: "DELETE")
     }
 
     func markRead(_ id: String) async throws {
-        let _: Empty = try await call("threads/\(id.urlPathEscaped)/read", method: "POST", body: [String: String]())
+        let _: Empty = try await call("\(threadPath(id))/read", method: "POST", body: [String: String]())
     }
 
     func approve(_ id: String, approvalId: String, allow: Bool, answers: [String: String]? = nil) async throws {
         struct Body: Encodable { let approvalId: String; let allow: Bool; let answers: [String: String]? }
         let _: Empty = try await call(
-            "threads/\(id.urlPathEscaped)/approve", method: "POST",
+            "\(threadPath(id))/approve", method: "POST",
             body: Body(approvalId: approvalId, allow: allow, answers: answers))
     }
 
@@ -359,7 +382,7 @@ final class APIClient: Sendable {
     func provideSecret(_ id: String, approvalId: String, value: String) async throws {
         struct Body: Encodable { let approvalId: String; let value: String }
         let _: Empty = try await call(
-            "threads/\(id.urlPathEscaped)/secret", method: "POST",
+            "\(threadPath(id))/secret", method: "POST",
             body: Body(approvalId: approvalId, value: value))
     }
 
@@ -379,18 +402,25 @@ final class APIClient: Sendable {
             let permissionMode: String?
             let serviceTier: String?
         }
+        // A machine's project: created on that machine, with its own folder path.
+        let machine = Hub.machine(of: project?.path)
         let body = Body(
             provider: provider,
-            cwd: project?.chats == true ? nil : project?.path,
+            cwd: project?.chats == true ? nil : project.map { Hub.local($0.path) },
             noProject: project == nil || project?.chats == true ? true : nil,
             model: settings?.model, effort: settings?.effort,
             permissionMode: settings?.permissionMode, serviceTier: settings?.serviceTier)
-        return try await call("threads", method: "POST", body: body)
+        let created: ChatThread = try await call("\(base(machine))threads", method: "POST", body: body)
+        return machine.map { created.onMachine($0) } ?? created
     }
 
     /// Live updates (Server-Sent Events). `thread`: the open thread, sent whole then as patches.
-    func events(thread: String?) -> AsyncThrowingStream<LiveUpdate, Error> {
-        var components = URLComponents(url: connection.server.appending(path: "api/events"), resolvingAgainstBaseURL: false)!
+    /// `machine`: another machine's updates (its threads and projects, and `thread` on it, by its
+    /// own id), through the computer.
+    func events(thread: String?, machine: String? = nil) -> AsyncThrowingStream<LiveUpdate, Error> {
+        var components = URLComponents(
+            url: URL(string: "api/\(base(machine))events", relativeTo: connection.server)!.absoluteURL,
+            resolvingAgainstBaseURL: false)!
         // append=1: a streaming reply comes as just its new text (servers that don't know it ignore it).
         components.queryItems = [URLQueryItem(name: "patch", value: "1"), URLQueryItem(name: "append", value: "1")]
             + (thread.map { [URLQueryItem(name: "thread", value: $0)] } ?? [])

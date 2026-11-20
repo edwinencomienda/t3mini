@@ -23,7 +23,7 @@ enum ThreadStatus: String, Codable, Sendable {
 }
 
 struct ThreadSummary: Codable, Identifiable, Hashable, Sendable {
-    let id: String
+    var id: String
     var title: String
     var provider: Provider
     var cwd: String
@@ -34,10 +34,12 @@ struct ThreadSummary: Codable, Identifiable, Hashable, Sendable {
     var parentId: String?
     var chat: Bool?
     var unread: Bool?
+    /// Another machine's thread (Hub.swift): that machine's name. Nil for the computer's own.
+    var machine: String?
 }
 
 struct ProjectSummary: Codable, Identifiable, Hashable, Sendable {
-    let path: String
+    var path: String
     var name: String?
     var chats: Bool?
     var lastActiveAt: String?
@@ -48,6 +50,8 @@ struct ProjectSummary: Codable, Identifiable, Hashable, Sendable {
     /// Chosen in Project settings on the computer: "letter", "image" (with `image`, an upload id).
     var avatar: String?
     var image: String?
+    /// Another machine's project (Hub.swift): that machine's name. Nil for the computer's own.
+    var machine: String?
     var id: String { path }
 
     var displayName: String {
@@ -168,7 +172,7 @@ struct SecretRequest: Codable, Hashable, Sendable {
 
 /// The fields of a thread other than its messages and steps (a patch's `rest`).
 struct ThreadInfo: Codable, Hashable, Sendable {
-    let id: String
+    var id: String
     var title: String
     var provider: Provider
     var cwd: String
