@@ -187,3 +187,25 @@ export async function validateEffort(
     throw new Error('Choose a model before selecting an effort level or service tier.')
   checkEffort(await getModels(provider, cwd), settings)
 }
+// A model list as text for agents (list_models): the same choices the composer's picker shows.
+export function describeModels(agent: string, models: ModelOption[]) {
+  if (!models.length) return `${agent}: no models listed.`
+  const lines = models.map((model) => {
+    const parts = [
+      `- ${model.id}${model.label && model.label !== model.id ? ` (${model.label})` : ''}`,
+    ]
+    if (model.isDefault) parts.push('[default]')
+    if (model.description)
+      parts[parts.length - 1] += `: ${model.description.replace(/\s+/g, ' ').trim()}`
+    const details = [
+      model.efforts.length
+        ? `efforts: ${model.efforts.join(', ')}${model.defaultEffort ? ` (default ${model.defaultEffort})` : ''}`
+        : 'no effort levels',
+      model.serviceTiers?.length
+        ? `service tiers: ${model.serviceTiers.map((tier) => tier.id).join(', ')}`
+        : '',
+    ].filter(Boolean)
+    return `${parts.join(' ')}\n  ${details.join('; ')}`
+  })
+  return `${agent} models:\n${lines.join('\n')}`
+}

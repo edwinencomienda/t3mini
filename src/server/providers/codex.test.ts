@@ -194,6 +194,7 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'delegate_task',
     'list_delegations',
     'stop_delegation',
+    'list_models',
     'start_process',
     'list_processes',
     'process_logs',

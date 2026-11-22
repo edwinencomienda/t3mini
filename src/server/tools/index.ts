@@ -60,7 +60,8 @@ export const toolInstructions = [
     'one, Claude or Codex, only when the user asks) working in this folder: wait for its answer, ' +
     'or start several in the background (wait: false) and they report back as they finish. Use ' +
     'it for work worth splitting off: research, reviews, tests, independent parts of a feature. ' +
-    'It is the default whenever you want to split up work or run things in parallel.',
+    'It is the default whenever you want to split up work or run things in parallel. ' +
+    'list_models shows the models, effort levels, and service tiers you can give it.',
   '- start_thread starts helper threads (separate threads in the sidebar, each in its own git ' +
     'worktree and branch); they report back here when they finish. Only use it when the user ' +
     'explicitly asks for threads, helper threads, worktrees, or separate branches; otherwise ' +

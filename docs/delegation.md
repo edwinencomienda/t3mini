@@ -6,13 +6,14 @@ By default a sub-agent is the **same agent** as its thread. The agent picks the 
 
 ## Using it
 
-Ask for it in plain words: "Use a sub-agent to research how the API paginates", "Split this up: one sub-agent writes the tests, another updates the docs", or "Have Codex review this file". The agent uses three tools:
+Ask for it in plain words: "Use a sub-agent to research how the API paginates", "Split this up: one sub-agent writes the tests, another updates the docs", or "Have Codex review this file". The agent uses four tools:
 
-| Tool               | What it does                                                                                                                         | Asks first?             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| `delegate_task`    | Starts a sub-agent with a task, or follows up with an existing one (`continue`). Waits for its answer, or runs it in the background. | Yes, unless full access |
-| `list_delegations` | The thread's sub-agents: id, title, agent, status, files changed, start of the answer.                                               | No                      |
-| `stop_delegation`  | Stops one. Files it already changed stay changed.                                                                                    | No                      |
+| Tool               | What it does                                                                                                                                                      | Asks first?             |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `delegate_task`    | Starts a sub-agent with a task, or follows up with an existing one (`continue`). Waits for its answer, or runs it in the background.                              | Yes, unless full access |
+| `list_delegations` | The thread's sub-agents: id, title, agent, status, files changed, start of the answer.                                                                            | No                      |
+| `stop_delegation`  | Stops one. Files it already changed stay changed.                                                                                                                 | No                      |
+| `list_models`      | The models each agent offers (or one agent's), the same list as the composer's model picker: id, name, description, effort levels, default effort, service tiers. | No                      |
 
 `delegate_task` options:
 
@@ -21,7 +22,7 @@ Ask for it in plain words: "Use a sub-agent to research how the API paginates", 
 - `wait`: `true` (default) returns the sub-agent's answer as the tool result; `false` returns at once, and its result arrives later as a report message, so the agent can start several and keep working or end its turn.
 - `access`: `edit` (default) or `read-only`, which tells the sub-agent to look and report without changing files. It's an instruction, not a restriction: every sub-agent has the same capabilities as its thread (the thread's permission mode, network, commands, and tools), so a read-only task can still run `gh`, call APIs, or run tests.
 - `context`: `thread` (default) starts it with a recap of the conversation's recent turns; `none` sends only the task.
-- `model`, `effort`: optional. Otherwise the same agent keeps the thread's model and effort, and the other agent uses your last settings for it.
+- `model`, `effort`, `serviceTier`: optional, from `list_models`. Otherwise the same agent keeps the thread's model and effort, and the other agent uses your last settings for it. An effort or tier given without a model tunes the model it would get anyway. Choices are checked against the model list, like the composer's picker: an unknown model, or an effort or tier that model doesn't offer, is refused with the valid choices (if the agent's CLI can't list its models, they're let through).
 - `continue`: a sub-agent's id, to send it a follow-up. It keeps its memory (its own session).
 
 ## What you see
@@ -59,13 +60,13 @@ Sub-agents and their thread all work in one folder, so:
 - **No timeout:** a sub-agent runs until it's done. Stopping the thread's turn stops the sub-agents it was waiting for; background ones keep going until you or the agent stop them. Deleting the thread stops and deletes its sub-agents (files they changed stay).
 - **Reports count toward the 10 automatic turns** in a row (see orchestration.md), so report → reply loops can't run forever.
 - **After a restart**, sub-agents that were running are marked stopped, like any interrupted turn.
-- **Codex** threads get their tools when they're created, so Codex threads made before this feature can't delegate.
+- **Codex** threads get their tools when they're created, so Codex threads made before this feature can't delegate, and ones made before `list_models` existed don't have it.
 
 ## How it works
 
 - A sub-agent is a thread with `delegateOf` (its lead), `workIn` (the lead's folder; it never owns a worktree or chat folder, so deleting it can't remove the lead's), and `delegate` (`access`, `background`). `AgentService.list()` and `projects()` leave sub-agents out of the sidebar, search, and project counts; `busy()` still counts them.
 - `src/server/delegations.ts`: the brief, the card (`DelegationBlock` in `src/blocks.ts`, built from the sub-agent's thread), changed-file tracking (`changedFiles`, `folderState`, `changedBetween`, `ownChanges`), the result and report text, and `stopLeftoverCards` (used by `store.ts` on load).
-- `src/server/tools/delegate.ts`: the three tools, calling `ToolContext.delegates` (`DelegateControl`).
+- `src/server/tools/delegate.ts`: the tools, calling `ToolContext.delegates` (`DelegateControl`); `list_models` reads `getModels()` (`src/server/models.ts`, the same cached lists as `/api/models`) and formats them with `describeModels()`. `AgentService.checkDelegateSettings()` checks a sub-agent's model, effort, and tier.
 - `AgentService.delegateControl()` (`service.ts`): starts a sub-agent (`create` + `send`, the same paths the UI uses) and adds its card to the lead's reply; waits on `delegateWaits` for `wait: true`. The turn runner keeps the card current on every change (`syncDelegation`) and, when the sub-agent's run ends, settles it (`delegationEnded`): the waiting tool call returns, or a background one reports through `deliverReport`, shared with helper threads.
 - Providers: sub-agents run like any thread, with their lead's permission mode (copied when they're created); nothing extra is sandboxed.
 - Client: `DelegationCard.tsx` (the card, Base UI `Collapsible`, and `SubAgentChip`, a Base UI `Popover`), drawn through `Blocks`; the timeline keeps running cards in view like status cards. `MessageView` compares blocks one by one (`sameBlocks`), since a card keeps changing after its turn ends.

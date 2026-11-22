@@ -16,6 +16,28 @@ import {
 import { AgentService } from './service'
 import { ThreadStore } from './store'
 import type { ProviderContext, Runner } from './providers/types'
+import type { ModelOption } from '../agent-settings'
+import { describeModels } from './models'
+
+// The model lists sub-agents are checked against (no CLI runs in tests).
+const fakeModels: Record<string, ModelOption[]> = {
+  claude: [{ id: 'opus', label: 'Opus', efforts: ['low', 'high'] }],
+  codex: [
+    {
+      id: 'gpt-5',
+      label: 'GPT-5',
+      efforts: ['medium', 'high'],
+      defaultEffort: 'medium',
+      isDefault: true,
+      serviceTiers: [{ id: 'fast', label: 'Fast' }],
+    },
+  ],
+}
+vi.mock('./models', async (original) => ({
+  ...(await original<typeof import('./models')>()),
+  getModels: async (provider: string) => fakeModels[provider] ?? [],
+  warmModels: () => {},
+}))
 
 describe('sub-agent helpers', () => {
   it('reads the files a run changed from its Edit and Write steps', () => {
@@ -92,6 +114,16 @@ describe('sub-agent helpers', () => {
       endedAt: '2026-01-01T00:01:00.000Z',
     })
     expect(findDelegationCard(thread.messages, 'd1')?.block.step).toBeUndefined()
+  })
+})
+
+describe('list_models text', () => {
+  it('shows ids, names, efforts, defaults, and service tiers', () => {
+    const text = describeModels('Codex', fakeModels.codex!)
+    expect(text).toContain('- gpt-5 (GPT-5) [default]')
+    expect(text).toContain('efforts: medium, high (default medium)')
+    expect(text).toContain('service tiers: fast')
+    expect(describeModels('Claude', [])).toBe('Claude: no models listed.')
   })
 })
 
@@ -192,6 +224,34 @@ describe('sub-agents (delegate_task)', () => {
       files: ['src/cart.test.ts'],
       answer: 'Wrote 4 tests for the cart.',
     })
+    leadTurn.end('Done.')
+  })
+
+  it('checks a chosen model, effort, and tier against the model list', async () => {
+    const lead = await service.create({ provider: 'claude', cwd: directory })
+    await service.send(lead.id, { text: 'Go' })
+    const leadTurn = await nextTurn(lead.id, 0)
+    const control = leadTurn.ctx.tools.delegates
+    await expect(control.start({ task: 'x', model: 'nope' })).rejects.toThrow(
+      /isn’t one of Claude’s models\. Choose one of: opus/,
+    )
+    await expect(control.start({ task: 'x', model: 'opus', effort: 'max' })).rejects.toThrow(
+      /opus supports efforts: low, high/,
+    )
+    await expect(control.start({ task: 'x', effort: 'high' })).rejects.toThrow(/Choose a model/)
+    expect(delegateIds(lead)).toEqual([])
+    void control.start({
+      task: 'Fast one',
+      agent: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+      serviceTier: 'fast',
+      wait: false,
+    })
+    const id = await newestDelegate(lead)
+    expect(service.get(id)).toMatchObject({ model: 'gpt-5', effort: 'high', serviceTier: 'fast' })
+    await nextTurn(id, 0)
+    await service.stop(id)
     leadTurn.end('Done.')
   })
 

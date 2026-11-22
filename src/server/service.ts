@@ -1781,6 +1781,39 @@ export class AgentService {
     })
   }
   // Sub-agents (delegate_task, see delegations.ts): what a thread may do with its own.
+  // A sub-agent's chosen model, effort, and tier, checked against the same list the composer's
+  // picker shows (list_models). If the agent's CLI can't list its models, they're let through.
+  private async checkDelegateSettings(
+    provider: Provider,
+    cwd: string,
+    settings: { model: string; effort: string; serviceTier: string },
+  ) {
+    const models = await getModels(provider, cwd).catch(() => undefined)
+    if (!models) return
+    const label = agentLabel(provider)
+    if (!settings.model) {
+      if (settings.effort || settings.serviceTier)
+        throw new ToolError(
+          `Choose a model (see list_models) to set an effort level or service tier for ${label}.`,
+        )
+      return
+    }
+    if (!models.some((item) => item.id === settings.model))
+      throw new ToolError(
+        `"${settings.model}" isn’t one of ${label}’s models. Choose one of: ` +
+          `${models.map((item) => item.id).join(', ')} (details in list_models).`,
+      )
+    try {
+      checkEffort(models, settings)
+    } catch {
+      const model = models.find((item) => item.id === settings.model)!
+      throw new ToolError(
+        `${settings.model} supports efforts: ${model.efforts.join(', ') || 'none'}; ` +
+          `service tiers: ${model.serviceTiers?.map((tier) => tier.id).join(', ') || 'none'}. ` +
+          'Use one of those, or leave it out.',
+      )
+    }
+  }
   private delegateControl(lead: Thread, run: Run, attach: (block: Block) => void): DelegateControl {
     const own = () => [...this.store.threads.values()].filter((item) => item.delegateOf === lead.id)
     const busy = (item: Thread) => isActive(item.status) || this.runs.has(item.id)
@@ -1823,15 +1856,30 @@ export class AgentService {
           // The same agent keeps this thread's model and effort; the other agent gets your last
           // choices for it (or its defaults). A model given here wins.
           const remembered = this.ui.settings.agent?.settings?.[provider]
-          const settings = input.model
-            ? { model: input.model, effort: input.effort ?? '', serviceTier: '' }
-            : provider === lead.provider
+          const base =
+            provider === lead.provider
               ? { model: lead.model, effort: lead.effort, serviceTier: lead.serviceTier ?? '' }
               : {
                   model: remembered?.model ?? '',
                   effort: remembered?.effort ?? '',
                   serviceTier: remembered?.serviceTier ?? '',
                 }
+          // An effort or tier given alone tunes the model it would get anyway.
+          const settings = input.model
+            ? {
+                model: input.model,
+                effort: input.effort ?? '',
+                serviceTier: input.serviceTier ?? '',
+              }
+            : input.effort || input.serviceTier
+              ? {
+                  model: base.model,
+                  effort: input.effort ?? base.effort,
+                  serviceTier: input.serviceTier ?? base.serviceTier,
+                }
+              : base
+          if (input.model || input.effort || input.serviceTier)
+            await this.checkDelegateSettings(provider, lead.cwd, settings)
           delegate = await this.create({
             provider,
             cwd: lead.cwd,

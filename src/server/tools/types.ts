@@ -50,6 +50,7 @@ export type DelegateInput = {
   context?: 'none' | 'thread'
   model?: string
   effort?: string
+  serviceTier?: string
   continue?: string
 }
 export type DelegateControl = {

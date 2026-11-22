@@ -54,7 +54,7 @@ Run typecheck, tests, and build before committing. Keep the README (and `docs/`)
 - [docs/browser.md](docs/browser.md): the agent browser (browser_* tools, which browser is used, the local-only and t3-mini-blocking rules, testing).
 - [docs/machines.md](docs/machines.md): other machines (`t3mini pair`, Settings → Machines, the per-machine local address that forwards to its gateway with the session, security, follow-ups).
 - [docs/t3mini.md](docs/t3mini.md): the `t3mini` binary (commands, compile and install scripts, `app-server.mjs`) and planned commands (`t3mini pair` for machines, release updates, start at login).
-- [docs/delegation.md](docs/delegation.md): sub-agents (`delegate_task`, `list_delegations`, `stop_delegation`: waiting or background, the shared folder and changed-file tracking, cards, limits).
+- [docs/delegation.md](docs/delegation.md): sub-agents (`delegate_task`, `list_delegations`, `stop_delegation`, `list_models`: waiting or background, the shared folder and changed-file tracking, cards, limits).
 - [docs/orchestration.md](docs/orchestration.md): lead and helper threads (the start/message/list/stop/delete_thread tools, automatic reports, limits).
 - [docs/worktrees.md](docs/worktrees.md): worktree threads (choosing one, where and how worktrees are made, `.worktreeinclude`, cleanup, benchmarks, pitfalls).
 - [ios/README.md](ios/README.md): the native iPhone app (SwiftUI, XcodeGen): a paired device on the phone gateway, thread list and chat, live updates with patches, pairing and Keychain, signing setup kept out of the repo (`Config/Signing.xcconfig`).
