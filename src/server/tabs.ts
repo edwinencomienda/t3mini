@@ -14,8 +14,18 @@ type Record = {
   watching?: boolean
   // This browser's push subscription (its endpoint), when it has one.
   push?: string
+  // On this Mac (not a paired device; set by the server, not the page), and whether it shows
+  // desktop notifications (they're on in this browser and allowed).
+  local?: boolean
+  notifies?: boolean
 }
-export type TabView = { viewing?: string; watching?: boolean; push?: string }
+export type TabView = {
+  viewing?: string
+  watching?: boolean
+  push?: string
+  local?: boolean
+  notifies?: boolean
+}
 const maxTabs = 200
 
 export class TabRegistry {
@@ -33,6 +43,8 @@ export class TabRegistry {
         ...(view.viewing ? { viewing: view.viewing } : {}),
         watching: Boolean(view.viewing && view.watching),
         ...(view.push ? { push: view.push } : {}),
+        local: view.local ?? tab?.local ?? false,
+        notifies: view.notifies ?? tab?.notifies ?? false,
       })
     }
     this.prune(now)
@@ -47,6 +59,14 @@ export class TabRegistry {
     for (const tab of this.tabs.values())
       if (tab.watching && tab.viewing === threadId && now - tab.aliveAt < tabStaleMs) return true
     return false
+  }
+  // Whether a desktop notification will show on this Mac: the tab that notifies (the one used
+  // last) is on this Mac and has desktop notifications on. Then phones can skip the push while
+  // you're at the Mac (push.ts → AwayPush).
+  deskNotifies(now = Date.now()) {
+    const leader = this.leader(now)
+    const tab = leader ? this.tabs.get(leader) : undefined
+    return Boolean(tab?.local && tab.notifies)
   }
   // Push subscriptions of browsers you're using right now (a t3 mini tab there is visible and
   // focused): they already show the event in the page, so a push to them would be a second one.

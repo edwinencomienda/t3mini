@@ -753,7 +753,7 @@ export async function handleApi(request: Request) {
       return serveMedia(service.uploads, parts[1], request.headers.get('range'))
     // Open tabs report focus, heartbeats, and closing, so one tab in all browsers notifies.
     if (parts[0] === 'tabs' && !parts[1] && request.method === 'POST') {
-      const { id, event, viewing, watching, push } = z
+      const { id, event, viewing, watching, push, notifies } = z
         .object({
           id: z.string().regex(/^[a-z0-9-]{8,64}$/),
           event: z.enum(['visit', 'alive', 'leave']),
@@ -761,12 +761,17 @@ export async function handleApi(request: Request) {
           watching: z.boolean().optional(),
           // Only ever used to skip pushes to it while you're in this tab, never to send.
           push: z.string().url().startsWith('https://').max(2048).optional(),
+          // Desktop notifications are on and allowed in this browser.
+          notifies: z.boolean().optional(),
         })
         .parse(await request.json())
       service.tabs.report(id, event, Date.now(), {
         ...(viewing ? { viewing } : {}),
         ...(watching !== undefined ? { watching } : {}),
         ...(push ? { push } : {}),
+        // Whether it's on this Mac comes from the gateway's mark, never from the page.
+        local: !remote,
+        ...(notifies !== undefined ? { notifies } : {}),
       })
       return Response.json({ activeTab: service.tabs.leader() ?? null })
     }

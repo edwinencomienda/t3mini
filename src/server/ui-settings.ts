@@ -26,6 +26,9 @@ export const uiFields = {
   // The agents' browser may open public websites too (read-only there; see browser.ts). Off
   // unless turned on in Settings → Agents.
   browserPublic: z.boolean(),
+  // Push notifications on phones: only while you're away from the Mac (like Slack, the
+  // default), or always (server/push.ts → AwayPush).
+  phonePush: z.enum(['away', 'always']),
   // Projects collapsed in the sidebar.
   collapsed: z
     .record(text(4096), z.boolean())

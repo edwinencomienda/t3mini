@@ -183,6 +183,16 @@ export function setTabPush(endpoint: string | null) {
   pushEndpoint = endpoint
   report('alive')
 }
+// Whether this tab shows desktop notifications (on in Settings and allowed by the browser).
+// With this browser's push subscription, it counts too: the push is its desktop notification.
+// The server then knows a notification will show on the Mac, so phones can skip theirs while
+// you're at it (server/push.ts → AwayPush).
+let desktopOn = false
+export function setTabDesktop(on: boolean) {
+  if (on === desktopOn) return
+  desktopOn = on
+  report('alive')
+}
 export const setServerTab = (id: string | null | undefined) => {
   serverTab = id
 }
@@ -196,6 +206,7 @@ function report(event: 'visit' | 'alive' | 'leave') {
       event,
       ...view,
       ...(pushEndpoint ? { push: pushEndpoint } : {}),
+      notifies: desktopOn || Boolean(pushEndpoint),
     }),
     // Still sent while the page is closing.
     keepalive: true,

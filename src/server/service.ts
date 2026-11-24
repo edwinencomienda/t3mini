@@ -90,7 +90,8 @@ import {
 import { defaultPermission } from '../agent-settings'
 import { loadLibraries, pageDocument, previewTokens, themeCss } from '../html-page'
 import { replaceHtmlBlock } from './html-pages'
-import { pushIn, watchThreads } from './push'
+import { AwayPush, pushIn, watchThreads } from './push'
+import { atMac } from './presence'
 import { saveSecret } from './secret-file'
 import { activitiesIn, watchActivities } from './live-activities'
 import { getHubWatch, parseHubId, type HubWatch } from './hub-watch'
@@ -2509,6 +2510,14 @@ export function getService() {
     // Push notifications (push.ts): watch for finished, failed, and waiting threads from the start,
     // so they're sent even when no window is open.
     const push = pushIn(dirname(store.path))
+    // Phones only while you're away from the Mac (Settings → Notifications → Phone
+    // notifications): at the Mac means keyboard or mouse used lately, screen unlocked, and the
+    // tab that notifies is on this Mac with desktop notifications on.
+    const away = new AwayPush({
+      push,
+      atDesk: async () => service.tabs.deskNotifies() && (await atMac()),
+      mode: () => (service.ui.settings.phonePush === 'always' ? 'always' : 'away'),
+    })
     watchThreads(
       {
         subscribe: (listener) => service.subscribe(listener),
@@ -2521,6 +2530,8 @@ export function getService() {
         },
       },
       push,
+      undefined,
+      away,
     )
     // Live Activities on the iPhone app's lock screen (live-activities.ts): kept current too.
     watchActivities(service, activitiesFor(service))
@@ -2542,6 +2553,8 @@ export function getService() {
         },
       },
       push,
+      undefined,
+      away,
     )
     watchActivities(hub, activitiesFor(service))
     return service

@@ -78,6 +78,7 @@ import {
   markTabAlive,
   setServerTab,
   setTabPush,
+  setTabDesktop,
   setTabView,
   markTabVisited,
   tabHeartbeatMs,
@@ -1353,6 +1354,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
     [],
   )
   notifyRef.current = notify
+  // Tells the server whether this tab shows desktop notifications (for the phone-push rule).
+  useEffect(() => {
+    setTabDesktop(notify.desktop && desktopPermission() === 'granted')
+  }, [notify.desktop])
   const statuses = useRef(new Map<string, Status>())
   const openThread = useRef<(id: string) => void>(() => {})
 

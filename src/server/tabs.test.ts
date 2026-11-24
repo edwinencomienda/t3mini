@@ -44,3 +44,20 @@ it('knows which browsers’ push subscriptions you’re using t3 mini in right n
   tabs.report('mac-tab', 'alive', 3000, { viewing: 't1', watching: true, push: mac })
   expect(tabs.pushInUse(3000 + tabStaleMs).size).toBe(0)
 })
+
+it('knows when a desktop notification will show on this Mac', () => {
+  const tabs = new TabRegistry()
+  // A Mac tab with desktop notifications on, used last.
+  tabs.report('mac', 'visit', 1000, { local: true, notifies: true })
+  expect(tabs.deskNotifies(1000)).toBe(true)
+  // You switch to t3 mini on your phone: that tab notifies now, not the Mac.
+  tabs.report('phone', 'visit', 2000, { local: false, notifies: true })
+  expect(tabs.deskNotifies(2000)).toBe(false)
+  // Back on the Mac, but desktop notifications are off there.
+  tabs.report('mac', 'visit', 3000, { local: true, notifies: false })
+  expect(tabs.deskNotifies(3000)).toBe(false)
+  // A heartbeat without the flags keeps what the tab said before.
+  tabs.report('mac', 'visit', 4000, { local: true, notifies: true })
+  tabs.report('mac', 'alive', 5000, { local: true })
+  expect(tabs.deskNotifies(5000)).toBe(true)
+})

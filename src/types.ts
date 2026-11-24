@@ -303,6 +303,8 @@ export type UiSettings = {
   collapsed?: Record<string, boolean>
   // The agents' browser may open public websites (read-only there). Off by default.
   browserPublic?: boolean
+  // Phones get push notifications only while you're away from the Mac (default), or always.
+  phonePush?: 'away' | 'always'
   music?: { enabled: boolean; url: string; volume: number }
   musicPosition?: { source: string; time: number; index?: number }
 }

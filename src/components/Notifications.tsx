@@ -31,6 +31,7 @@ import { playSound, sounds } from '../sound'
 import { PhoneAccess } from './PhoneAccess'
 import { Machines } from './Machines'
 import { saveBrowserPublic, useBrowserPublic } from '../browser-public'
+import { savePhonePush, usePhonePush, type PhonePush } from '../phone-push'
 import { Modal, ModalTitle } from './Modal'
 import { Segmented, Toggle } from './ui'
 import { Tabs } from '@base-ui/react/tabs'
@@ -218,6 +219,7 @@ export function SettingsDialog({
   const projectIconsOn = useProjectIcons()
   const music = useMusicSettings()
   const browserPublic = useBrowserPublic()
+  const phonePush = usePhonePush()
   // The link as typed, saved once it's a YouTube link (or cleared).
   const [musicUrl, setMusicUrl] = useState('')
   useEffect(() => setMusicUrl(music.url), [music.url])
@@ -409,6 +411,25 @@ export function SettingsDialog({
               <section className="settings-section">
                 <h3>Notifications</h3>
                 <PushSetting />
+                <div className="setting-row">
+                  <div>
+                    <strong>Phone notifications</strong>
+                    <small>
+                      {phonePush === 'away'
+                        ? 'While you’re using the Mac (and it shows the desktop notification), phones stay quiet. If you leave and the thread still needs you, your phone gets it within a few minutes.'
+                        : 'Phones get every notification right away, even while you’re at the Mac.'}
+                    </small>
+                  </div>
+                  <Segmented<PhonePush>
+                    label="Phone notifications"
+                    value={phonePush}
+                    options={[
+                      { value: 'away', label: 'When away' },
+                      { value: 'always', label: 'Always' },
+                    ]}
+                    onChange={savePhonePush}
+                  />
+                </div>
                 <div className="setting-row">
                   <div>
                     <strong>Desktop notifications</strong>

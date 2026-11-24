@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { allowedPushHost, PushNotifications, pushFor, watchThreads, type PushSender } from './push'
+import {
+  allowedPushHost,
+  AwayPush,
+  PushNotifications,
+  pushFor,
+  watchThreads,
+  type PushSender,
+} from './push'
 import type { ThreadSummary } from '../types'
 
 let directory: string
@@ -203,4 +210,136 @@ it('skips the browsers you’re using t3 mini in right now, and keeps their subs
   await push.send(payload, new Set([mac]))
   expect(sent.map((item) => item.endpoint)).toEqual([apple])
   expect(await push.subscribed(mac)).toBe(true)
+})
+
+const payload = {
+  title: 'Fix login',
+  body: 'Done · app',
+  url: '/threads/t1',
+  tag: 't1',
+  brief: 'A thread finished.',
+}
+
+it('sends to this Mac’s browsers only, or to the devices you carry away from it', async () => {
+  const push = store()
+  const mac = 'https://web.push.apple.com/mac'
+  await push.subscribe({ endpoint: mac, keys })
+  await push.subscribe({ endpoint: apple, keys }, 'phone')
+  await push.send(payload, new Set(), 'here')
+  expect(sent.map((item) => item.endpoint)).toEqual([mac])
+  sent = []
+  await push.send(payload, new Set(), 'away')
+  expect(sent.map((item) => item.endpoint)).toEqual([apple])
+  sent = []
+  await push.send(payload)
+  expect(sent.map((item) => item.endpoint).sort()).toEqual([apple, mac].sort())
+})
+
+it('keeps phones quiet while you’re at the Mac, and pushes once you leave (like Slack)', async () => {
+  vi.useFakeTimers()
+  try {
+    const queued: string[] = []
+    let atDesk = true
+    let unread = true
+    let mode: 'away' | 'always' = 'away'
+    const away = new AwayPush({
+      push: { queue: (_payload, _skip, targets = 'all') => void queued.push(targets) },
+      atDesk: async () => atDesk,
+      mode: () => mode,
+      recheckMs: 1000,
+      holdMs: 10_000,
+    })
+    const tick = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    // At the Mac: the Mac's browsers get it now, phones wait.
+    await away.deliver(payload, new Set(), () => unread)
+    expect(queued).toEqual(['here'])
+    await tick(3000)
+    expect(queued).toEqual(['here'])
+    // You leave with the thread still unread: phones get it at the next check.
+    atDesk = false
+    await tick(1000)
+    expect(queued).toEqual(['here', 'away'])
+    expect(away.holding()).toEqual([])
+
+    // Opened before you left: nothing goes to phones.
+    queued.length = 0
+    atDesk = true
+    await away.deliver(payload, new Set(), () => unread)
+    unread = false
+    atDesk = false
+    await tick(2000)
+    expect(queued).toEqual(['here'])
+    expect(away.holding()).toEqual([])
+
+    // Still at the Mac after the hold: dropped, not sent hours later.
+    queued.length = 0
+    unread = true
+    atDesk = true
+    await away.deliver(payload, new Set(), () => unread)
+    await tick(12_000)
+    atDesk = false
+    await tick(2000)
+    expect(queued).toEqual(['here'])
+
+    // Away, or "Always": every device right away.
+    queued.length = 0
+    atDesk = false
+    await away.deliver(payload, new Set(), () => true)
+    mode = 'always'
+    atDesk = true
+    await away.deliver(payload, new Set(), () => true)
+    expect(queued).toEqual(['all', 'all'])
+    away.stop()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('holds a finished thread for phones only until you open it', async () => {
+  const queued: { tag: string; targets: string }[] = []
+  let threads: ThreadSummary[] = [
+    {
+      id: 't1',
+      title: 'Fix login',
+      provider: 'claude',
+      cwd: '/app',
+      status: 'working',
+      updatedAt: '1',
+    } as ThreadSummary,
+  ]
+  const listeners = new Set<() => void>()
+  let atDesk = true
+  const away = new AwayPush({
+    push: { queue: (item, _skip, targets = 'all') => void queued.push({ tag: item.tag, targets }) },
+    atDesk: async () => atDesk,
+    mode: () => 'away',
+    recheckMs: 20,
+  })
+  const stop = watchThreads(
+    {
+      subscribe: (listener) => (listeners.add(listener), () => listeners.delete(listener)),
+      list: () => threads,
+      isWatching: () => false,
+      projectName: () => 'app',
+    },
+    { queue: () => {} },
+    0,
+    away,
+  )
+  const change = async (next: ThreadSummary[]) => {
+    threads = next
+    listeners.forEach((listener) => listener())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await change([{ ...threads[0]!, status: 'completed', updatedAt: '2', unread: true }])
+  expect(queued).toEqual([{ tag: 't1', targets: 'here' }])
+  // You open it on the Mac (no longer unread), then leave: phones stay quiet.
+  await change([{ ...threads[0]!, unread: false }])
+  atDesk = false
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  expect(queued).toEqual([{ tag: 't1', targets: 'here' }])
+  stop()
+  away.stop()
 })

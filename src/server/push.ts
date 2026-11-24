@@ -56,6 +56,10 @@ type Saved = {
 // title/body: shown by Web Push (encrypted to the browser). brief: what the native app's
 // notification says instead, since Apple can read APNs messages (no title or project).
 export type PushPayload = { title: string; body: string; url: string; tag: string; brief: string }
+// Who a push goes to: everyone; only this Mac's browsers ('here': subscriptions without a
+// paired device); or only the devices you carry away from it ('away': paired devices' browsers
+// and the iPhone app).
+export type PushTargets = 'all' | 'here' | 'away'
 // What sends one message; tests pass a stand-in. Resolves, or rejects with the push service's
 // status code when it has one.
 export type PushSender = (
@@ -275,8 +279,15 @@ export class PushNotifications {
   // Sends to every subscription (encrypted for each). Subscriptions the push service says are
   // gone (404, 410) are dropped; ones from devices that no longer exist are skipped and dropped.
   // `skip`: browser subscriptions not to send to (you're using t3 mini there right now).
-  async send(payload: PushPayload, skip: ReadonlySet<string> = new Set()) {
+  // `targets`: everyone, this Mac's browsers only, or paired devices and the app only.
+  async send(
+    payload: PushPayload,
+    skip: ReadonlySet<string> = new Set(),
+    targets: PushTargets = 'all',
+  ) {
     const saved = await this.load()
+    const reaches = (item: { deviceId?: string }) =>
+      targets === 'all' || (targets === 'here') === !item.deviceId
     const send = this.options.send ?? (sendNotification as unknown as PushSender)
     const gone = new Set<string>()
     await Promise.all(
@@ -285,7 +296,7 @@ export class PushNotifications {
           gone.add(subscription.endpoint)
           return
         }
-        if (skip.has(subscription.endpoint)) return
+        if (skip.has(subscription.endpoint) || !reaches(subscription)) return
         try {
           await send(subscription, JSON.stringify(payload), {
             vapidDetails: {
@@ -315,6 +326,8 @@ export class PushNotifications {
           goneApps.add(app.token)
           return
         }
+        // The app is on a phone: always an 'away' target, even when it has no device id.
+        if (targets === 'here') return
         if ((await this.sendApp(app, payload)) === 'gone') goneApps.add(app.token)
       }),
     )
@@ -350,8 +363,8 @@ export class PushNotifications {
     return true
   }
   // Sends in the background, tracked so tests (and shutdown) can wait for it.
-  queue(payload: PushPayload, skip?: ReadonlySet<string>) {
-    const task = this.send(payload, skip).catch(() => {})
+  queue(payload: PushPayload, skip?: ReadonlySet<string>, targets: PushTargets = 'all') {
+    const task = this.send(payload, skip, targets).catch(() => {})
     this.sending.add(task)
     void task.finally(() => this.sending.delete(task))
   }
@@ -381,6 +394,65 @@ export function pushFor(event: ThreadEvent, project: string): PushPayload {
   }
 }
 
+// Phones only when you're away from the Mac, like Slack. While you're at the Mac (keyboard or
+// mouse used in the last 2 minutes, screen unlocked; presence.ts) and a t3 mini tab there shows
+// the desktop notification, a push goes to this Mac's browsers only, not to phones (paired
+// devices' browsers and the iPhone app). It's held instead: checked every minute for 15
+// minutes, and sent to phones as soon as you've left the Mac while the thread still needs you
+// (still unread, or still waiting). Opening the thread, or it moving on, drops it. "Always"
+// (Settings → Notifications → Phone notifications) sends to every device right away.
+export class AwayPush {
+  private held = new Map<string, ReturnType<typeof setInterval>>()
+  constructor(
+    private deps: {
+      push: Pick<PushNotifications, 'queue'>
+      // You're at the Mac and it will show the desktop notification.
+      atDesk: () => Promise<boolean>
+      mode: () => 'away' | 'always'
+      recheckMs?: number
+      holdMs?: number
+    },
+  ) {}
+  async deliver(payload: PushPayload, skip: ReadonlySet<string>, needsYou: () => boolean) {
+    // A newer event for the same thread replaces a held one.
+    this.release(payload.tag)
+    if (this.deps.mode() === 'always' || !(await this.deps.atDesk().catch(() => false)))
+      return this.deps.push.queue(payload, skip)
+    this.deps.push.queue(payload, skip, 'here')
+    const started = Date.now()
+    let checking = false
+    const timer = setInterval(async () => {
+      if (checking) return
+      checking = true
+      try {
+        if (!needsYou() || Date.now() - started > (this.deps.holdMs ?? 15 * 60_000))
+          return this.release(payload.tag, timer)
+        if (await this.deps.atDesk().catch(() => false)) return
+        this.release(payload.tag, timer)
+        this.deps.push.queue(payload, skip, 'away')
+      } finally {
+        checking = false
+      }
+    }, this.deps.recheckMs ?? 60_000)
+    timer.unref?.()
+    this.held.set(payload.tag, timer)
+  }
+  // Held pushes, by thread (tests and status).
+  holding() {
+    return [...this.held.keys()]
+  }
+  private release(tag: string, only?: ReturnType<typeof setInterval>) {
+    const timer = this.held.get(tag)
+    if (!timer || (only && timer !== only)) return
+    clearInterval(timer)
+    this.held.delete(tag)
+  }
+  stop() {
+    for (const timer of this.held.values()) clearInterval(timer)
+    this.held.clear()
+  }
+}
+
 // Watches the thread list (the same events the web app turns into notifications) and pushes
 // finished, failed, and waiting threads you aren't looking at. Stopped ones aren't pushed: you
 // stopped them. Changes come in bursts while a reply streams, so it checks at most twice a second.
@@ -397,6 +469,8 @@ export function watchThreads(
   },
   push: Pick<PushNotifications, 'queue'>,
   delay = 500,
+  // Phones only while you're away from the Mac (see AwayPush); without it, every device.
+  away?: AwayPush,
 ) {
   let previous = new Map<string, Status>(service.list().map((item) => [item.id, item.status]))
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -409,7 +483,19 @@ export function watchThreads(
         service.watched?.(event)
         continue
       }
-      push.queue(pushFor(event, service.projectName(event.thread.cwd)), service.pushInUse?.())
+      const payload = pushFor(event, service.projectName(event.thread.cwd))
+      const skip = service.pushInUse?.() ?? new Set<string>()
+      if (!away) {
+        push.queue(payload, skip)
+        continue
+      }
+      // Still needs you: unread (finished or failed, not opened since), or still waiting.
+      const needsYou = () => {
+        const now = service.list().find((item) => item.id === event.thread.id)
+        if (!now || now.status !== event.thread.status) return false
+        return event.kind === 'waiting' || Boolean(now.unread)
+      }
+      void away.deliver(payload, skip, needsYou)
     }
     previous = new Map(threads.map((item) => [item.id, item.status]))
   }
