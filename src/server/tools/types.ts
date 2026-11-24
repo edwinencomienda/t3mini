@@ -1,7 +1,7 @@
 import type { z } from 'zod'
 import type { Block, HtmlBlock, StatusBlock } from '../../blocks'
 import type { PageLibrary } from '../../html-page'
-import type { RenderedPage } from '../browser'
+import type { Mock, RenderedPage } from '../browser'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
 import type { Provider, Question, Todo } from '../../types'
@@ -19,8 +19,13 @@ export type ThreadBrowser = {
   tabs: () => Promise<{ id: string; url: string; title: string; active: boolean }[]>
   switchTab: (id: string) => Promise<Page>
   closeTab: (id: string) => Promise<void>
-  // Errors, failed requests, dialogs, and blocked addresses since the last look.
-  takeLog: () => Promise<{ kind: string; text: string }[]>
+  // Errors, failed requests, dialogs, blocked addresses, and faked responses since the last look
+  // (count: how many times, when it repeated).
+  takeLog: () => Promise<{ kind: string; text: string; count?: number }[]>
+  // Faked responses for local addresses (browser_mock), only in this thread's browser.
+  addMock: (mock: Omit<Mock, 'hits'>) => Promise<number>
+  mocks: () => Promise<Mock[]>
+  clearMocks: (url?: string) => Promise<number>
   close: () => Promise<void>
   // Remembers what the refs in a page snapshot (e12…) point to, for readable step names.
   recordSnapshot: (snapshot: string) => void

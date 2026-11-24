@@ -1,14 +1,16 @@
 import type { Page } from 'playwright-core'
 import { z } from 'zod'
-import { checkPageUrl, isLocalPage } from '../browser'
+import { blankPath, checkPageUrl, isLocalPage } from '../browser'
+import { mockInput, readValueFrom, toMock, valueFromSchema } from './browser-setup'
 import { compactSnapshot } from './snapshot-text'
 import { ToolError, defineTool, type StepHints, type ToolContext } from './types'
 
 // Browser tools: the agent opens its local app (a dev server on localhost) in its own private,
 // headless browser, reads and uses the page, and takes screenshots to check its work. See
 // ../browser.ts for where pages may go and what's blocked. Tools that act on the page (click,
-// type, press, cookies) are 'approval': they can submit forms or delete data in the local app.
-// Opening a local page, reading it, screenshots, and view changes are 'safe'.
+// type, press, cookies, storage, mocks) are 'approval': they can submit forms or delete data in
+// the local app, or change who the app thinks is signed in. Opening a local page, reading it,
+// screenshots, and view changes are 'safe'.
 
 // Page text is the page's, not the user's: say so, so instructions in it aren't followed.
 const untrusted = (text: string) =>
@@ -19,20 +21,45 @@ const maxHealthLines = 8
 // What went wrong on the page since the last look (console errors, page errors, failed
 // requests…), added to what open, click, type, press, and check return, so problems show up
 // without a separate browser_console call. Reading the log empties it, so the entries are
-// included, not just counted.
+// included, not just counted. Errors come first; a message that repeated is one line with its
+// count; faked responses (browser_mock) are listed apart, so a mock is never forgotten.
+type Entry = { kind: string; text: string; count?: number }
+const severity: Record<string, number> = {
+  error: 0,
+  'failed request': 1,
+  blocked: 2,
+  dialog: 3,
+  warning: 4,
+}
+const times = (entry: Entry) =>
+  entry.count && entry.count > 1 ? ` (×${entry.count.toLocaleString('en-US')})` : ''
+const logLine = (entry: Entry, limit = 300) =>
+  `[${entry.kind}] ${entry.text.slice(0, limit)}${times(entry)}`
 async function health(context: ToolContext) {
   const log = await context.browser.takeLog()
-  const problems = log.filter((entry) => entry.kind !== 'popup')
-  if (!problems.length) return '\nPage health: no console errors or failed requests.'
+  const mocked = log.filter((entry) => entry.kind === 'mocked')
+  const served = mocked.length
+    ? `\nMocked responses served (browser_mock): ${mocked
+        .slice(0, 5)
+        .map((entry) => entry.text.replace(/ \(browser_mock [^)]*\)$/, '') + times(entry))
+        .join('; ')}${mocked.length > 5 ? `; … ${mocked.length - 5} more` : ''}`
+    : ''
+  const problems = log
+    .filter((entry) => entry.kind !== 'popup' && entry.kind !== 'mocked')
+    .sort((a, b) => (severity[a.kind] ?? 5) - (severity[b.kind] ?? 5))
+  if (!problems.length) return `\nPage health: no console errors or failed requests.${served}`
   const counts = new Map<string, number>()
-  for (const entry of problems) counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1)
-  const summary = [...counts].map(([kind, count]) => `${count} ${kind}${count > 1 ? 's' : ''}`)
-  const lines = problems
-    .slice(0, maxHealthLines)
-    .map((entry) => `[${entry.kind}] ${entry.text.slice(0, 300)}`)
+  for (const entry of problems)
+    counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + (entry.count ?? 1))
+  const summary = [...counts].map(
+    ([kind, count]) => `${count.toLocaleString('en-US')} ${kind}${count > 1 ? 's' : ''}`,
+  )
+  const lines = problems.slice(0, maxHealthLines).map((entry) => logLine(entry))
   const more =
-    problems.length > maxHealthLines ? `\n… and ${problems.length - maxHealthLines} more` : ''
-  return `\nPage health: ${summary.join(', ')} (from the website, not the user).\n${lines.join('\n')}${more}`
+    problems.length > maxHealthLines
+      ? `\n… and ${problems.length - maxHealthLines} more (browser_console lists them)`
+      : ''
+  return `\nPage health: ${summary.join(', ')} (from the website, not the user).\n${lines.join('\n')}${more}${served}`
 }
 // The address to open: the one given, else the dev server this project is running (the latest
 // one that printed a local URL).
@@ -58,6 +85,101 @@ async function openPage(context: ToolContext, url: string, newTab?: boolean) {
   if (page.url() === 'about:blank')
     throw new ToolError('The page tried to leave the local site, so it was stopped.')
   return page
+}
+
+// A local site's origin ("http://localhost:3000"), refusing anything else: storage and cookies
+// are only set for local sites, never public ones or t3 mini.
+async function localOrigin(context: ToolContext, url: string) {
+  const refusal = await context.browser.checkUrl(url)
+  if (refusal) throw new ToolError(refusal)
+  if (!isLocalPage(url))
+    throw new ToolError('This only works for local sites; public websites are read-only.')
+  return new URL(url).origin
+}
+// The active tab on t3 mini's blank page for that site (never sent to the app's server), where
+// its storage can be written before the app's own code runs again.
+async function blankOn(context: ToolContext, origin: string) {
+  const page = await context.browser.page()
+  await guarded('Opening the site', () =>
+    page.goto(origin + blankPath, { waitUntil: 'domcontentloaded' }),
+  )
+  return page
+}
+type StorageKind = 'local' | 'session'
+const storageName = (kind: StorageKind) => (kind === 'session' ? 'sessionStorage' : 'localStorage')
+// Storage values are strings: strings stay as they are, anything else is saved as JSON (what an
+// app reading JSON.parse(localStorage.getItem(…)) expects).
+function storageValues(items: Record<string, unknown>) {
+  const values: Record<string, string> = {}
+  let size = 0
+  for (const [key, value] of Object.entries(items)) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value)
+    if (text === undefined) throw new ToolError(`The value of "${key}" can’t be saved.`)
+    size += key.length + text.length
+    values[key] = text
+  }
+  if (size > 1_000_000) throw new ToolError('That’s too much to store at once (limit 1 MB).')
+  return values
+}
+// Writes items (or removes keys, or clears everything) in the page's storage. t3 mini's own
+// fixed code, not the agent's.
+async function writeStorage(
+  page: Page,
+  kind: StorageKind,
+  change: { set?: Record<string, string>; remove?: string[] },
+) {
+  await guarded('Writing storage', () =>
+    page.evaluate(
+      ({ kind, set, remove }) => {
+        const store = kind === 'session' ? sessionStorage : localStorage
+        if (set) for (const [key, value] of Object.entries(set)) store.setItem(key, value)
+        else if (remove) for (const key of remove) store.removeItem(key)
+        else store.clear()
+      },
+      { kind, set: change.set, remove: change.remove },
+    ),
+  )
+}
+// A cookie for a local site, its value given or read from a project file (never shown).
+async function setCookie(
+  context: ToolContext,
+  cookie: {
+    url: string
+    name: string
+    value?: string
+    valueFrom?: { file: string; key?: string }
+    httpOnly?: boolean
+    secure?: boolean
+    sameSite?: 'Strict' | 'Lax' | 'None'
+  },
+) {
+  const origin = await localOrigin(context, cookie.url)
+  if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(cookie.name))
+    throw new ToolError('That isn’t a valid cookie name.')
+  if ((cookie.value === undefined) === (cookie.valueFrom === undefined))
+    throw new ToolError('Give either value or valueFrom.')
+  const value = cookie.valueFrom
+    ? await readValueFrom(context.cwd, cookie.valueFrom)
+    : cookie.value!
+  if (/[;\r\n]/.test(value) || value.length > 4096)
+    throw new ToolError(
+      `${cookie.valueFrom ? `The value in ${cookie.valueFrom.file}` : 'The value'} can’t be a cookie (it has ; or line breaks, or is over 4096 characters).`,
+    )
+  const page = await context.browser.page()
+  await guarded('Setting the cookie', () =>
+    page.context().addCookies([
+      {
+        name: cookie.name,
+        value,
+        url: origin,
+        // From a file it's a credential: kept away from the page's scripts unless asked.
+        httpOnly: cookie.httpOnly ?? Boolean(cookie.valueFrom),
+        ...(cookie.secure !== undefined ? { secure: cookie.secure } : {}),
+        ...(cookie.sameSite ? { sameSite: cookie.sameSite } : {}),
+      },
+    ]),
+  )
+  return origin
 }
 
 // The page as text: open menus and dialogs first, long look-alike lists shortened
@@ -168,7 +290,9 @@ export function selectorName(selector: string) {
 }
 // An element from the latest snapshot ("e12") or a Playwright selector.
 function element(page: Page, target: string) {
-  const ref = /^\[?(?:ref=)?(e\d+)\]?$/i.exec(target.trim())
+  // Refs are "e12", or "f1e12" once the page has navigated (Playwright adds the frame's
+  // generation), so both forms are refs, not CSS selectors.
+  const ref = /^\[?(?:ref=)?((?:f\d+)?e\d+)\]?$/i.exec(target.trim())
   return page.locator(ref ? `aria-ref=${ref[1]}` : target.trim()).first()
 }
 const describeTarget = z
@@ -334,7 +458,7 @@ export const browserCheck = defineTool({
   async run(context, input) {
     const open = input.url ? undefined : await context.browser.openPage()
     const page =
-      open && open.url() !== 'about:blank'
+      open && open.url() !== 'about:blank' && !open.url().includes(blankPath)
         ? open
         : await openPage(context, pageAddress(context, input.url))
     if (input.size) {
@@ -557,8 +681,10 @@ export const browserSetCookie = defineTool({
   label: 'Set cookie',
   description:
     'Set a cookie in your browser for a local site, e.g. to sign in as a test user you created ' +
-    '(put their session cookie here, then open the page). Local sites only; the value is never ' +
-    'shown in the chat. Cookies stay in this thread’s private browser until it closes.',
+    '(put their session cookie here, then open the page). Give value, or valueFrom to read it ' +
+    'from a file in the project (e.g. a test token kept in a git-ignored file) without it ever ' +
+    'entering the conversation. Local sites only; the value is never shown in the chat. ' +
+    'Cookies stay in this thread’s private browser until it closes.',
   input: {
     url: z
       .string()
@@ -566,8 +692,14 @@ export const browserSetCookie = defineTool({
       .max(2000)
       .describe('The site it belongs to, e.g. http://localhost:3000.'),
     name: z.string().min(1).max(200).describe('The cookie name, e.g. "better-auth.session_token".'),
-    value: z.string().max(4096).describe('The cookie value.'),
-    httpOnly: z.boolean().optional(),
+    value: z.string().max(4096).optional().describe('The cookie value.'),
+    valueFrom: valueFromSchema
+      .optional()
+      .describe('Read the value from a project file instead (never shown to you or the user).'),
+    httpOnly: z
+      .boolean()
+      .optional()
+      .describe('Hide it from page scripts (default: true with valueFrom, else false).'),
     secure: z.boolean().optional(),
     sameSite: z.enum(['Strict', 'Lax', 'None']).optional(),
   },
@@ -581,24 +713,11 @@ export const browserSetCookie = defineTool({
   async run(context, input) {
     const refusal = await checkPageUrl(input.url)
     if (refusal) throw new ToolError(refusal)
-    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(input.name))
-      throw new ToolError('That isn’t a valid cookie name.')
-    if (/[;\r\n]/.test(input.value))
-      throw new ToolError('Cookie values can’t contain ; or line breaks.')
-    const page = await context.browser.page()
-    await guarded('Setting the cookie', () =>
-      page.context().addCookies([
-        {
-          name: input.name,
-          value: input.value,
-          url: new URL(input.url).origin,
-          ...(input.httpOnly !== undefined ? { httpOnly: input.httpOnly } : {}),
-          ...(input.secure !== undefined ? { secure: input.secure } : {}),
-          ...(input.sameSite ? { sameSite: input.sameSite } : {}),
-        },
-      ]),
-    )
-    return `Cookie "${input.name}" set for ${new URL(input.url).origin}. Open or reload the page to use it.`
+    const origin = await setCookie(context, input)
+    const from = input.valueFrom
+      ? ` from ${input.valueFrom.file}${input.valueFrom.key ? ` (${input.valueFrom.key})` : ''}`
+      : ''
+    return `Cookie "${input.name}" set${from} for ${origin}. Open or reload the page to use it.`
   },
 })
 
@@ -615,7 +734,7 @@ export const browserConsole = defineTool({
     await current(context)
     const log = await context.browser.takeLog()
     if (!log.length) return 'Nothing new: no errors, warnings, or failed requests.'
-    return untrusted(log.map((entry) => `[${entry.kind}] ${entry.text}`).join('\n'))
+    return untrusted(log.map((entry) => logLine(entry, 500)).join('\n'))
   },
 })
 
@@ -647,6 +766,162 @@ export const browserTheme = defineTool({
     const page = await current(context)
     await page.emulateMedia({ colorScheme: input.theme })
     return `The page now prefers ${input.theme} mode.`
+  },
+})
+
+// Seeds or reads the browser's storage for a local site, the way a test script would with
+// addInitScript: write through t3 mini's blank page on that site (the app's code isn't running
+// there, so it can't overwrite the values), then open the page, which starts with them.
+export const browserStorage = defineTool({
+  name: 'browser_storage',
+  label: 'Storage',
+  description:
+    'Set, read, or clear localStorage or sessionStorage for a local site in your browser, to ' +
+    'start the app in a given state (a saved draft, a feature flag, a dismissed tour) or check ' +
+    'what it saved. set and clear write the values before the app’s code runs, then open the ' +
+    'page (url, else the page that was open) and return it with page health. Values that ' +
+    'aren’t strings are saved as JSON. Local sites only; only this thread’s private browser.',
+  input: {
+    action: z.enum(['set', 'get', 'clear']),
+    url: z
+      .string()
+      .min(1)
+      .max(2000)
+      .optional()
+      .describe(
+        'The page to open afterwards (its site is the one whose storage changes). Defaults to ' +
+          'the page already open, else the running dev server.',
+      ),
+    storage: z
+      .enum(['local', 'session'])
+      .optional()
+      .describe('localStorage (default) or sessionStorage (this tab only).'),
+    items: z
+      .record(z.string().min(1).max(500), z.unknown())
+      .optional()
+      .describe('For set: key → value, e.g. {"draft": {"title": "Test"}}.'),
+    keys: z
+      .array(z.string().min(1).max(500))
+      .max(100)
+      .optional()
+      .describe('For get or clear: only these keys (default: all).'),
+  },
+  safety: 'approval',
+  kind: 'browser',
+  summarize: (input) =>
+    [
+      input.action,
+      input.storage === 'session' ? 'sessionStorage' : 'localStorage',
+      input.items ? Object.keys(input.items).slice(0, 3).join(', ') : input.keys?.join(', '),
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  async run(context, input) {
+    const kind = input.storage ?? 'local'
+    const name = storageName(kind)
+    const open = await context.browser.openPage()
+    const openUrl =
+      open && open.url() !== 'about:blank' && !open.url().includes(blankPath)
+        ? open.url()
+        : undefined
+    const address = input.url ?? openUrl ?? pageAddress(context, undefined)
+    const origin = await localOrigin(context, address)
+    if (input.action === 'get') {
+      const current = await context.browser.openPage()
+      const page =
+        current && current.url().startsWith(origin + '/') ? current : await blankOn(context, origin)
+      const entries = await guarded('Reading storage', () =>
+        page.evaluate(
+          ({ kind, keys }) => {
+            const store = kind === 'session' ? sessionStorage : localStorage
+            const names = keys ?? Object.keys(store)
+            return names.map((key) => [key, store.getItem(key)] as const)
+          },
+          { kind, keys: input.keys },
+        ),
+      )
+      if (!entries.length) return `${name} for ${origin} is empty.`
+      const lines = entries.map(([key, value]) =>
+        value === null
+          ? `${key}: (not set)`
+          : `${key} = ${value.length > 2000 ? `${value.slice(0, 2000)}… (${value.length} characters)` : value}`,
+      )
+      return untrusted(`${name} for ${origin}:\n${lines.join('\n').slice(0, 20_000)}`)
+    }
+    if (input.action === 'set' && !Object.keys(input.items ?? {}).length)
+      throw new ToolError('Give items to set, e.g. {"draft": {"title": "Test"}}.')
+    const values = input.action === 'set' ? storageValues(input.items!) : undefined
+    await writeStorage(await blankOn(context, origin), kind, {
+      set: values,
+      remove: input.action === 'clear' ? input.keys : undefined,
+    })
+    const did = values
+      ? `Set ${Object.keys(values).length} ${name} key${Object.keys(values).length > 1 ? 's' : ''} (${Object.keys(values).slice(0, 5).join(', ')})`
+      : input.keys?.length
+        ? `Removed ${input.keys.join(', ')} from ${name}`
+        : `Cleared ${name}`
+    const page = await openPage(context, address)
+    return (
+      `${did} for ${origin}, then opened the page.\n` +
+      (await snapshot(context, page)) +
+      (await health(context))
+    )
+  },
+})
+
+// Fakes responses for local addresses in the agent's browser (like page.route in a test
+// script): sign in as a made-up user by answering /api/me, or try an empty or failing API.
+export const browserMock = defineTool({
+  name: 'browser_mock',
+  label: 'Mock response',
+  description:
+    'Fake a response for requests your browser makes to a local site, like page.route in a ' +
+    'test script: e.g. answer GET /api/me with a made-up signed-in user, or make an API return ' +
+    'an empty list or a 500 to see how the page handles it. Only this thread’s private browser ' +
+    'sees it; the app and its data are untouched. Mocked requests are listed in page health. ' +
+    'add replaces a mock with the same url and method; reload the page afterwards (browser_open). ' +
+    'Local sites only.',
+  input: {
+    action: z.enum(['add', 'list', 'clear']),
+    ...mockInput,
+    url: mockInput.url
+      .optional()
+      .describe(`${mockInput.url.description} For clear: only this one.`),
+  },
+  safety: 'approval',
+  kind: 'browser',
+  summarize: (input) =>
+    [input.action, [input.method, input.url].filter(Boolean).join(' '), input.status]
+      .filter(Boolean)
+      .join(' · '),
+  async run(context, input) {
+    if (input.action === 'list') {
+      const mocks = await context.browser.mocks()
+      if (!mocks.length) return 'No mocks are set.'
+      return mocks
+        .map(
+          (mock) =>
+            `${mock.method ?? 'any'} ${mock.url} → ${mock.status} ${mock.contentType} (${mock.body.length} bytes, used ${mock.hits}×)`,
+        )
+        .join('\n')
+    }
+    if (input.action === 'clear') {
+      const removed = await context.browser.clearMocks(input.url)
+      return removed
+        ? `Removed ${removed} mock${removed > 1 ? 's' : ''}. Reload the page to get real responses.`
+        : 'No matching mocks.'
+    }
+    if (!input.url) throw new ToolError('Say which requests to mock with url, e.g. "/api/me".')
+    const mock = await toMock(
+      { ...input, url: input.url },
+      (url) => context.browser.checkUrl(url),
+      isLocalPage,
+    )
+    const count = await context.browser.addMock(mock)
+    return (
+      `Mocked ${mock.method ?? 'any method'} ${mock.url} → ${mock.status} ` +
+      `(${count} mock${count > 1 ? 's' : ''} set). Reload or open the page for it to take effect.`
+    )
   },
 })
 
@@ -710,6 +985,8 @@ export const browserTools = [
   browserScreenshot,
   browserWaitFor,
   browserSetCookie,
+  browserStorage,
+  browserMock,
   browserTabs,
   browserConsole,
   browserResize,

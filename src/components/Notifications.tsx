@@ -543,17 +543,19 @@ export function SettingsDialog({
                       <strong>Browser checks</strong>
                       <small>
                         Of the finished turns that changed UI files (components, pages, styles), how
-                        many also looked at the result in the browser. Since{' '}
+                        many also looked at the result with the browser tools, and how many drove a
+                        browser with their own script (Playwright, Puppeteer) instead. Since{' '}
                         {new Date(browserStats.since).toLocaleDateString()}.
                       </small>
                       <small className="browser-stats">
                         {(['claude', 'codex'] as const).map((provider) => {
-                          const { uiTurns, checked } = browserStats[provider]
+                          const { uiTurns, checked, scripted = 0 } = browserStats[provider]
                           return (
                             <span key={provider}>
                               {provider === 'claude' ? 'Claude' : 'Codex'}:{' '}
                               {uiTurns
-                                ? `${checked} of ${uiTurns} (${Math.round((checked / uiTurns) * 100)}%)`
+                                ? `${checked} of ${uiTurns} (${Math.round((checked / uiTurns) * 100)}%)` +
+                                  (scripted ? `, own script in ${scripted}` : '')
                                 : 'no UI changes yet'}
                             </span>
                           )

@@ -23,8 +23,11 @@ import {
 //   redirect, a link, or a popup.
 // - t3 mini itself is off-limits (its own port and the phone-access ports), so an agent can never
 //   open t3 mini and approve its own actions.
-// - No downloads, no file uploads, no running scripts in the page, no permissions (camera,
-//   location…). Dialogs (alert/confirm) are dismissed and logged.
+// - No downloads, no file uploads, no running the agent's own scripts in the page, no
+//   permissions (camera, location…). Dialogs (alert/confirm) are dismissed and logged.
+// - Test setup in the agent's private browser only: faked responses for local addresses
+//   (browser_mock) and seeded storage (browser_storage, through a blank page t3 mini serves itself
+//   at blankPath on the local site, so nothing reaches the app's server).
 // - A thread's session closes after 10 idle minutes, when the thread is deleted, or when t3 mini
 //   stops; the browser process closes when no session is left.
 
@@ -32,6 +35,62 @@ const idleMs = 10 * 60_000
 const navigationTimeout = 30_000
 const actionTimeout = 10_000
 const maxLog = 100
+const maxMocks = 20
+
+// A blank page on a local site, answered by t3 mini itself (the request never reaches the app),
+// so storage can be written for that site before the app's own code runs (browser_storage).
+export const blankPath = '/__t3mini__/blank'
+const blankPage = '<!doctype html><meta charset="utf-8"><title>t3 mini</title>'
+
+// A response the agent faked for a local address (browser_mock), e.g. GET /api/me → a test user.
+export type Mock = {
+  // A path ("/api/me", "/api/*/items") matched against any local site, or a full URL
+  // ("http://localhost:3000/api/**"). * is any run of characters except "/", ** is anything.
+  url: string
+  method?: string
+  status: number
+  contentType: string
+  body: string
+  hits: number
+}
+const globSource = (glob: string) =>
+  glob
+    .split(/(\*\*|\*)/)
+    .map((part) =>
+      part === '**' ? '.*' : part === '*' ? '[^/]*' : part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'),
+    )
+    .join('')
+// Whether a mock's pattern matches a request URL. A path pattern ignores the query string unless
+// it has one itself.
+export function mockMatches(pattern: string, raw: string) {
+  try {
+    const url = new URL(raw)
+    if (!pattern.startsWith('/')) return new RegExp(`^${globSource(pattern)}$`).test(url.href)
+    const against = pattern.includes('?') ? url.pathname + url.search : url.pathname
+    return new RegExp(`^${globSource(pattern)}$`).test(against)
+  } catch {
+    return false
+  }
+}
+
+// A console message as the developer tools show it: "%s"-style placeholders filled in with the
+// arguments (Playwright's text() leaves them and appends the arguments at the end), so React's
+// "same key, `%s`" warning names the key.
+export function consoleText(text: string, args: string[]) {
+  const [format, ...rest] = args
+  if (format === undefined || !/%[sdifoOc%]/.test(format)) return text
+  let index = 0
+  const filled = format.replace(/%([sdifoOc%])/g, (match, type: string) => {
+    if (type === '%') return '%'
+    if (index >= rest.length) return match
+    const value = rest[index++]!
+    if (type === 'c') return ''
+    if (type === 'd' || type === 'i') return String(Number.parseInt(value, 10))
+    if (type === 'f') return String(Number.parseFloat(value))
+    return value
+  })
+  return [filled, ...rest.slice(index)].join(' ')
+}
 
 // Where to find a browser, in order of preference. T3_MINI_BROWSER can point at any
 // Chromium-based browser's executable.
@@ -242,9 +301,11 @@ export function allowRequest(raw: string, ports = blockedPorts(), publicSites = 
   }
 }
 
-type LogEntry = {
-  kind: 'error' | 'warning' | 'failed request' | 'dialog' | 'blocked' | 'popup'
+export type LogEntry = {
+  kind: 'error' | 'warning' | 'failed request' | 'dialog' | 'blocked' | 'popup' | 'mocked'
   text: string
+  // How many times it happened since the last look (repeats are merged into one entry).
+  count?: number
 }
 
 // A thread's tabs: ones the agent opened, and popups pages opened (window.open, target=_blank).
@@ -262,6 +323,8 @@ class Session {
   // While the agent's own tab is being opened (so it isn't mistaken for a popup).
   opening = false
   log: LogEntry[] = []
+  // Responses faked with browser_mock, newest first.
+  mocks: Mock[] = []
   activeTab() {
     return this.tabs.find((tab) => tab.id === this.active && !tab.page.isClosed())
   }
@@ -271,8 +334,16 @@ class Session {
   }
   timer?: NodeJS.Timeout
   constructor(readonly context: BrowserContext) {}
+  // Repeats (the same warning on every render) are counted on one entry, so a flood of one
+  // message can't push everything else out of the log.
   note(entry: LogEntry) {
-    this.log.push({ ...entry, text: entry.text.slice(0, 500) })
+    const text = entry.text.slice(0, 500)
+    const same = this.log.find((item) => item.kind === entry.kind && item.text === text)
+    if (same) {
+      same.count = (same.count ?? 1) + 1
+      return
+    }
+    this.log.push({ kind: entry.kind, text })
     if (this.log.length > maxLog) this.log.splice(0, this.log.length - maxLog)
   }
 }
@@ -285,7 +356,9 @@ export class BrowserError extends Error {
 export function snapshotRefs(snapshot: string) {
   const refs = new Map<string, string>()
   for (const line of snapshot.split('\n')) {
-    const match = /^\s*-\s*([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=(e\d+)\]/.exec(line)
+    const match = /^\s*-\s*([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=((?:f\d+)?e\d+)\]/.exec(
+      line,
+    )
     if (!match) continue
     const [, role, name, ref] = match
     const text = (name ?? '').replace(/\\"/g, '"').trim()
@@ -351,7 +424,7 @@ export class BrowserManager {
     this.refs.set(threadId, snapshotRefs(snapshot))
   }
   refName(threadId: string, ref: string) {
-    const id = /^\[?(?:ref=)?(e\d+)\]?$/i.exec(ref.trim())?.[1]
+    const id = /^\[?(?:ref=)?((?:f\d+)?e\d+)\]?$/i.exec(ref.trim())?.[1]
     return id ? this.refs.get(threadId)?.get(id) : undefined
   }
   // A small, fresh picture of the thread's page for the browser chip, if one is open.
@@ -407,6 +480,30 @@ export class BrowserManager {
     const tab = session?.tabs.find((item) => item.id === id)
     if (!tab) throw new BrowserError(`There's no tab ${id}. List tabs to see them.`)
     await tab.page.close().catch(() => {})
+  }
+  // Faked responses (browser_mock): add one (replacing one with the same method and URL), list,
+  // or clear them. They only change what this thread's browser sees.
+  async addMock(threadId: string, mock: Omit<Mock, 'hits'>) {
+    const session = await this.session(threadId)
+    session.mocks = session.mocks.filter(
+      (item) => !(item.url === mock.url && (item.method ?? '') === (mock.method ?? '')),
+    )
+    if (session.mocks.length >= maxMocks)
+      throw new BrowserError(`At most ${maxMocks} mocks at once. Clear some first.`)
+    session.mocks.unshift({ ...mock, hits: 0 })
+    return session.mocks.length
+  }
+  async mocks(threadId: string): Promise<Mock[]> {
+    const session = await this.sessions.get(threadId)?.catch(() => undefined)
+    return session?.mocks.map((mock) => ({ ...mock })) ?? []
+  }
+  // Removes the mocks for one URL pattern, or all of them; returns how many were removed.
+  async clearMocks(threadId: string, url?: string) {
+    const session = await this.sessions.get(threadId)?.catch(() => undefined)
+    if (!session) return 0
+    const before = session.mocks.length
+    session.mocks = url ? session.mocks.filter((mock) => mock.url !== url) : []
+    return before - session.mocks.length
   }
   // Errors, failed requests, and dialogs since the page was opened (and clears them).
   async takeLog(threadId: string) {
@@ -609,6 +706,29 @@ export class BrowserManager {
         }
         return route.abort('blockedbyclient')
       }
+      // Test setup, on local sites only: t3 mini's blank page (for seeding storage) and the
+      // agent's faked responses. Public pages always get the real thing.
+      if (isLocalPage(url)) {
+        if (new URL(url).pathname === blankPath)
+          return route.fulfill({ status: 200, contentType: 'text/html', body: blankPage })
+        const method = request.method()
+        const mock = session.mocks.find(
+          (item) => (!item.method || item.method === method) && mockMatches(item.url, url),
+        )
+        if (mock) {
+          mock.hits++
+          const { pathname, search } = new URL(url)
+          session.note({
+            kind: 'mocked',
+            text: `${method} ${pathname}${search} → ${mock.status} (browser_mock ${mock.url})`,
+          })
+          return route.fulfill({
+            status: mock.status,
+            contentType: mock.contentType,
+            body: mock.body,
+          })
+        }
+      }
       return route.continue()
     })
     // Popups (window.open, target=_blank links) open as tabs and become active, so the agent
@@ -669,7 +789,13 @@ export class BrowserManager {
     page.on('console', (message: ConsoleMessage) => {
       const type = message.type()
       if (type === 'error' || type === 'warning')
-        session.note({ kind: type === 'error' ? 'error' : 'warning', text: message.text() })
+        session.note({
+          kind: type === 'error' ? 'error' : 'warning',
+          text: consoleText(
+            message.text(),
+            message.args().map((arg) => arg.toString()),
+          ),
+        })
     })
     page.on('pageerror', (error) => session.note({ kind: 'error', text: error.message }))
     page.on('requestfailed', (request) => {

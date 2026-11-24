@@ -22,6 +22,7 @@ src/server/tools/
   threads.ts     orchestration: start_thread, message_thread, list_threads, stop_thread, delete_thread (see docs/orchestration.md)
   processes.ts   the process tools (start_process…)
   browser.ts     the browser tools (browser_open…, see docs/browser.md)
+  browser-setup.ts  browser test setup: valueFrom files, mock checks
   index.ts       the registry: every tool, plus Claude naming helpers
 src/blocks.ts    Block types: rich content tools add to replies (shared with the client)
 src/diagrams.ts  Mermaid diagram type detection (shared by show_diagram and the client)

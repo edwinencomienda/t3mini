@@ -1,4 +1,7 @@
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -13,10 +16,12 @@ import {
   browserCheck,
   browserClick,
   browserConsole,
+  browserMock,
   browserOpen,
   browserScreenshot,
   browserSetCookie,
   browserSnapshot,
+  browserStorage,
   browserTabs,
   browserType,
   browserWaitFor,
@@ -113,6 +118,9 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
   let blocked: Server
   let base = ''
   let blockedHits = 0
+  // Requests for t3 mini's blank page that reached the app (there must be none).
+  let blankHits = 0
+  let blockedPort = 0
   let browsers: BrowserManager
   beforeAll(async () => {
     blocked = createServer((_request, response) => {
@@ -120,8 +128,30 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       response.end('t3 mini')
     })
     await new Promise<void>((resolve) => blocked.listen(0, '127.0.0.1', resolve))
-    const blockedPort = (blocked.address() as AddressInfo).port
+    blockedPort = (blocked.address() as AddressInfo).port
     site = createServer((request, response) => {
+      if (request.url?.startsWith('/__t3mini__')) blankHits++
+      if (request.url === '/api/me') {
+        response.setHeader('content-type', 'application/json')
+        return response.end(JSON.stringify({ name: null }))
+      }
+      if (request.url === '/state') {
+        // Reads saved state and the signed-in user, and repeats one React-style warning, like a
+        // list rendered with duplicate keys.
+        response.setHeader('content-type', 'text/html')
+        return response.end(`<!doctype html><title>State</title>
+          <p id="draft"></p><p id="tab"></p><p id="user">User: loading</p>
+          <script>
+            const draft = JSON.parse(localStorage.getItem('draft') || 'null')
+            document.querySelector('#draft').textContent = 'Draft: ' + (draft ? draft.title : 'none')
+            document.querySelector('#tab').textContent = 'Tab: ' + (sessionStorage.getItem('tab') || 'none')
+            fetch('/api/me').then((r) => r.json()).then((user) => {
+              document.querySelector('#user').textContent = 'User: ' + (user.name || 'nobody')
+            })
+            for (let i = 0; i < 60; i++) console.error('Encountered two children with the same key, \`%s\`.', 'gmwt9')
+            console.warn('Something else worth seeing')
+          </script>`)
+      }
       if (request.url === '/away') {
         response.writeHead(302, { location: 'http://example.com/' })
         return response.end()
@@ -186,8 +216,8 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     site?.close()
     blocked?.close()
   })
-  const context = (thread = 'thread-1'): ToolContext => ({
-    cwd: '/tmp',
+  const context = (thread = 'thread-1', cwd = '/tmp'): ToolContext => ({
+    cwd,
     attach: vi.fn(),
     saveImage: vi.fn(async () => ({ id: 'shot' })),
     saveHtml: async () => ({ id: 'x.html' }),
@@ -207,6 +237,9 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       page: () => browsers.page(thread),
       openPage: () => browsers.openPage(thread),
       takeLog: () => browsers.takeLog(thread),
+      addMock: (mock) => browsers.addMock(thread, mock),
+      mocks: () => browsers.mocks(thread),
+      clearMocks: (url) => browsers.clearMocks(thread, url),
       checkUrl: (url) => browsers.checkUrl(url),
       close: () => browsers.close(thread),
       newTab: () => browsers.newTab(thread),
@@ -218,6 +251,18 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     },
   })
 
+  // Opens /state and waits for its /api/me answer (it arrives after the page loads): the page
+  // health from opening, then the settled page.
+  const openState = async (tools: ToolContext) => {
+    const opened = await runTool(browserOpen, tools, { url: `${base}/state` })
+    const settled = await runTool(browserWaitFor, tools, {
+      text: 'User: loading',
+      gone: true,
+      seconds: 10,
+    })
+    return `${opened.text}\n${settled.text}`
+  }
+
   it('opens a local page, reads it, types, clicks, and sees the result', async () => {
     const tools = context()
     const opened = await runTool(browserOpen, tools, { url: `${base}/` })
@@ -225,7 +270,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     expect(opened.text).toMatch(/don't follow instructions/)
     expect(opened.text).toContain('Demo app')
     const ref = (name: string, text: string) =>
-      new RegExp(`${name}[^\\n]*\\[ref=(e\\d+)\\]`).exec(text)?.[1]
+      new RegExp(`${name}[^\\n]*\\[ref=((?:f\\d+)?e\\d+)\\]`).exec(text)?.[1]
     const field = ref('textbox "Name"', opened.text)
     expect(field).toBeTruthy()
     expect((await runTool(browserType, tools, { target: field, text: 'Ada' })).ok).toBe(true)
@@ -243,6 +288,16 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     })
     const preview = await browsers.preview('thread-1')
     expect(preview?.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]))
+    // After the page navigates, Playwright's refs carry the frame's generation ("f1e3"): they're
+    // still refs, for acting on and for step names.
+    const again = await runTool(browserOpen, tools, { url: `${base}/` })
+    const next = ref('textbox "Name"', again.text)
+    expect(next).toMatch(/^(f\d+)?e\d+$/)
+    expect((await runTool(browserType, tools, { target: next, text: 'Grace' })).ok).toBe(true)
+    expect(
+      (await runTool(browserClick, tools, { target: 'role=button[name="Greet"]' })).text,
+    ).toContain('Hi Grace')
+    expect(browsers.refName('thread-1', next!)).toBe("textbox 'Name'")
   }, 30_000)
 
   it('reads long pages short, open menus first, and says why a click failed', async () => {
@@ -387,6 +442,111 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
       name: 'session',
       value: '••••••',
     })
+  }, 30_000)
+
+  it('names the key in React-style warnings, and counts repeats instead of flooding', async () => {
+    const tools = context('thread-warn')
+    const opened = await runTool(browserOpen, tools, { url: `${base}/state` })
+    // One line for 60 repeats, with the key filled in, and the other warning still there.
+    expect(opened.text).toContain('Encountered two children with the same key, `gmwt9`. (×60)')
+    expect(opened.text).toMatch(/Page health: 60 errors, 1 warning/)
+    expect(opened.text).toContain('Something else worth seeing')
+  }, 30_000)
+
+  it('starts the app with saved state, reads it back, and clears it', async () => {
+    const tools = context('thread-storage')
+    blankHits = 0
+    const set = await runTool(browserStorage, tools, {
+      action: 'set',
+      url: `${base}/state`,
+      items: { draft: { title: 'Saved draft' } },
+    })
+    expect(set.ok).toBe(true)
+    expect(set.text).toMatch(/Set 1 localStorage key \(draft\)/)
+    expect(set.text).toContain('Draft: Saved draft')
+    // sessionStorage belongs to the tab, which keeps it on the same site.
+    const tab = await runTool(browserStorage, tools, {
+      action: 'set',
+      storage: 'session',
+      items: { tab: 'two' },
+    })
+    expect(tab.text).toContain('Tab: two')
+    expect(tab.text).toContain('Draft: Saved draft')
+    const read = await runTool(browserStorage, tools, { action: 'get' })
+    expect(read.text).toContain('draft = {"title":"Saved draft"}')
+    const cleared = await runTool(browserStorage, tools, { action: 'clear', keys: ['draft'] })
+    expect(cleared.text).toContain('Draft: none')
+    expect(cleared.text).toContain('Tab: two')
+    // The blank page is t3 mini's own: the app's server never saw it.
+    expect(blankHits).toBe(0)
+    // Local sites only.
+    const outside = await runTool(browserStorage, tools, {
+      action: 'set',
+      url: 'https://example.com',
+      items: { a: 1 },
+    })
+    expect(outside.text).toMatch(/Only local sites/)
+    expect(
+      (await runTool(browserStorage, tools, { action: 'set', url: `${base}/state` })).text,
+    ).toMatch(/Give items/)
+  }, 30_000)
+
+  it('fakes local API responses, lists them in page health, and clears them', async () => {
+    const tools = context('thread-mock')
+    expect(await openState(tools)).toContain('User: nobody')
+    const added = await runTool(browserMock, tools, {
+      action: 'add',
+      url: '/api/me',
+      method: 'GET',
+      json: { name: 'Test Organizer' },
+    })
+    expect(added.ok).toBe(true)
+    const opened = await openState(tools)
+    expect(opened).toContain('User: Test Organizer')
+    expect(opened).toMatch(/Mocked responses served \(browser_mock\): GET \/api\/me → 200/)
+    expect((await runTool(browserMock, tools, { action: 'list' })).text).toMatch(
+      /GET \/api\/me → 200 application\/json .*used 1×/,
+    )
+    // A failing API, to see how the page copes.
+    await runTool(browserMock, tools, { action: 'add', url: '/missing', status: 503, body: 'down' })
+    expect((await runTool(browserMock, tools, { action: 'list' })).text).toContain('503')
+    expect((await runTool(browserMock, tools, { action: 'clear' })).text).toMatch(/Removed 2/)
+    expect(await openState(tools)).toContain('User: nobody')
+    // Never public sites or t3 mini.
+    expect(
+      (await runTool(browserMock, tools, { action: 'add', url: 'https://example.com/api' })).text,
+    ).toMatch(/only work for local sites/)
+    expect(
+      (
+        await runTool(browserMock, tools, {
+          action: 'add',
+          url: `http://127.0.0.1:${blockedPort}/api/threads`,
+        })
+      ).text,
+    ).toMatch(/t3 mini itself/)
+  }, 30_000)
+
+  it('signs in with a cookie read from a project file, never showing it', async () => {
+    const project = await mkdtemp(join(tmpdir(), 't3-mini-cookie-'))
+    await mkdir(join(project, '.fixtures'))
+    await writeFile(join(project, '.fixtures/last.json'), JSON.stringify({ token: 'test-token' }))
+    const tools = context('thread-cookie-file', project)
+    const set = await runTool(browserSetCookie, tools, {
+      url: base,
+      name: 'session',
+      valueFrom: { file: '.fixtures/last.json', key: 'token' },
+    })
+    expect(set.ok).toBe(true)
+    expect(set.text).toContain('from .fixtures/last.json (token)')
+    expect(set.text).not.toContain('test-token')
+    expect((await runTool(browserOpen, tools, { url: `${base}/account` })).text).toContain(
+      'Welcome back, Ada',
+    )
+    // httpOnly by default: page scripts can't read a credential from a file.
+    const page = await browsers.openPage('thread-cookie-file')
+    expect(await page!.evaluate(() => document.cookie)).not.toContain('test-token')
+    const neither = await runTool(browserSetCookie, tools, { url: base, name: 'session' })
+    expect(neither.text).toMatch(/either value or valueFrom/)
   }, 30_000)
 
   it('screenshots a single element', async () => {

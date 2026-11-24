@@ -4,36 +4,54 @@ import type { Activity, Provider } from '../types'
 
 // How often agents check their work in the browser: of the finished turns that changed UI files
 // (components, pages, styles…), how many also used a browser tool. Counted per agent, to see
-// whether nudges like the tool instructions make a difference. Only counts are kept: no paths,
-// no thread ids. Saved in .data/browser-stats.json.
+// whether nudges like the tool instructions make a difference. Also counted: those turns where
+// the agent drove a browser with its own script (Playwright, Puppeteer…) instead. Only counts are
+// kept: no paths, no thread ids. Saved in .data/browser-stats.json.
 
-export type BrowserCounts = { uiTurns: number; checked: number }
+export type BrowserCounts = { uiTurns: number; checked: number; scripted: number }
 export type BrowserStatsData = { since: string; claude: BrowserCounts; codex: BrowserCounts }
 
 // Files people see: components, templates, and styles.
 const uiFile =
   /\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less|blade\.php|erb|hbs|twig|liquid|mdx)\b/i
 
-// Whether a turn's steps changed a UI file, and whether they used the browser.
+// A command that drives a browser itself: a Playwright or Puppeteer script, Selenium, or a
+// browser launched for automation.
+const browserScript =
+  /\b(playwright|puppeteer|selenium|webdriver)\b|chromium\.launch|--remote-debugging-port|--headless\b/i
+
+// Whether a turn's steps changed a UI file, used the browser tools, and ran a browser script.
 export function browserUse(activities: Activity[]) {
   const uiChanged = activities.some(
     (activity) =>
       (activity.label === 'Edit' || activity.label === 'Write') &&
       uiFile.test(activity.summary ?? ''),
   )
-  return { uiChanged, checked: activities.some((activity) => activity.browser) }
+  return {
+    uiChanged,
+    checked: activities.some((activity) => activity.browser),
+    scripted: activities.some(
+      (activity) =>
+        activity.label === 'Run' &&
+        browserScript.test(`${activity.summary ?? ''}\n${activity.detail ?? ''}`),
+    ),
+  }
 }
 
 const empty = (): BrowserStatsData => ({
   since: new Date().toISOString(),
-  claude: { uiTurns: 0, checked: 0 },
-  codex: { uiTurns: 0, checked: 0 },
+  claude: { uiTurns: 0, checked: 0, scripted: 0 },
+  codex: { uiTurns: 0, checked: 0, scripted: 0 },
 })
 const count = (value: unknown) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
 const counts = (value: unknown): BrowserCounts => {
   const item = (value ?? {}) as Partial<BrowserCounts>
-  return { uiTurns: count(item.uiTurns), checked: count(item.checked) }
+  return {
+    uiTurns: count(item.uiTurns),
+    checked: count(item.checked),
+    scripted: count(item.scripted),
+  }
 }
 
 export class BrowserStats {
@@ -54,10 +72,11 @@ export class BrowserStats {
   }
   // A finished turn. Only turns that changed UI files count.
   record(provider: Provider, activities: Activity[]) {
-    const { uiChanged, checked } = browserUse(activities)
+    const { uiChanged, checked, scripted } = browserUse(activities)
     if (!uiChanged) return
     this.data[provider].uiTurns++
     if (checked) this.data[provider].checked++
+    if (scripted) this.data[provider].scripted++
     this.save()
   }
   // Starts counting again (Settings → Agents → Reset).

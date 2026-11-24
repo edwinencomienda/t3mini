@@ -210,6 +210,8 @@ it('declares t3 mini tools when a thread starts, and not again on resume', async
     'browser_screenshot',
     'browser_wait_for',
     'browser_set_cookie',
+    'browser_storage',
+    'browser_mock',
     'browser_tabs',
     'browser_console',
     'browser_resize',

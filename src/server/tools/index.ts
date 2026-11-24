@@ -53,7 +53,12 @@ export const toolInstructions = [
     'people will see in a web app (a page, component, or style), it can be worth checking it ' +
     'before you finish. browser_check opens the page, takes a screenshot you can see, and lists ' +
     'console errors and failed requests in one step; browser_click and browser_type let you try ' +
-    'a flow. Use your judgment: small or non-visual changes may not need it.',
+    'a flow. Use your judgment: small or non-visual changes may not need it. Prefer these tools ' +
+    'to writing your own Playwright or Puppeteer script: they also cover test setup ' +
+    '(browser_set_cookie, also from a file in the project; browser_storage to start with saved ' +
+    'state; browser_mock to fake an API response such as a signed-in user), and every step ' +
+    'reports console errors (React warnings included) and failed requests, which a script only ' +
+    'sees if it listens for them.',
   '- read_thread reads another t3 mini conversation when the user shares its link or id, so ' +
     'you can pick up from that work.',
   '- delegate_task hands a task to a sub-agent (by default the same agent as you; the other ' +

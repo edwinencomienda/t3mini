@@ -17,16 +17,29 @@ it('tells turns that changed UI files apart, and whether they used the browser',
   expect(browserUse([step('Edit', 'src/components/Button.tsx')])).toEqual({
     uiChanged: true,
     checked: false,
+    scripted: false,
   })
   expect(
     browserUse([step('Write', 'resources/views/home.blade.php'), step('Check page', '', true)]),
-  ).toEqual({ uiChanged: true, checked: true })
+  ).toEqual({ uiChanged: true, checked: true, scripted: false })
   // Server code, reading a UI file, or running a command don't count as UI changes.
   expect(browserUse([step('Edit', 'src/server/api.ts')]).uiChanged).toBe(false)
   expect(browserUse([step('Read', 'src/styles.css')]).uiChanged).toBe(false)
   expect(browserUse([step('Run', 'vite build --outDir dist/index.html')]).uiChanged).toBe(false)
   // Codex lists several files in one step.
   expect(browserUse([step('Edit', 'src/api.ts, src/App.vue +2 more')]).uiChanged).toBe(true)
+})
+
+it('notices when the agent drove a browser with its own script instead', () => {
+  const script = (command: string) =>
+    browserUse([step('Edit', 'src/App.tsx'), step('Run', command)]).scripted
+  expect(script('bun -e "import { chromium } from \'playwright\'; …"')).toBe(true)
+  expect(script('npx playwright screenshot http://localhost:3000 shot.png')).toBe(true)
+  expect(script('node scripts/check.mjs # uses puppeteer')).toBe(true)
+  expect(script('bun run test')).toBe(false)
+  expect(script('git diff src/App.tsx')).toBe(false)
+  // Reading about Playwright isn't running it.
+  expect(browserUse([step('Read', 'node_modules/playwright/README.md')]).scripted).toBe(false)
 })
 
 it('counts per agent, keeps the counts across restarts, and resets', async () => {

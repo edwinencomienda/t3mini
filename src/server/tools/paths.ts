@@ -5,8 +5,14 @@ import { ToolError } from './types'
 
 // Resolves a file a tool was asked to read, allowing only files inside the thread's project
 // folder or the system temp folders (where agents save screenshots). Symlinks are resolved
-// first, so neither `../` nor a link can reach anything else on the machine.
-export async function resolveAllowedFile(cwd: string, path: string, maxBytes: number) {
+// first, so neither `../` nor a link can reach anything else on the machine. projectOnly leaves
+// out the temp folders (for files holding test credentials, read by browser tools).
+export async function resolveAllowedFile(
+  cwd: string,
+  path: string,
+  maxBytes: number,
+  options: { projectOnly?: boolean } = {},
+) {
   const requested = isAbsolute(path) ? path : resolve(cwd, path)
   let real: string
   try {
@@ -15,7 +21,9 @@ export async function resolveAllowedFile(cwd: string, path: string, maxBytes: nu
     throw new ToolError(`File not found: ${path}`)
   }
   const roots = await Promise.all(
-    [cwd, tmpdir(), '/tmp'].map((root) => realpath(root).catch(() => null)),
+    (options.projectOnly ? [cwd] : [cwd, tmpdir(), '/tmp']).map((root) =>
+      realpath(root).catch(() => null),
+    ),
   )
   const inside = roots.some((root) => {
     if (!root) return false
@@ -23,7 +31,11 @@ export async function resolveAllowedFile(cwd: string, path: string, maxBytes: nu
     return offset !== '' && !offset.startsWith('..') && !isAbsolute(offset)
   })
   if (!inside)
-    throw new ToolError('Only files inside the project folder or the temp folder can be shown.')
+    throw new ToolError(
+      options.projectOnly
+        ? 'Only files inside the project folder can be read.'
+        : 'Only files inside the project folder or the temp folder can be shown.',
+    )
   const info = await stat(real)
   if (!info.isFile()) throw new ToolError(`Not a file: ${path}`)
   if (info.size > maxBytes)
