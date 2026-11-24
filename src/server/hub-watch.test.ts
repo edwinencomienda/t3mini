@@ -114,3 +114,45 @@ it('keeps a followed thread whole and current, and marks threads read on the mac
   // Not a machine's thread: nothing is fetched.
   expect(await hub.load('t1')).toBeUndefined()
 })
+
+it('keeps each machine’s agent updates and t3mini install, and says when they change', async () => {
+  const machine = fakeMachine()
+  hub = new HubWatch(machine.source)
+  const changed = vi.fn()
+  hub.onUpdates(changed)
+  await hub.refresh()
+  await settle()
+  // A machine on an older t3mini sends neither: nothing to show.
+  machine.send({ threads: [summary('t1', 'idle')] })
+  await settle()
+  expect(hub.updates()).toEqual([])
+  expect(changed).not.toHaveBeenCalled()
+  const codex = {
+    provider: 'codex',
+    installed: '0.50.0',
+    latest: '0.52.0',
+    available: true,
+    updating: false,
+  }
+  machine.send({ providerUpdates: [codex], appUpdate: { ready: true, whenIdle: false } })
+  await settle()
+  expect(hub.updates()).toEqual([
+    {
+      machine: 'vps1',
+      name: 'vps',
+      providerUpdates: [codex],
+      appUpdate: { ready: true, whenIdle: false },
+      running: 0,
+    },
+  ])
+  expect(changed).toHaveBeenCalledTimes(1)
+  // Its running agents count (restarting would stop them): told when that changes, not on every
+  // thread update.
+  machine.send({ threads: [summary('t1', 'working')] })
+  await settle()
+  expect(hub.updates()[0]?.running).toBe(1)
+  expect(changed).toHaveBeenCalledTimes(2)
+  machine.send({ threads: [summary('t1', 'working', '2')] })
+  await settle()
+  expect(changed).toHaveBeenCalledTimes(2)
+})

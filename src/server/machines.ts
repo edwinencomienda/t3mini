@@ -234,7 +234,8 @@ class MachineProxy {
 
 // The hub (one sidebar for this Mac and every machine): the browser reaches a machine's API
 // through this server at /api/m/<machine>/<path>, and this server adds the machine's session.
-// Only what threads need is forwarded; anything else (device access, machines, settings…) isn't.
+// Only what threads need is forwarded, plus the machine's updates (its agent CLIs and a newer
+// t3mini to restart onto); anything else (device access, machines, settings…) isn't.
 const hubPaths = new Set([
   'bootstrap',
   'events',
@@ -245,6 +246,8 @@ const hubPaths = new Set([
   'projects',
   'models',
   'search',
+  'provider-updates',
+  'app-update',
 ])
 // Request headers a forwarded call keeps (never the browser's cookies or t3 mini's own headers).
 const forwardedRequest = ['content-type', 'accept', 'range', 'last-event-id']

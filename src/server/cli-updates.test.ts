@@ -1,5 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { claudeExecutable, isNewer, parseVersion, updateProvider, updaterEnv } from './cli-updates'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  claudeExecutable,
+  isNewer,
+  latestProviderUpdates,
+  onProviderUpdates,
+  parseVersion,
+  resetProviderUpdateWatch,
+  updateProvider,
+  updaterEnv,
+} from './cli-updates'
 
 describe('parseVersion', () => {
   it.each([
@@ -57,5 +66,31 @@ it('refuses to update while a thread on that provider is running', async () => {
     await expect(updateProvider('codex', true)).rejects.toMatchObject({ status: 409 })
   } finally {
     delete process.env.CODEX_BIN
+  }
+})
+
+it('checks in the background and tells live updates what it found', async () => {
+  resetProviderUpdateWatch()
+  process.env.CODEX_BIN = '/nonexistent/codex'
+  process.env.CLAUDE_BIN = '/nonexistent/claude'
+  // No registry calls from tests: the latest versions come from this fake.
+  const fetch = vi
+    .spyOn(globalThis, 'fetch')
+    .mockImplementation(async () => Response.json({ version: '9.9.9' }))
+  try {
+    const listener = vi.fn()
+    const stop = onProviderUpdates(listener)
+    await vi.waitFor(() => expect(listener).toHaveBeenCalled())
+    // Not installed here, so nothing to offer; the latest versions are known.
+    expect(latestProviderUpdates()).toEqual([
+      { provider: 'claude', installed: null, latest: '9.9.9', available: false, updating: false },
+      { provider: 'codex', installed: null, latest: '9.9.9', available: false, updating: false },
+    ])
+    stop()
+  } finally {
+    fetch.mockRestore()
+    resetProviderUpdateWatch()
+    delete process.env.CODEX_BIN
+    delete process.env.CLAUDE_BIN
   }
 })

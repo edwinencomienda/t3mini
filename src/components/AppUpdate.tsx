@@ -3,14 +3,16 @@ import { LoaderCircle, RefreshCw, X } from 'lucide-react'
 import { useConfirm } from './ConfirmDialog'
 
 // A newer t3mini installed while this one runs (server/app-update.ts), shown at the bottom of
-// the sidebar on the Mac (never on a phone, and never in dev). Restart switches to it: right
-// away, or once every agent is done, since restarting stops turns that are running. The page
-// reloads itself when the new server answers.
+// the sidebar on every device (never in dev): this computer's, and one per machine it follows
+// (Settings → Machines; restarted through /api/m/<machine>/). Restart switches to it: right
+// away, or once every agent is done, since restarting stops turns that are running. For this
+// computer the page reloads itself when the new server answers; a machine's card goes away once
+// the machine is back on the new version.
 
 export type Update = { ready: boolean; commit?: string; whenIdle: boolean }
 
-async function request(method = 'GET', body?: unknown): Promise<Update> {
-  const response = await fetch(`/api/app-update${method === 'GET' ? '' : '/restart'}`, {
+async function request(base: string, method = 'GET', body?: unknown): Promise<Update> {
+  const response = await fetch(`${base}/app-update${method === 'GET' ? '' : '/restart'}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -23,10 +25,13 @@ async function request(method = 'GET', body?: unknown): Promise<Update> {
 
 export function AppUpdate({
   enabled,
+  machine,
   running,
   live,
 }: {
   enabled: boolean
+  // A machine's t3mini (Settings → Machines) instead of this computer's.
+  machine?: { id: string; name: string }
   running: number
   // Pushed with the page's live updates the moment it changes (an install just finished);
   // the slower check below is only a fallback.
@@ -43,10 +48,18 @@ export function AppUpdate({
   waitingRef.current = waiting
   const restartingRef = useRef(restarting)
   restartingRef.current = restarting
+  const base = machine ? `/api/m/${encodeURIComponent(machine.id)}` : '/api'
+  // The restart is done: this computer's page reloads onto the new server; a machine's card
+  // just takes the machine's new state (no update waiting, so it goes away).
+  const finished = (next: Update) => {
+    if (!machine) return window.location.reload()
+    setRestarting(false)
+    setUpdate(next)
+  }
 
   useEffect(() => {
     if (!enabled || !live) return
-    if (waitingRef.current && !live.ready) return window.location.reload()
+    if (waitingRef.current && !live.ready) return finished(live)
     setUpdate(live)
   }, [enabled, live])
 
@@ -55,10 +68,10 @@ export function AppUpdate({
     let cancelled = false
     const since = Date.now()
     const check = () =>
-      request()
+      request(base)
         .then((next) => {
           if (cancelled) return
-          if (waitingRef.current && !next.ready) return window.location.reload()
+          if (waitingRef.current && !next.ready) return finished(next)
           setUpdate(next)
         })
         .catch(() => {
@@ -78,13 +91,13 @@ export function AppUpdate({
       clearInterval(timer)
       window.removeEventListener('focus', check)
     }
-  }, [enabled, waiting, restarting])
+  }, [enabled, waiting, restarting, base])
 
   async function restart(when: 'now' | 'idle' | 'cancel') {
     setError('')
     if (when === 'now' && running) {
       const ok = await confirm({
-        title: 'Restart t3 mini now?',
+        title: machine ? `Restart t3 mini on ${machine.name} now?` : 'Restart t3 mini now?',
         description: `${running === 1 ? 'An agent is' : `${running} agents are`} still working. Restarting stops ${running === 1 ? 'its turn' : 'their turns'}; you can send the message again afterwards.`,
         confirmLabel: 'Restart now',
         danger: true,
@@ -93,7 +106,7 @@ export function AppUpdate({
     }
     try {
       if (when === 'now') setRestarting(true)
-      setUpdate(await request('POST', { when }))
+      setUpdate(await request(base, 'POST', { when }))
     } catch (failure) {
       setRestarting(false)
       setError(failure instanceof Error ? failure.message : 'Restart failed.')
@@ -111,7 +124,10 @@ export function AppUpdate({
   return (
     <section className="provider-updates app-update" aria-label="t3 mini update">
       <div className="provider-updates-head">
-        <strong>t3 mini update installed</strong>
+        <strong>
+          t3 mini update installed
+          {machine ? <span className="provider-update-machine"> · {machine.name}</span> : null}
+        </strong>
         {!waiting ? (
           <button
             className="icon-button"

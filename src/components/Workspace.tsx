@@ -88,7 +88,7 @@ import {
   type ThreadEvent,
 } from '../notifications'
 import { NotificationPrompt, SettingsDialog, Toasts } from './Notifications'
-import { ProviderUpdates } from './ProviderUpdates'
+import { ProviderUpdates, type ProviderUpdate, type UpdateSource } from './ProviderUpdates'
 import { AppUpdate, type Update as AppUpdateState } from './AppUpdate'
 import { DiffPanel } from './DiffPanel'
 import { Blocks } from './blocks'
@@ -145,6 +145,14 @@ import {
 import type { MachineSummary } from '../server/machines'
 // A machine's part of the sidebar (the hub, src/hub.ts).
 type HubState = { threads: ThreadSummary[]; projects: ProjectSummary[] }
+// A followed machine's updates (server/hub-watch.ts → machineUpdates in the live updates).
+type MachineUpdates = {
+  machine: string
+  name: string
+  providerUpdates: ProviderUpdate[]
+  appUpdate?: AppUpdateState
+  running: number
+}
 import {
   buildTurns,
   finishLabel,
@@ -1308,6 +1316,10 @@ export function Workspace({ threadId }: { threadId?: string }) {
   const [browsers, setBrowsers] = useState<BrowserInfo[]>([])
   // A newer t3mini installed (pushed with the live updates; see AppUpdate).
   const [appUpdate, setAppUpdate] = useState<AppUpdateState | null>(null)
+  // Agent CLI updates: this computer's, and each followed machine's with its t3mini install
+  // (pushed with the live updates; see ProviderUpdates and server/hub-watch.ts).
+  const [providerUpdates, setProviderUpdates] = useState<ProviderUpdate[]>([])
+  const [machineUpdates, setMachineUpdates] = useState<MachineUpdates[]>([])
   // Where the new-thread dialog starts; null while closed.
   const [newThreadProject, setNewThreadProject] = useState<string | null>(null)
   const [addProject, setAddProject] = useState(false)
@@ -1451,6 +1463,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
           activeTab?: string | null
           persistenceError?: string | null
           appUpdate?: AppUpdateState
+          providerUpdates?: ProviderUpdate[]
+          machineUpdates?: MachineUpdates[]
         }
         if (data.projects) {
           latest.projects = data.projects
@@ -1461,6 +1475,8 @@ export function Workspace({ threadId }: { threadId?: string }) {
         if (data.processes) setProcesses(data.processes)
         if (data.browsers) setBrowsers(data.browsers)
         if (data.appUpdate) setAppUpdate(data.appUpdate)
+        if (data.providerUpdates) setProviderUpdates(data.providerUpdates)
+        if (data.machineUpdates) setMachineUpdates(data.machineUpdates)
         // Which tab, in any browser or profile, notifies and plays music.
         if (data.activeTab !== undefined) setServerTab(data.activeTab)
         if (data.ui) {
@@ -2954,6 +2970,16 @@ export function Workspace({ threadId }: { threadId?: string }) {
         .map((provider) => names[provider])
     : []
   // After an update, Settings → Agents shows the new version.
+  const updateSources = useMemo<UpdateSource[]>(
+    () => [
+      { updates: providerUpdates },
+      ...machineUpdates.map((item) => ({
+        machine: { id: item.machine, name: item.name },
+        updates: item.providerUpdates,
+      })),
+    ],
+    [providerUpdates, machineUpdates],
+  )
   const updatedProvider = (provider: Provider, version: string | null) =>
     setBootstrap((current) =>
       current && version
@@ -3570,15 +3596,19 @@ export function Workspace({ threadId }: { threadId?: string }) {
               </button>
             </div>
           ) : null}
-          <AppUpdate
-            enabled={Boolean(bootstrap && !bootstrap.remote)}
-            running={runningCount}
-            live={appUpdate}
-          />
-          <ProviderUpdates
-            enabled={Boolean(bootstrap && !bootstrap.remote)}
-            onUpdated={updatedProvider}
-          />
+          <AppUpdate enabled={Boolean(bootstrap)} running={runningCount} live={appUpdate} />
+          {machineUpdates
+            .filter((item) => item.appUpdate?.ready)
+            .map((item) => (
+              <AppUpdate
+                key={item.machine}
+                enabled
+                machine={{ id: item.machine, name: item.name }}
+                running={item.running}
+                live={item.appUpdate}
+              />
+            ))}
+          <ProviderUpdates sources={updateSources} onUpdated={updatedProvider} />
           <div className="sidebar-footer">
             <div
               className="connection"

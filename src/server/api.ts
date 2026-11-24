@@ -41,7 +41,12 @@ import {
   transcriptionThread,
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
-import { providerUpdates, updateProvider } from './cli-updates'
+import {
+  latestProviderUpdates,
+  onProviderUpdates,
+  providerUpdates,
+  updateProvider,
+} from './cli-updates'
 import { appUpdate, latestAppUpdate, onAppUpdate, restartApp, restartWhenIdle } from './app-update'
 
 // Live dictation is a WebSocket, which the HTTP servers route to this module (see vite.config.ts
@@ -592,9 +597,10 @@ export async function handleApi(request: Request) {
         return Response.json({ ok: true })
       }
     }
-    // Provider CLI updates change software on the Mac, so they're never offered to a phone.
+    // Agent CLI updates: offered on every device (phones too, and other computers' hubs through
+    // /api/m/<machine>/). Running one only starts the CLI's own fixed `update` command, so a
+    // paired device, which can already run agents, gets nothing more than that.
     if (parts[0] === 'provider-updates') {
-      macOnly('Updating agents')
       if (!parts[1] && request.method === 'GET')
         return Response.json({
           updates: await providerUpdates(url.searchParams.get('refresh') === '1'),
@@ -606,9 +612,8 @@ export async function handleApi(request: Request) {
       }
     }
     // A newer t3mini installed while this one runs (app-update.ts): restart onto it, now or
-    // once no agent is working. Mac only, like agent updates.
+    // once no agent is working. From any paired device too, like agent updates.
     if (parts[0] === 'app-update') {
-      macOnly('Restarting t3 mini')
       if (!parts[1] && request.method === 'GET') return Response.json(await appUpdate())
       if (parts[1] === 'restart' && !parts[2] && request.method === 'POST') {
         const { when } = z
@@ -856,8 +861,12 @@ export async function handleApi(request: Request) {
                   ...snapshot,
                   ...(pacer.hold(sharedJson(service, threads)) ? {} : { threads }),
                   ...(patches ? {} : { thread }),
-                  // A newer t3mini installed (app-update.ts), on the Mac only.
-                  ...(remote ? {} : { appUpdate: latestAppUpdate() }),
+                  // Updates (shown on every device, phones and other computers' hubs too): this
+                  // server's agent CLIs (cli-updates.ts), a newer t3mini installed
+                  // (app-update.ts), and those of the machines it follows (hub-watch.ts).
+                  providerUpdates: latestProviderUpdates(),
+                  appUpdate: latestAppUpdate(),
+                  machineUpdates: service.hub?.updates?.() ?? [],
                 },
                 patches ? diff.next(thread) : undefined,
                 (value) => sharedJson(service, value),
@@ -872,7 +881,9 @@ export async function handleApi(request: Request) {
             }
           }
           const unsubscribe = service.subscribe(push)
-          const unwatch = remote ? () => {} : onAppUpdate(push)
+          const unwatchApp = onAppUpdate(push)
+          const unwatchProviders = onProviderUpdates(push)
+          const unwatchMachines = service.hub?.onUpdates?.(push) ?? (() => {})
           const heartbeat = setInterval(() => {
             try {
               controller.enqueue(encode.encode(': keepalive\n\n'))
@@ -882,7 +893,9 @@ export async function handleApi(request: Request) {
           }, 15_000)
           cleanup = () => {
             unsubscribe()
-            unwatch()
+            unwatchApp()
+            unwatchProviders()
+            unwatchMachines()
             clearInterval(heartbeat)
             request.signal.removeEventListener('abort', close)
           }

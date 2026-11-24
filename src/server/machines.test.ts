@@ -143,6 +143,9 @@ it('forwards thread calls for the hub with the session, and nothing else', async
     body: JSON.stringify({ text: 'hi' }),
   })
   expect(sent.status).toBe(200)
+  // The machine's updates (agent CLIs, a newer t3mini) can be checked and run from the hub.
+  expect((await forward('provider-updates/codex', { method: 'POST', body: '{}' })).status).toBe(200)
+  expect((await forward('app-update')).status).toBe(200)
   // Only thread-related paths: not device access, machines, or settings.
   for (const path of ['remote/pair', 'machines', 'ui-settings', 'dictation'])
     expect((await forward(path)).status).toBe(404)

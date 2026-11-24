@@ -505,6 +505,11 @@ kbd {
 .provider-update-text small.error {
   color: var(--danger);
 }
+/* Which machine (Settings → Machines) an update is for: "Codex · vps". */
+.provider-update-machine {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
 /* A newer t3mini installed (AppUpdate.tsx): its restart buttons under the row. */
 .app-update-actions {
   display: flex;

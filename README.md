@@ -48,7 +48,7 @@ t3mini import .data   # once, to bring your dev threads and settings over (into 
 1. Try the change in dev first: `bun run dev` → http://127.0.0.1:4016.
 2. Run `t3mini update` (from anywhere), or `bun run install-cli` in the repo. Both rebuild the binary from the repo **as it is now, including uncommitted changes**, install it over `~/.local/bin/t3mini`, and restart production if it was running.
 3. If a thread is still working in production, the restart is skipped (it would stop that turn): the update lists the running threads, the new binary is already installed, and `t3mini restart` switches to it once they finish. `t3mini update --force` restarts anyway.
-   Production's sidebar also shows **t3 mini update installed** with a **Restart** button (Mac only). While agents are working it offers **When done** (production restarts itself as soon as every thread is idle) or **Restart now** (asks first, since it stops their turns). The page reloads itself on the new version.
+   Production's sidebar also shows **t3 mini update installed** with a **Restart** button (on the Mac and on paired phones; a machine under Settings → Machines gets its own card). While agents are working it offers **When done** (production restarts itself as soon as every thread is idle) or **Restart now** (asks first, since it stops their turns). The page reloads itself on the new version.
 4. `t3mini status` shows the commit it was built from (`Source: … @ <commit>`).
 
 Updating never touches data: production keeps `~/.t3-mini/data`, and dev keeps `.data`.
@@ -92,7 +92,9 @@ Claude runs through the Claude Agent SDK using your installed `claude` CLI (`CLA
 
 ### Agent updates
 
-On the Mac, t3 mini checks npm for new Claude Code and Codex releases (at startup and every six hours). When one is out, a card at the bottom of the sidebar shows the version change with an **Update** button, which runs `claude update` or `codex update` in the background. The next turn uses the new version, and existing threads resume as before. Updating waits until no thread on that agent is running. Hiding the card skips that version in this browser. Phones never see it.
+t3 mini checks for new Claude Code and Codex releases in the background (npm every six hours, the installed versions every hour, so an update you run in a terminal shows too). When one is out, a card at the bottom of the sidebar shows the version change with an **Update** button, which runs `claude update` or `codex update` on the computer that has it. The next turn uses the new version, and existing threads resume as before. Updating waits until no thread on that agent is running. Hiding the card skips that version in this browser.
+
+The card shows on every device: the Mac, and phones and tablets paired under Settings → Devices (the update still runs on the Mac). Each machine added under Settings → Machines is checked the same way, on that machine, and its rows show here too, labeled with its name ("Claude Code · vps"); **Update** runs there. A machine with a newer t3mini installed gets its own **t3 mini update installed · vps** card with **Restart**, **When done**, and **Restart now**, like this computer's. A machine needs this version of t3 mini for its updates to show.
 
 ## What it does
 

@@ -43,6 +43,15 @@ This computer follows every online machine itself (`src/server/hub-watch.ts`, st
 - **Dictation words:** `dictationKeyterms()` fetches a machine's thread for its last replies.
 - They only arrive while this computer is on and can reach the machine, which is also when the phone can open those threads.
 
+## Updates for machines
+
+A machine's agent CLIs (Claude Code, Codex) and a newer t3mini installed on it show in this computer's sidebar, next to this computer's own, on every device that opens this computer (the Mac, paired phones and tablets):
+
+- Every t3 mini checks its own CLIs in the background (`cli-updates.ts`: npm every 6 hours, installed versions every hour) and sends `providerUpdates` and `appUpdate` with its live updates, to every client.
+- This computer's `HubWatch` keeps each machine's (from the machine's `/api/events` it already follows) and passes them on as `machineUpdates` (`[{ machine, name, providerUpdates, appUpdate?, running }]`), so a client gets every machine's updates from this computer's one stream. `running` counts the machine's working agents, for the restart card's **When done** and its warning.
+- **Update** and **Restart** go through `/api/m/<machine>/provider-updates/<agent>` and `/api/m/<machine>/app-update[/restart]` (`forward()` allows these two besides the thread paths). The machine runs them as for any paired device: its own CLI's fixed `update` command, or restarting onto the t3mini already installed there. Nothing is downloaded or installed on the machine from here.
+- A machine on an older t3 mini sends neither, so it shows no updates; updating it once (`t3mini update` there) is enough.
+
 ## How it works
 
 ```text
@@ -57,7 +66,7 @@ Browser on this Mac ──► 127.0.0.1:<port>  (machines.ts: MachineProxy, loop
 - **Pairing reuses the phone gateway** (`remote.ts`). The other machine sees this Mac as one more paired device, so there's no new way into a machine: same one-time codes, hashed revocable sessions, Tailscale or private-network-only checks. `deviceName()` labels it `t3 mini · <host>` from this Mac's user agent (`t3mini/<version> (<host>)`).
 - **The session stays on this server.** `Machines.add()` POSTs the code to the machine's `/pair`, keeps the `Set-Cookie` session in `machines.json` next to the data (mode 0600), and checks that `/api/bootstrap` answers. The API (`GET/POST/DELETE /api/machines`, `POST /api/machines/rename`) never returns it, and it's never sent to a browser: the proxy adds it and strips any `Set-Cookie` the machine sends back.
 - **A local address per machine,** from the app's port + 100 up (production 4111…, dev 4116…), saved per machine and moved if taken. HTTP, Server-Sent Events, and WebSockets (dictation) pass through; redirects to the machine come back to the local address.
-- **Mac-only actions** (Open in VS Code, folder picker, its Settings → Devices and Dictation) are refused by the machine, since the request arrives as a paired device.
+- **Mac-only actions** (Open in VS Code, folder picker, its Settings → Devices and Dictation) are refused by the machine, since the request arrives as a paired device. Its agent updates and t3mini restart aren't Mac-only, so they work from here (see Updates for machines).
 - **Links:** `https://` for any host (Tailscale), `http://` only for private network addresses.
 - **Status** (`list()`): online (its `/api/bootstrap` answers), offline, or unpaired (401: the session expired or was revoked).
 - Code: `src/server/machines.ts` (store, pairing, proxy), `/api/machines` in `api.ts`, `components/Machines.tsx` (Settings → Machines: adding machines, and `ShareThisComputer`, the in-app `t3mini pair` built on `/api/remote` and `/api/remote/pair`), `t3mini pair` in `cli/t3mini.ts`.

@@ -63,10 +63,22 @@ type State = {
   checkedAt: number
   latest: Partial<Record<Provider, string>>
   updating: Set<Provider>
+  // Live: the last result, sent with every client's live updates (see onProviderUpdates).
+  current: ProviderUpdate[]
+  listeners: Set<() => void>
+  timer?: ReturnType<typeof setInterval>
 }
 // On globalThis so a dev hot reload keeps the cache and doesn't forget an update in progress.
 const globals = globalThis as typeof globalThis & { t3MiniCliUpdates?: State }
-const state = (globals.t3MiniCliUpdates ??= { checkedAt: 0, latest: {}, updating: new Set() })
+const state = (globals.t3MiniCliUpdates ??= {
+  checkedAt: 0,
+  latest: {},
+  updating: new Set(),
+  current: [],
+  listeners: new Set(),
+})
+state.current ??= []
+state.listeners ??= new Set()
 const checkEvery = 6 * 60 * 60 * 1000
 const providers: Provider[] = ['claude', 'codex']
 
@@ -116,6 +128,38 @@ export async function providerUpdates(refresh = false): Promise<ProviderUpdate[]
   )
 }
 
+// Live: this server checks its own CLIs in the background (the registry every 6 hours, the
+// installed versions every hour, so an update run in a terminal shows too) and tells every
+// client through its live updates, phones and other computers' hubs included. Nothing is
+// fetched per browser tab.
+const watchEvery = 60 * 60 * 1000
+export const latestProviderUpdates = () => state.current
+async function refreshLive(refresh = false) {
+  const next = await providerUpdates(refresh).catch(() => state.current)
+  if (JSON.stringify(next) === JSON.stringify(state.current)) return
+  state.current = next
+  for (const listener of state.listeners) listener()
+}
+export function onProviderUpdates(listener: () => void) {
+  state.listeners.add(listener)
+  if (!state.timer) {
+    void refreshLive()
+    state.timer = setInterval(() => void refreshLive(), watchEvery)
+    state.timer.unref?.()
+  }
+  return () => void state.listeners.delete(listener)
+}
+// Stops the background check and forgets the state (tests).
+export function resetProviderUpdateWatch() {
+  if (state.timer) clearInterval(state.timer)
+  state.timer = undefined
+  state.listeners.clear()
+  state.current = []
+  state.checkedAt = 0
+  state.latest = {}
+  state.updating.clear()
+}
+
 export class UpdateError extends Error {
   readonly name = 'UpdateError'
   constructor(
@@ -145,6 +189,8 @@ export async function updateProvider(provider: Provider, busy: boolean) {
   if (busy)
     throw new UpdateError(409, `A ${names[provider]} thread is running. Update once it finishes.`)
   state.updating.add(provider)
+  // Every client sees "Updating…" (and the result) through its live updates.
+  void refreshLive()
   try {
     await exec(providerExecutable(provider), ['update'], {
       env: updaterEnv(),
@@ -159,6 +205,7 @@ export async function updateProvider(provider: Provider, busy: boolean) {
     )
   } finally {
     state.updating.delete(provider)
+    void refreshLive()
   }
   return (await providerUpdates()).find((item) => item.provider === provider)!
 }

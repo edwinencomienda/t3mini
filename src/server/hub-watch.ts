@@ -1,4 +1,6 @@
 import type { Thread, ThreadSummary } from '../types'
+import type { AppUpdate } from './app-update'
+import type { ProviderUpdate } from './cli-updates'
 import type { Machines } from './machines'
 
 // The hub, watched by this server (docs/machines.md → Push notifications and Live Activities):
@@ -25,7 +27,22 @@ type Feed = {
   stop: () => void
   threads: ThreadSummary[]
   projects: Map<string, string>
+  // The machine's own agent CLI updates and t3mini install (from its live updates; a machine on
+  // an older t3mini sends neither).
+  providerUpdates?: ProviderUpdate[]
+  appUpdate?: AppUpdate
+  // How many of its agents are working (restarting it would stop them).
+  running: number
 }
+// One machine's updates, as this computer's clients get them (machineUpdates in /api/events).
+export type MachineUpdates = {
+  machine: string
+  name: string
+  providerUpdates: ProviderUpdate[]
+  appUpdate?: AppUpdate
+  running: number
+}
+const activeStatuses = new Set(['starting', 'working', 'waiting'])
 type MachineSource = Pick<Machines, 'list' | 'forward'>
 
 // Whole threads kept current for Live Activities and dictation: the most recent ones asked for.
@@ -34,6 +51,8 @@ const maxFollowed = 50
 export class HubWatch {
   private feeds = new Map<string, Feed>()
   private listeners = new Set<() => void>()
+  // Told only when a machine's updates change (not on every thread change).
+  private updateListeners = new Set<() => void>()
   private full = new Map<string, Thread>()
   private followed: string[] = []
   private loading = new Map<string, Promise<Thread | undefined>>()
@@ -79,14 +98,23 @@ export class HubWatch {
       if (feed) feed.name = machine.name
       else this.feeds.set(machine.id, this.open(machine.id, machine.name))
     }
-    if (changed) this.notify()
+    if (changed) {
+      this.notify()
+      this.notifyUpdates()
+    }
   }
 
   // One machine's live updates: its thread list and projects. Reconnects with a growing wait
   // while the machine stays in the online list.
   private open(machine: string, name: string): Feed {
     const controller = new AbortController()
-    const feed: Feed = { name, stop: () => controller.abort(), threads: [], projects: new Map() }
+    const feed: Feed = {
+      name,
+      stop: () => controller.abort(),
+      threads: [],
+      projects: new Map(),
+      running: 0,
+    }
     const run = async () => {
       let attempt = 0
       while (!controller.signal.aborted) {
@@ -115,11 +143,22 @@ export class HubWatch {
   }
 
   private receive(machine: string, feed: Feed, data: string) {
-    let update: { threads?: ThreadSummary[]; projects?: { path: string; name?: string }[] }
+    let update: {
+      threads?: ThreadSummary[]
+      projects?: { path: string; name?: string }[]
+      providerUpdates?: ProviderUpdate[]
+      appUpdate?: AppUpdate
+    }
     try {
       update = JSON.parse(data) as typeof update
     } catch {
       return
+    }
+    if (update.providerUpdates || update.appUpdate) {
+      if (Array.isArray(update.providerUpdates)) feed.providerUpdates = update.providerUpdates
+      if (update.appUpdate && typeof update.appUpdate === 'object')
+        feed.appUpdate = update.appUpdate
+      this.notifyUpdates()
     }
     if (update.projects)
       feed.projects = new Map(
@@ -134,6 +173,11 @@ export class HubWatch {
       ...(item.parentId ? { parentId: hubId(machine, item.parentId) } : {}),
       machine: feed.name,
     }))
+    const running = feed.threads.filter((item) => activeStatuses.has(item.status)).length
+    if (running !== feed.running) {
+      feed.running = running
+      if (feed.appUpdate?.ready) this.notifyUpdates()
+    }
     // Whole threads that are followed (a Live Activity) are fetched again when they changed.
     for (const item of feed.threads) {
       const old = before.get(item.id)
@@ -144,6 +188,26 @@ export class HubWatch {
         void this.load(item.id)
     }
     this.notify()
+  }
+
+  // Every online machine's agent updates and t3mini install, by machine.
+  updates(): MachineUpdates[] {
+    return [...this.feeds.entries()]
+      .filter(([, feed]) => feed.providerUpdates || feed.appUpdate)
+      .map(([machine, feed]) => ({
+        machine,
+        name: feed.name,
+        providerUpdates: feed.providerUpdates ?? [],
+        ...(feed.appUpdate ? { appUpdate: feed.appUpdate } : {}),
+        running: feed.running,
+      }))
+  }
+  onUpdates(listener: () => void) {
+    this.updateListeners.add(listener)
+    return () => void this.updateListeners.delete(listener)
+  }
+  private notifyUpdates() {
+    for (const listener of this.updateListeners) listener()
   }
 
   // Every online machine's threads, with hub ids.

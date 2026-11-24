@@ -84,6 +84,10 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
     ['dictation/provider', 'POST'],
   ] as const)
     expect((await remote(path, method)).status).toBe(403)
+  // Updates are offered on every device: a paired phone may check and run them.
+  expect((await remote('app-update', 'GET')).status).toBe(200)
+  expect((await remote('provider-updates/not-an-agent', 'POST')).status).not.toBe(403)
+  expect((await remote('app-update/restart', 'POST')).status).not.toBe(403)
   const bootstrap = await handleApi(
     new Request('http://127.0.0.1:4310/api/bootstrap', { headers: { 'x-t3-remote': '1' } }),
   )

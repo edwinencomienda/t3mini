@@ -69,7 +69,7 @@ WebSocket upgrades (Vite's dev live reload) take the same checks, then are piped
 
 `/api/bootstrap` also returns `remote` (this page is on a paired phone) and `phoneAccess` (gateway on).
 
-Mac-only actions refused for remote requests: managing phone access, `POST /api/folders/pick` (opens a Finder dialog on the Mac), `POST /api/threads/:id/open-editor` (opens VS Code on the Mac). Everything else (threads, sending, steering, approvals, stop, diff, uploads, settings) works remotely.
+Mac-only actions refused for remote requests: managing phone access, `POST /api/folders/pick` (opens a Finder dialog on the Mac), `POST /api/threads/:id/open-editor` (opens VS Code on the Mac). Everything else (threads, sending, steering, approvals, stop, diff, uploads, settings) works remotely, including agent CLI updates (`/api/provider-updates`, which only runs the CLI's own fixed `update` command) and restarting onto a newer installed t3mini (`/api/app-update`): a paired device can already run agents, so these give it nothing more.
 
 ## Settings and constants
 
