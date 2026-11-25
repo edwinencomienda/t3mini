@@ -248,6 +248,8 @@ const hubPaths = new Set([
   'search',
   'provider-updates',
   'app-update',
+  // Whether you're at that machine (for push notifications: phones stay quiet while you are).
+  'presence',
 ])
 // Request headers a forwarded call keeps (never the browser's cookies or t3 mini's own headers).
 const forwardedRequest = ['content-type', 'accept', 'range', 'last-event-id']

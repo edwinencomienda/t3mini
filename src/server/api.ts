@@ -41,6 +41,7 @@ import {
   transcriptionThread,
 } from './dictation'
 import { registerDictationStream } from './dictation-stream'
+import { atMac } from './presence'
 import {
   latestProviderUpdates,
   onProviderUpdates,
@@ -775,6 +776,13 @@ export async function handleApi(request: Request) {
       })
       return Response.json({ activeTab: service.tabs.leader() ?? null })
     }
+    // Whether you're at this computer right now and its t3 mini will show the desktop
+    // notification (keyboard or mouse used lately, screen unlocked, the notifying tab here with
+    // desktop notifications on). Another computer following this one asks before pushing this
+    // computer's threads to your phone (hub-watch.ts → machineAtDesk), so the phone stays quiet
+    // while you work here. Only that yes or no, nothing else about the tabs or the machine.
+    if (parts[0] === 'presence' && !parts[1] && request.method === 'GET')
+      return Response.json({ atDesk: service.tabs.deskNotifies() && (await atMac()) })
     // View settings shared by every browser (Group by…).
     if (parts[0] === 'ui-settings' && !parts[1] && request.method === 'POST')
       return Response.json(await service.updateUi(await request.json()))

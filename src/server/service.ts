@@ -2530,7 +2530,12 @@ export function getService() {
     // tab that notifies is on this Mac with desktop notifications on.
     const away = new AwayPush({
       push,
-      atDesk: async () => service.tabs.deskNotifies() && (await atMac()),
+      atDesk: async (thread) => {
+        if (service.tabs.deskNotifies() && (await atMac())) return true
+        // A machine's thread: also quiet while you're at that machine (it shows it there).
+        const machine = parseHubId(thread)?.machine
+        return machine ? hub.machineAtDesk(machine) : false
+      },
       mode: () => (service.ui.settings.phonePush === 'always' ? 'always' : 'away'),
     })
     watchThreads(

@@ -88,6 +88,10 @@ it('blocks Mac-only actions for requests from a paired phone', async () => {
   expect((await remote('app-update', 'GET')).status).toBe(200)
   expect((await remote('provider-updates/not-an-agent', 'POST')).status).not.toBe(403)
   expect((await remote('app-update/restart', 'POST')).status).not.toBe(403)
+  // Another computer following this one asks whether you're here before pushing to your phone.
+  const presence = await remote('presence', 'GET')
+  expect(presence.status).toBe(200)
+  expect(await presence.json()).toEqual({ atDesk: false })
   const bootstrap = await handleApi(
     new Request('http://127.0.0.1:4310/api/bootstrap', { headers: { 'x-t3-remote': '1' } }),
   )

@@ -5,7 +5,7 @@ import type { ThreadSummary } from '../types'
 
 // A fake machine: its live updates are pushed by the test; whole threads and read marks answer
 // from a map. Nothing leaves the process.
-function fakeMachine() {
+function fakeMachine(presence: () => Response = () => Response.json({ atDesk: false })) {
   let send: (data: unknown) => void = () => {}
   const calls: { path: string; method: string }[] = []
   const threads = new Map<string, Record<string, unknown>>()
@@ -32,6 +32,7 @@ function fakeMachine() {
         })
         return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
       }
+      if (path === 'presence') return presence()
       const thread = threads.get(decodeURIComponent(path.replace(/^threads\//, '')))
       if (path.endsWith('/read') || !thread) return Response.json({ ok: true })
       return Response.json(thread)
@@ -155,4 +156,18 @@ it('keeps each machine’s agent updates and t3mini install, and says when they 
   machine.send({ threads: [summary('t1', 'working', '2')] })
   await settle()
   expect(changed).toHaveBeenCalledTimes(2)
+})
+
+it('asks a machine whether you’re at it, and takes no answer as no', async () => {
+  let answer: () => Response = () => Response.json({ atDesk: true })
+  const machine = fakeMachine(() => answer())
+  hub = new HubWatch(machine.source)
+  expect(await hub.machineAtDesk('vps1')).toBe(true)
+  answer = () => Response.json({ atDesk: false })
+  expect(await hub.machineAtDesk('vps1')).toBe(false)
+  // An older machine without the route, or anything odd: not at it, so the phone still gets it.
+  answer = () => Response.json({ error: 'Not found' }, { status: 404 })
+  expect(await hub.machineAtDesk('vps1')).toBe(false)
+  answer = () => Response.json({ atDesk: 'yes' })
+  expect(await hub.machineAtDesk('vps1')).toBe(false)
 })

@@ -406,8 +406,9 @@ export class AwayPush {
   constructor(
     private deps: {
       push: Pick<PushNotifications, 'queue'>
-      // You're at the Mac and it will show the desktop notification.
-      atDesk: () => Promise<boolean>
+      // You're at a computer that will show this thread's desktop notification: this Mac, or
+      // for a machine's thread (Settings → Machines) that machine too. By thread (the tag).
+      atDesk: (thread: string) => Promise<boolean>
       mode: () => 'away' | 'always'
       recheckMs?: number
       holdMs?: number
@@ -416,7 +417,8 @@ export class AwayPush {
   async deliver(payload: PushPayload, skip: ReadonlySet<string>, needsYou: () => boolean) {
     // A newer event for the same thread replaces a held one.
     this.release(payload.tag)
-    if (this.deps.mode() === 'always' || !(await this.deps.atDesk().catch(() => false)))
+    const atDesk = () => this.deps.atDesk(payload.tag).catch(() => false)
+    if (this.deps.mode() === 'always' || !(await atDesk()))
       return this.deps.push.queue(payload, skip)
     this.deps.push.queue(payload, skip, 'here')
     const started = Date.now()
@@ -427,7 +429,7 @@ export class AwayPush {
       try {
         if (!needsYou() || Date.now() - started > (this.deps.holdMs ?? 15 * 60_000))
           return this.release(payload.tag, timer)
-        if (await this.deps.atDesk().catch(() => false)) return
+        if (await atDesk()) return
         this.release(payload.tag, timer)
         this.deps.push.queue(payload, skip, 'away')
       } finally {

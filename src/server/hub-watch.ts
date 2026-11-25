@@ -275,6 +275,28 @@ export class HubWatch {
     return task
   }
 
+  // Whether you're at that machine right now and its t3 mini will show the desktop
+  // notification there (its GET /api/presence; an older machine, or one that doesn't answer
+  // within 3 seconds, counts as no). Asked when a push is decided, so it's always current.
+  async machineAtDesk(machine: string) {
+    try {
+      const reply = await this.machines.forward(
+        machine,
+        'presence',
+        new Request(`http://127.0.0.1/api/m/${encodeURIComponent(machine)}/presence`, {
+          signal: AbortSignal.timeout(3000),
+        }),
+      )
+      if (reply.status !== 200) {
+        await reply.body?.cancel()
+        return false
+      }
+      const data = (await reply.json()) as { atDesk?: unknown }
+      return data.atDesk === true
+    } catch {
+      return false
+    }
+  }
   // Marks a machine's thread read there (you watched it finish here).
   async markRead(id: string) {
     const parsed = parseHubId(id)

@@ -343,3 +343,22 @@ it('holds a finished thread for phones only until you open it', async () => {
   stop()
   away.stop()
 })
+
+it('asks about the thread’s own computer: quiet while you’re at the machine it ran on', async () => {
+  const queued: string[] = []
+  const asked: string[] = []
+  const away = new AwayPush({
+    push: { queue: (_payload, _skip, targets = 'all') => void queued.push(targets) },
+    // You're at the machine "vps1", not at this Mac.
+    atDesk: async (thread) => {
+      asked.push(thread)
+      return thread.startsWith('m~vps1~')
+    },
+    mode: () => 'away',
+  })
+  await away.deliver({ ...payload, tag: 'm~vps1~t9' }, new Set(), () => true)
+  await away.deliver({ ...payload, tag: 'here-1' }, new Set(), () => true)
+  expect(asked).toEqual(['m~vps1~t9', 'here-1'])
+  expect(queued).toEqual(['here', 'all'])
+  away.stop()
+})
