@@ -140,6 +140,7 @@ import {
   isRemote,
   machinePath,
   parseRemote,
+  remoteId,
   threadApi,
   type HubMachine,
 } from '../hub'
@@ -1680,7 +1681,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
   // The open thread's project, known from the sidebar list even before the thread loads.
   const activeCwd = thread?.cwd ?? threads.find((item) => item.id === activeId)?.cwd
   // Where it works, which is what git reports on: a worktree thread has its own branch.
-  const gitFolder = thread?.worktree?.path ?? activeCwd
+  // Remote worktree paths are namespaced with their machine so they never collide with local ones.
+  const gitFolder = thread?.worktree?.path
+    ? activeMachine
+      ? remoteId(activeMachine, thread.worktree.path)
+      : thread.worktree.path
+    : activeCwd
   useEffect(() => {
     setGit(gitFolder ? (gitCache.current.get(gitFolder) ?? null) : null)
     if (!activeId || !gitFolder) return
@@ -4418,7 +4424,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           {thread && diffOpen && git?.branch ? (
             <DiffPanel
               threadId={thread.id}
-              project={thread.cwd}
+              project={gitFolder ?? thread.cwd}
               refreshKey={`${thread.status}:${thread.activities.filter((item) => item.status !== 'running').length}`}
               onClose={closeDiff}
             />

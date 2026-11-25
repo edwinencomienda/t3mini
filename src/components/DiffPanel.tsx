@@ -174,10 +174,12 @@ export const DiffPanel = memo(function DiffPanel({
   const panel = useRef<HTMLElement>(null)
   // Files start collapsed; this holds the ones the user opened (or closed again).
   const [opened, setOpenedState] = useState<Opened>(() => loadOpened(project))
+  const projectRef = useRef(project)
+  projectRef.current = project
   function setOpened(update: (current: Opened) => Opened) {
     setOpenedState((current) => {
       const next = update(current)
-      saveOpened(project, next)
+      saveOpened(projectRef.current, next)
       return next
     })
   }
@@ -227,16 +229,24 @@ export const DiffPanel = memo(function DiffPanel({
     handle.addEventListener('pointerup', stop)
     handle.addEventListener('pointercancel', stop)
   }
-  useEffect(() => setDiff(diffs.get(project) ?? null), [project])
+  const lastThread = useRef(threadId)
+  useEffect(() => {
+    setDiff(diffs.get(project) ?? null)
+    setError('')
+  }, [project])
   useEffect(() => setOpenedState(loadOpened(project)), [project])
   useEffect(() => {
     const controller = new AbortController()
-    // Debounced so a burst of tool steps triggers one git run.
+    // Fetch immediately when switching threads; debounce bursts of tool steps in the same thread.
+    const switched = lastThread.current !== threadId
+    lastThread.current = threadId
+    const delay = switched ? 0 : 400
     const timer = setTimeout(() => {
       setLoading(true)
       fetch(`/api/${threadApi(threadId, 'diff')}`, { signal: controller.signal })
         .then(async (response) => {
           const data = await response.json()
+          if (controller.signal.aborted) return
           if (!response.ok) throw new Error(data.error || 'Could not load changes.')
           diffs.set(project, data as DiffResult)
           setDiff(data as DiffResult)
@@ -248,12 +258,12 @@ export const DiffPanel = memo(function DiffPanel({
         .finally(() => {
           if (!controller.signal.aborted) setLoading(false)
         })
-    }, 400)
+    }, delay)
     return () => {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [threadId, refreshKey, reload])
+  }, [threadId, project, refreshKey, reload])
   useEffect(() => {
     const refresh = () => setReload((count) => count + 1)
     window.addEventListener('focus', refresh)
@@ -382,17 +392,18 @@ export const DiffPanel = memo(function DiffPanel({
         {diff?.repo && !diff.files.length ? (
           <p className="diff-empty">No uncommitted changes.</p>
         ) : null}
-        {diff?.files.map((file) => (
-          <FileDiff
-            key={fileKey(file)}
-            file={file}
-            view={view}
-            open={isOpen(file)}
-            onToggle={() =>
-              setOpened((current) => ({ ...current, [fileKey(file)]: !isOpen(file) }))
-            }
-          />
-        ))}
+        {diff?.files.map((file, index) => {
+          const key = fileKey(file)
+          return (
+            <FileDiff
+              key={`${key}:${index}`}
+              file={file}
+              view={view}
+              open={opened[key] ?? false}
+              onToggle={() => setOpened((current) => ({ ...current, [key]: !current[key] }))}
+            />
+          )
+        })}
         {diff?.truncated ? (
           <p className="diff-note">
             {diff.totalFiles > diff.files.length
