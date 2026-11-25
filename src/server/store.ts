@@ -97,24 +97,56 @@ export class ThreadStore {
   }
   // A saveSoon() that hasn't written yet.
   private pending?: NodeJS.Timeout
-  save() {
+  // Threads known to have changed since the last save, so saveSoon(..., id) and save(id)
+  // only serialize and hash those threads instead of every thread in memory.
+  private dirty = new Set<string>()
+  private dirtyAll = false
+  private pendingFire = false
+  markDirty(id?: string | Iterable<string>) {
+    if (!id) this.dirtyAll = true
+    else if (typeof id === 'string') this.dirty.add(id)
+    else for (const item of id) this.dirty.add(item)
+  }
+  save(id?: string | Iterable<string>) {
     // This writes everything that changed, so a pending saveSoon() has nothing left to do.
     this.cancelPending()
+    const fromTimer = this.pendingFire
+    this.pendingFire = false
+    if (id !== undefined) this.markDirty(id)
+    else if (!fromTimer) this.dirtyAll = true
     // Snapshot before queueing writes; only one save writes at a time.
-    const changes = this.changes()
+    const changes = this.takeChanges()
     const write = this.queue.then(() => this.apply(changes))
     this.queue = write.catch(() => {})
     return write
   }
   // Threads whose JSON differs from their file, and files of threads that are gone.
-  private changes(): Changes {
+  private takeChanges(): Changes {
     const writes: Changes['writes'] = []
-    for (const [id, thread] of this.threads) {
-      const contents = JSON.stringify(thread)
-      const hashed = digest(contents)
-      if (this.written.get(id) !== hashed) writes.push({ id, contents, digest: hashed })
+    const removes: string[] = []
+    const full = this.dirtyAll || !this.dirty.size
+    const ids = full ? undefined : [...this.dirty]
+    this.dirty.clear()
+    this.dirtyAll = false
+    if (full) {
+      for (const [id, thread] of this.threads) {
+        const contents = JSON.stringify(thread)
+        const hashed = digest(contents)
+        if (this.written.get(id) !== hashed) writes.push({ id, contents, digest: hashed })
+      }
+      for (const id of this.written.keys()) if (!this.threads.has(id)) removes.push(id)
+    } else {
+      for (const id of ids!) {
+        const thread = this.threads.get(id)
+        if (thread) {
+          const contents = JSON.stringify(thread)
+          const hashed = digest(contents)
+          if (this.written.get(id) !== hashed) writes.push({ id, contents, digest: hashed })
+        } else if (this.written.has(id)) {
+          removes.push(id)
+        }
+      }
     }
-    const removes = [...this.written.keys()].filter((id) => !this.threads.has(id))
     return { writes, removes }
   }
   // A thread is only marked written once its file is, so a failed write is retried next save.
@@ -122,12 +154,22 @@ export class ThreadStore {
     if (writes.length) await mkdir(this.folder, { recursive: true, mode: 0o700 })
     const results = await Promise.allSettled([
       ...writes.map(async (item) => {
-        await writeAtomic(join(this.folder, fileName(item.id)), item.contents)
-        this.written.set(item.id, item.digest)
+        try {
+          await writeAtomic(join(this.folder, fileName(item.id)), item.contents)
+          this.written.set(item.id, item.digest)
+        } catch (error) {
+          this.dirty.add(item.id)
+          throw error
+        }
       }),
       ...removes.map(async (id) => {
-        await rm(join(this.folder, fileName(id)), { force: true })
-        if (!this.threads.has(id)) this.written.delete(id)
+        try {
+          await rm(join(this.folder, fileName(id)), { force: true })
+          if (!this.threads.has(id)) this.written.delete(id)
+        } catch (error) {
+          this.dirty.add(id)
+          throw error
+        }
       }),
     ])
     const failed = results.find((result) => result.status === 'rejected')
@@ -137,12 +179,14 @@ export class ThreadStore {
   // threads ten times a second, so they're written at most once a second instead (the browser
   // still gets every update). Turn ends and other changes that must not be lost still call
   // save() directly, and t3 mini writes a pending save on exit.
-  saveSoon(onError: () => void) {
+  saveSoon(onError: () => void, id?: string | Iterable<string>) {
+    this.markDirty(id)
     if (this.pending) return
     pendingStores.add(this)
     hookExit()
     this.pending = setTimeout(() => {
       this.cancelPending()
+      this.pendingFire = true
       this.save().catch(onError)
     }, saveDelay)
     // Waiting to save doesn't keep the process alive; the exit hook writes it.
@@ -153,7 +197,7 @@ export class ThreadStore {
   flushNow() {
     if (!this.pending) return
     this.cancelPending()
-    const { writes, removes } = this.changes()
+    const { writes, removes } = this.takeChanges()
     try {
       if (writes.length) mkdirSync(this.folder, { recursive: true, mode: 0o700 })
     } catch {

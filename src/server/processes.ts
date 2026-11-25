@@ -98,7 +98,7 @@ export class ProcessManager {
     return [...this.entries.values()]
       .map((entry) => entry.info)
       .filter((info) => !project || info.project === project)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0))
   }
   get(id: string) {
     return this.entries.get(id)?.info

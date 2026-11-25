@@ -94,85 +94,136 @@ export function buildTurns(thread: ThreadState): Turn[] {
 
   // Steps join the turn whose message came before them; older steps without a start time
   // belong to the current run's turn.
+  const dated: { index: number; at: string }[] = []
+  for (let n = 0; n <= current; n++) {
+    const at = turns[n]!.startedAt
+    if (at) dated.push({ index: n, at })
+  }
+  const hasTodo = new Set<number>()
+  let cursor = 0
   for (const activity of thread.activities) {
     let index = current
-    if (activity.startedAt) {
-      index = 0
-      turns.forEach((turn, n) => {
-        // Never a queued message's turn: those haven't run yet.
-        if (n <= current && turn.startedAt && turn.startedAt <= activity.startedAt!) index = n
-      })
+    const startedAt = activity.startedAt
+    if (startedAt) {
+      if (!dated.length || startedAt < dated[0]!.at) {
+        index = 0
+      } else {
+        // Activities arrive mostly in time order, so try advancing from the last matched turn
+        // before falling back to binary search over dated turns.
+        if (dated[cursor]!.at > startedAt) {
+          let lo = 0
+          let hi = cursor
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1
+            if (dated[mid]!.at <= startedAt) lo = mid
+            else hi = mid - 1
+          }
+          cursor = lo
+        } else {
+          while (cursor + 1 < dated.length && dated[cursor + 1]!.at <= startedAt) cursor++
+        }
+        index = dated[cursor]!.index
+      }
     }
     const turn = turns[index]!
     // To-do updates become one checklist card (not steps), placed at the first one.
     if (activity.todo) {
-      if (!turn.work.some((item) => item.kind === 'todos'))
-        turn.work.push({ kind: 'todos', at: activity.startedAt ?? '', todos: [] })
+      if (!hasTodo.has(index)) {
+        hasTodo.add(index)
+        turn.work.push({ kind: 'todos', at: startedAt ?? '', todos: [] })
+      }
       continue
     }
-    turn.work.push({ kind: 'step', activity, at: activity.startedAt ?? '' })
+    turn.work.push({ kind: 'step', activity, at: startedAt ?? '' })
     turn.steps++
   }
 
+  const cmpWork = (a: WorkItem, b: WorkItem) =>
+    a.at && b.at ? (a.at < b.at ? -1 : a.at > b.at ? 1 : 0) : a.at ? -1 : b.at ? 1 : 0
+
   const active = running(thread.status)
-  turns.forEach((turn, index) => {
+  for (let index = 0; index < turns.length; index++) {
+    const turn = turns[index]!
     // The turn's checklist: the live one for the current run (only if this run wrote one, so a
     // list from before turns were given their own can't show up in the wrong turn), otherwise
     // the one saved with the turn. Older turns have no steps left, so the card is added back.
-    const live = index === current && turn.work.some((item) => item.kind === 'todos')
+    const live = index === current && hasTodo.has(index)
     const saved = active && index === current ? undefined : turn.user?.todos
     const todos = saved?.length ? saved : live && thread.todos?.length ? thread.todos : undefined
     if (todos) {
       turn.todos = todos
-      const card = turn.work.find((item) => item.kind === 'todos')
+      const card = hasTodo.has(index) ? turn.work.find((item) => item.kind === 'todos') : undefined
       if (card) card.todos = todos
       else turn.work.unshift({ kind: 'todos', at: turn.startedAt ?? '', todos })
-    } else turn.work = turn.work.filter((item) => item.kind !== 'todos')
+    } else if (hasTodo.has(index)) {
+      turn.work = turn.work.filter((item) => item.kind !== 'todos')
+    }
     // Notes and dated steps by time; undated steps keep their place after the turn's notes.
-    turn.work.sort((a, b) => (a.at && b.at ? a.at.localeCompare(b.at) : a.at ? -1 : b.at ? 1 : 0))
+    if (turn.work.length > 1) {
+      let ordered = true
+      for (let i = 1; i < turn.work.length; i++) {
+        if (cmpWork(turn.work[i - 1]!, turn.work[i]!) > 0) {
+          ordered = false
+          break
+        }
+      }
+      if (!ordered) turn.work.sort(cmpWork)
+    }
     turn.done = !(active && index >= current)
     if (!turn.done) {
-      const cards = turn.work.flatMap((item) =>
-        item.kind === 'note'
-          ? (item.message.blocks ?? []).filter(
-              (block): block is StatusBlock | DelegationBlock =>
-                block.type === 'status' || block.type === 'delegation',
-            )
-          : [],
-      )
-      if (cards.length) turn.cards = cards
-    }
-    if (turn.done) {
-      const last = [...turn.work]
-        .reverse()
-        .find(
-          (item) =>
-            item.kind === 'note' && (item.message.text.trim() || item.message.blocks?.length),
-        )
-      if (last?.kind === 'note') {
-        turn.answer = last.message
-        turn.work = turn.work.filter((item) => item !== last)
+      let cards: (StatusBlock | DelegationBlock)[] | undefined
+      for (const item of turn.work) {
+        if (item.kind !== 'note' || !item.message.blocks?.length) continue
+        for (const block of item.message.blocks)
+          if (block.type === 'status' || block.type === 'delegation') (cards ??= []).push(block)
       }
-      turn.replies = turn.work.flatMap((item) =>
-        item.kind === 'note' && item.message.endsReply && item.message.text.trim()
-          ? [item.message]
-          : [],
-      )
-      turn.work = turn.work.filter(
-        (item) => item.kind !== 'note' || !turn.replies.includes(item.message),
-      )
-      const blocks = turn.work.flatMap((item) =>
-        item.kind === 'note' ? (item.message.blocks ?? []) : [],
-      )
+      if (cards) turn.cards = cards
+    } else {
+      let answerIndex = -1
+      for (let i = turn.work.length - 1; i >= 0; i--) {
+        const item = turn.work[i]!
+        if (item.kind === 'note' && (item.message.text.trim() || item.message.blocks?.length)) {
+          answerIndex = i
+          turn.answer = item.message
+          break
+        }
+      }
+      let blocks: Block[] | undefined
+      const remaining: WorkItem[] = []
+      for (let i = 0; i < turn.work.length; i++) {
+        if (i === answerIndex) continue
+        const item = turn.work[i]!
+        if (item.kind === 'note') {
+          if (item.message.endsReply && item.message.text.trim()) {
+            turn.replies.push(item.message)
+            continue
+          }
+          if (item.message.blocks?.length) {
+            blocks ??= []
+            blocks.push(...item.message.blocks)
+          }
+        }
+        remaining.push(item)
+      }
+      turn.work = remaining
       // Shared when empty, so memoized messages handed it don't re-render for a new [].
-      turn.blocks = blocks.length ? blocks : noBlocks
+      turn.blocks = blocks ?? noBlocks
     }
-    const notes = turn.work.filter((item) => item.kind === 'note')
+    let lastNoteAt: string | undefined
+    if (!turn.answer?.createdAt) {
+      for (let i = turn.work.length - 1; i >= 0; i--) {
+        const item = turn.work[i]!
+        if (item.kind === 'note') {
+          lastNoteAt = item.at
+          break
+        }
+      }
+    }
     turn.endedAt =
       index === current && thread.completedAt && turn.done
         ? thread.completedAt
-        : (turn.answer?.createdAt ?? notes.at(-1)?.at)
-  })
+        : (turn.answer?.createdAt ?? lastNoteAt)
+  }
   return turns
 }
 

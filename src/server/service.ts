@@ -139,6 +139,7 @@ const exec = promisify(execFile)
 // Caps for the Changes panel.
 const maxDiffFiles = 200
 const maxDiffLines = 3000
+const desc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0)
 function lastMessageAt(thread: Thread) {
   for (let index = thread.messages.length - 1; index >= 0; index--)
     if (thread.messages[index]!.role === 'user') return thread.messages[index]!.createdAt
@@ -341,7 +342,7 @@ export class AgentService {
           item = { ...item, status: 'waiting', waitingFor: delegated }
         return item
       })
-      .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+      .sort((a, b) => desc(a.lastMessageAt, b.lastMessageAt))
   }
   private listed() {
     return [...this.store.threads.values()].filter((thread) => !thread.delegateOf)
@@ -372,28 +373,29 @@ export class AgentService {
         ...(project.avatar ? { avatar: project.avatar } : {}),
         ...(project.image ? { image: project.image } : {}),
       })
-    for (const thread of this.listed()) {
+    for (const thread of this.store.threads.values()) {
+      if (thread.delegateOf) continue
       const sentAt = lastMessageAt(thread)
-      const project = projects.get(thread.cwd) ?? {
-        path: thread.cwd,
-        lastActiveAt: sentAt,
-        addedAt: thread.createdAt,
-        threadCount: 0,
+      let project = projects.get(thread.cwd)
+      if (!project) {
+        project = {
+          path: thread.cwd,
+          lastActiveAt: sentAt,
+          addedAt: thread.createdAt,
+          threadCount: 0,
+        }
+        projects.set(thread.cwd, project)
       }
       project.threadCount++
       if (sentAt > project.lastActiveAt) project.lastActiveAt = sentAt
       // A folder without a saved project counts from its first thread.
       if (!this.projectStore.projects.has(thread.cwd) && thread.createdAt < project.addedAt)
         project.addedAt = thread.createdAt
-      projects.set(thread.cwd, project)
+      // The chats folder shows as "No project".
+      if (thread.chat) Object.assign(project, { chats: true, name: 'No project' })
     }
     for (const project of projects.values()) if (this.icons.known(project.path)) project.icon = true
-    // The chats folder shows as "No project".
-    for (const thread of this.listed()) {
-      const project = thread.chat ? projects.get(thread.cwd) : undefined
-      if (project) Object.assign(project, { chats: true, name: 'No project' })
-    }
-    return [...projects.values()].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+    return [...projects.values()].sort((a, b) => desc(a.lastActiveAt, b.lastActiveAt))
   }
   // A saved project keeps its place in the sidebar after its threads are deleted: it remembers
   // the deleted thread's latest message as its own last activity. Best effort.
@@ -413,7 +415,7 @@ export class AgentService {
     const thread = this.get(id)
     if (!thread.unread) return { ok: true }
     delete thread.unread
-    this.changed()
+    this.changed(thread.id)
     return { ok: true }
   }
   // Changes shared view settings (see ui-settings.ts); every open window gets them with the
@@ -525,7 +527,7 @@ export class AgentService {
       ids: new Set(found.map((item) => item.thread.id)),
     }
     return found
-      .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+      .sort((a, b) => desc(a.sentAt, b.sentAt))
       .slice(0, limit)
       .map(({ thread, message, at }) => {
         const { text } = message
@@ -617,7 +619,7 @@ export class AgentService {
     if (owned.length) {
       for (const thread of owned) this.store.threads.delete(thread.id)
       try {
-        await this.store.save()
+        await this.store.save(owned.map((thread) => thread.id))
       } catch {
         for (const thread of owned) this.store.threads.set(thread.id, thread)
         throw new HttpError(500, 'Could not delete the project’s threads.')
@@ -660,30 +662,43 @@ export class AgentService {
     this.version++
     for (const listener of this.listeners) listener()
   }
-  private changed() {
+  private dirtyIds = new Set<string>()
+  private dirtyAll = false
+  private changed(id?: string | Iterable<string>) {
+    if (!id) this.dirtyAll = true
+    else if (typeof id === 'string') this.dirtyIds.add(id)
+    else for (const item of id) this.dirtyIds.add(item)
     // Batch text bursts so the browser is updated at most ten times a second, and the disk at
-    // most once a second (each save rewrites every thread; see ThreadStore.saveSoon).
+    // most once a second (only dirty threads are serialized; see ThreadStore.saveSoon).
     if (!this.timer)
       this.timer = setTimeout(() => {
         this.timer = undefined
+        const ids = this.dirtyAll ? undefined : [...this.dirtyIds]
+        this.dirtyIds.clear()
+        this.dirtyAll = false
         this.store.saveSoon(() => {
           this.persistenceError =
             'Could not save conversations. Check disk space and permissions, then restart the server.'
           this.notify()
-        })
+        }, ids)
         this.notify()
       }, 100)
   }
-  snapshot(id?: string) {
+  baseSnapshot() {
     return {
       threads: this.list(),
       projects: this.projects(),
-      thread: id ? (this.store.threads.get(id) ?? null) : null,
       processes: this.processes.list(),
       browsers: this.browsers.list(),
       ui: this.ui.settings,
       activeTab: this.tabs.leader() ?? null,
       persistenceError: this.persistenceError,
+    }
+  }
+  snapshot(id?: string) {
+    return {
+      ...this.baseSnapshot(),
+      thread: id ? (this.store.threads.get(id) ?? null) : null,
     }
   }
   async bootstrap(): Promise<Bootstrap> {
@@ -753,7 +768,7 @@ export class AgentService {
     }
     this.store.threads.set(thread.id, thread)
     try {
-      await this.store.save()
+      await this.store.save(thread.id)
     } catch {
       this.store.threads.delete(thread.id)
       throw new HttpError(500, 'Could not save the new thread.')
@@ -790,7 +805,7 @@ export class AgentService {
       current.effort = ''
       delete current.serviceTier
       current.updatedAt = new Date().toISOString()
-      await this.store.save().catch(() => {})
+      await this.store.save(current.id).catch(() => {})
       this.notify()
     }
   }
@@ -833,7 +848,7 @@ export class AgentService {
       if (switching) switchAgent(thread, provider)
       Object.assign(thread, data, { provider })
       try {
-        await this.store.save()
+        await this.store.save(thread.id)
       } catch {
         Object.assign(thread, previous)
         throw new HttpError(500, 'Could not save agent settings.')
@@ -856,7 +871,7 @@ export class AgentService {
     if (enabled) thread.useWorktree = true
     else delete thread.useWorktree
     try {
-      await this.store.save()
+      await this.store.save(thread.id)
     } catch {
       thread.useWorktree = previous
       throw new HttpError(500, 'Could not save the thread.')
@@ -900,7 +915,7 @@ export class AgentService {
     ]
     step.output = notes.length ? notes.join(' ') : undefined
     // Saved right away: the worktree exists now, whatever happens to the turn.
-    await this.store.save().catch(() => {})
+    await this.store.save(thread.id).catch(() => {})
     touch()
   }
   // After deleting threads: remove their worktrees when nothing in them would be lost. One with
@@ -1080,7 +1095,7 @@ export class AgentService {
         current.queued.push({ messageId: message.id, text: message.text, images })
       } else await this.startTurn(thread, message.text, images, message.id)
     }
-    this.changed()
+    this.changed(thread.id)
     return { accepted: true, steered }
   }
   // Starts a turn for messages already in the thread.
@@ -1112,7 +1127,7 @@ export class AgentService {
     // Reserve before any I/O; later messages steer this run instead of starting another.
     this.runs.set(id, run)
     try {
-      await this.store.save()
+      await this.store.save(id)
     } catch {
       this.runs.delete(id)
       ended()
@@ -1142,7 +1157,7 @@ export class AgentService {
       thread.updatedAt = new Date().toISOString()
       // A sub-agent's card in its lead follows along.
       if (thread.delegateOf) this.syncDelegation(thread)
-      this.changed()
+      this.changed(thread.delegateOf ? [thread.id, thread.delegateOf] : thread.id)
     }
     const working = () => {
       // Never back to working once stopped (the agent may still send a little while it exits).
@@ -1421,7 +1436,7 @@ export class AgentService {
           thread.id,
           first?.text ?? thread.title,
         )
-        await this.store.save().catch(() => {})
+        await this.store.save(thread.id).catch(() => {})
         context.cwd = workdir(thread)
         context.tools.cwd = context.cwd
       }
@@ -1514,7 +1529,7 @@ export class AgentService {
       // Tell every tab first, then save: the save doesn't change what they show.
       this.notify()
       try {
-        await this.store.save()
+        await this.store.save(thread.delegateOf ? [thread.id, thread.delegateOf] : thread.id)
       } catch {
         this.persistenceError =
           'Could not save conversations. Check disk space and permissions, then restart the server.'
@@ -1563,7 +1578,7 @@ export class AgentService {
   private applyTitle(thread: Thread, title: string) {
     thread.title = title
     thread.titleSource = 'ai'
-    this.changed()
+    this.changed(thread.id)
     // Codex's own apps show the same name (best effort).
     if (thread.provider === 'codex' && thread.sessionId)
       void this.titles.nameCodexThread(thread.sessionId, title).catch(() => {})
@@ -1595,7 +1610,7 @@ export class AgentService {
     thread.approvals = thread.approvals.filter((item) => item.id !== approvalId)
     thread.status = thread.approvals.length ? 'waiting' : 'working'
     resolve(allow ? (answers ?? true) : false)
-    this.changed()
+    this.changed(thread.id)
     return { ok: true }
   }
   // request_secret: the value you typed goes into the env file and is dropped right after; the
@@ -1619,7 +1634,7 @@ export class AgentService {
     thread.approvals = thread.approvals.filter((item) => item.id !== approvalId)
     thread.status = thread.approvals.length ? 'waiting' : 'working'
     resolve({ file: saved.file, addedToGitignore: String(saved.addedToGitignore) })
-    this.changed()
+    this.changed(thread.id)
     return { ok: true, file: saved.file, addedToGitignore: saved.addedToGitignore }
   }
   // Orchestration tools (tools/threads.ts): what a lead thread may do with its helper threads.
@@ -1775,13 +1790,13 @@ export class AgentService {
       message.unsent = true
       lead.messages.push(message)
       lead.updatedAt = message.createdAt
-      this.changed()
+      this.changed(lead.id)
       return
     }
     lead.messages.push(message)
     await this.startTurn(lead, message.text, [], message.id).catch(() => {
       message.unsent = true
-      this.changed()
+      this.changed(lead.id)
     })
   }
   // Sub-agents (delegate_task, see delegations.ts): what a thread may do with its own.
@@ -1933,7 +1948,7 @@ export class AgentService {
             endedAt: new Date().toISOString(),
           })
           if (!input.continue) await this.remove(delegate.id).catch(() => {})
-          this.changed()
+          this.changed(lead.id)
           refuse(error)
         }
         if (!finished)
@@ -2037,7 +2052,7 @@ export class AgentService {
         })
     }
     const card = this.syncDelegation(delegate)
-    this.changed()
+    this.changed(delegate.delegateOf ? [delegate.id, delegate.delegateOf] : delegate.id)
     const waiter = this.delegateWaits.get(delegate.id)
     if (waiter) {
       this.delegateWaits.delete(delegate.id)
@@ -2440,7 +2455,7 @@ export class AgentService {
     thread.title = title
     thread.titleSource = 'custom'
     try {
-      await this.store.save()
+      await this.store.save(thread.id)
     } catch {
       Object.assign(thread, previous)
       throw new HttpError(500, 'Could not rename the thread.')
@@ -2463,7 +2478,7 @@ export class AgentService {
     }
     this.store.threads.delete(id)
     try {
-      await this.store.save()
+      await this.store.save([id, ...delegates.map((item) => item.id)])
     } catch {
       this.store.threads.set(id, thread)
       throw new HttpError(500, 'Could not delete the thread.')

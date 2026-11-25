@@ -3,14 +3,7 @@ import { lookup } from 'node:dns/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserInfo } from '../types'
-import {
-  chromium,
-  type Browser,
-  type BrowserContext,
-  type ConsoleMessage,
-  type Page,
-  type Request,
-} from 'playwright-core'
+import type { Browser, BrowserContext, ConsoleMessage, Page, Request } from 'playwright-core'
 
 // The agent's browser (browser_* tools): a headless Chromium-family browser already on this Mac
 // (Google Chrome, Microsoft Edge, Brave, Chromium, or Playwright's own build), driven with
@@ -629,12 +622,14 @@ export class BrowserManager {
             'No browser found. Install Google Chrome (or Microsoft Edge, Brave, or Chromium), or set T3_MINI_BROWSER to a Chromium-based browser.',
           ),
         )
-      this.browser = chromium.launch({ executablePath, headless: true }).catch((error) => {
-        this.browser = undefined
-        throw new BrowserError(
-          `The browser couldn’t start: ${error instanceof Error ? error.message.split('\n')[0] : 'unknown error'}`,
-        )
-      })
+      this.browser = import('playwright-core')
+        .then(({ chromium }) => chromium.launch({ executablePath, headless: true }))
+        .catch((error) => {
+          this.browser = undefined
+          throw new BrowserError(
+            `The browser couldn’t start: ${error instanceof Error ? error.message.split('\n')[0] : 'unknown error'}`,
+          )
+        })
       void this.browser.then((browser) =>
         browser.on('disconnected', () => {
           this.browser = undefined

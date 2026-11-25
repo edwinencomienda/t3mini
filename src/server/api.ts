@@ -190,20 +190,21 @@ function devServerPorts(processes: { status: string; url?: string; urls?: string
     .filter(Boolean)
 }
 const watchedPreviews = new WeakSet<object>()
-// Live updates: every open tab handles the same notification, so they share one snapshot per
-// thread and serialize each object once (not once per tab). Kept for one notification only: a
-// new one (service.version) or the next microtask starts over.
+// Live updates: every open tab handles the same notification, so they share one base snapshot
+// (threads, projects, processes…) regardless of which thread each tab has open, and serialize
+// each object once. Kept for one notification only: a new one (service.version) or the next
+// microtask starts over.
 let shared:
   | {
       version: number
-      snapshots: Map<string, ReturnType<Service['snapshot']>>
+      base?: ReturnType<Service['baseSnapshot']>
       json: WeakMap<object, string>
     }
   | undefined
 type Service = Awaited<ReturnType<typeof getService>>
 function sharedUpdate(service: Service) {
   if (!shared || shared.version !== service.version) {
-    const current = { version: service.version, snapshots: new Map(), json: new WeakMap() }
+    const current = { version: service.version, json: new WeakMap<object, string>() }
     shared = current
     queueMicrotask(() => {
       if (shared === current) shared = undefined
@@ -213,9 +214,8 @@ function sharedUpdate(service: Service) {
 }
 function sharedSnapshot(service: Service, id: string | undefined) {
   const update = sharedUpdate(service)
-  let snapshot = update.snapshots.get(id ?? '')
-  if (!snapshot) update.snapshots.set(id ?? '', (snapshot = service.snapshot(id)))
-  return snapshot
+  const base = (update.base ??= service.baseSnapshot())
+  return { ...base, thread: id ? (service.store.threads.get(id) ?? null) : null }
 }
 function sharedJson(service: Service, value: unknown) {
   if (typeof value !== 'object' || value === null) return JSON.stringify(value ?? null)

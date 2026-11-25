@@ -1501,6 +1501,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
           if (data.persistenceError) setError(data.persistenceError)
           return
         }
+        let fromPatch = false
         if (data.threadPatch) {
           // A patch applies to the thread this stream last sent; if that's missing (it can't
           // be, but just in case), start over and get the whole thread again.
@@ -1514,6 +1515,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
             return
           }
           data.thread = patched
+          fromPatch = true
         }
         if (data.thread !== undefined) latest.thread = data.thread
         if (
@@ -1526,9 +1528,12 @@ export function Workspace({ threadId }: { threadId?: string }) {
           return
         }
         if (data.thread !== undefined) {
-          // Unchanged messages and steps keep their objects, so only what changed re-renders.
+          // A patched thread already kept every unchanged message and step as the same object
+          // (built on latest.thread), so skip reuseThread's JSON.stringify checks.
           const next = data.thread
-            ? reuseThread(threadCache.current.get(data.thread.id), data.thread)
+            ? fromPatch
+              ? data.thread
+              : reuseThread(threadCache.current.get(data.thread.id), data.thread)
             : null
           if (next) threadCache.current.set(next.id, next)
           // The next patch builds on this one, so its unchanged messages keep these objects.
