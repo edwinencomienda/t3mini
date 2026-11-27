@@ -429,6 +429,7 @@ kbd {
 .thread-title {
   flex: 1;
   min-width: 0;
+  color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3057,15 +3058,16 @@ body.resizing {
 .thread-lines .thread-title-line:first-child {
   margin-top: 0;
 }
-/* Searching: where the query was found inside the conversation, under the title. */
+/* A short message preview, or the matching excerpt while searching. */
 .thread-snippet {
   margin-top: 0.15rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+  font-weight: 400;
   line-height: 1.35;
-  color: var(--thread-project, var(--faint));
+  color: var(--muted-foreground);
 }
 .thread-project {
   display: flex;

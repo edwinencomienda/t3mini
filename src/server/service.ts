@@ -145,6 +145,14 @@ function lastMessageAt(thread: Thread) {
     if (thread.messages[index]!.role === 'user') return thread.messages[index]!.createdAt
   return thread.createdAt
 }
+function threadPreview(thread: Thread) {
+  for (let index = thread.messages.length - 1; index >= 0; index--) {
+    const message = thread.messages[index]!
+    if (message.role !== 'user' || message.report || message.queued || message.unsent) continue
+    const text = message.text?.replace(/\s+/g, ' ').trim()
+    if (text) return text.length > 160 ? `${text.slice(0, 159).trimEnd()}…` : text
+  }
+}
 const summary = (thread: Thread): ThreadSummary => ({
   id: thread.id,
   title: thread.title,
@@ -153,6 +161,7 @@ const summary = (thread: Thread): ThreadSummary => ({
   status: thread.status,
   updatedAt: thread.updatedAt,
   lastMessageAt: lastMessageAt(thread),
+  preview: threadPreview(thread),
   ...(thread.unread ? { unread: true } : {}),
   ...(thread.worktree ? { worktreeBranch: thread.worktree.branch } : {}),
   ...(thread.parentId ? { parentId: thread.parentId } : {}),

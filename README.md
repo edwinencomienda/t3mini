@@ -1,6 +1,6 @@
 # t3 mini
 
-A small, local coding-agent workspace built with **TanStack Start**, React, and TypeScript. Threads live in the left sidebar, with a provider icon beside each title; the conversation lives on the right. Choose **Codex** or **Claude Code** for each thread.
+A small, local coding-agent workspace built with **TanStack Start**, React, and TypeScript. Threads live in the left sidebar, with a provider icon beside each title and a short preview of your latest sent message underneath; the conversation lives on the right. Choose **Codex** or **Claude Code** for each thread.
 
 ## Run
 

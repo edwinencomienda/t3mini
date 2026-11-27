@@ -204,6 +204,8 @@ export type ThreadSummary = Pick<
   // When you last sent a message (or created the thread). The sidebar sorts by this, so
   // streaming agents don't keep reshuffling the list.
   lastMessageAt: string
+  // Latest sent user message, shortened for the sidebar.
+  preview?: string
   // While waiting: on a yes/no approval, or on answers to the agent's question.
   waitingFor?: 'approval' | 'question' | 'secret'
   // A worktree thread: its branch.

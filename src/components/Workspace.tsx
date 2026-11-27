@@ -3275,7 +3275,7 @@ export function Workspace({ threadId }: { threadId?: string }) {
         snippet={
           foundIn?.has(item.id) && !item.title.toLowerCase().includes(query)
             ? nearMatch(foundIn.get(item.id)!, query)
-            : undefined
+            : item.preview
         }
       />
     )
