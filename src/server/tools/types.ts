@@ -4,7 +4,7 @@ import type { PageLibrary } from '../../html-page'
 import type { Mock, RenderedPage } from '../browser'
 import type { Page } from 'playwright-core'
 import type { ProcessInfo } from '../processes'
-import type { Provider, Question, Todo } from '../../types'
+import type { ProjectSummary, Provider, Question, Todo } from '../../types'
 
 // A thread's own browser session (see ../browser.ts): one private page, local sites only.
 export type ThreadBrowser = {
@@ -107,6 +107,12 @@ export type ToolContext = {
   readThread: (reference: string, before?: number) => Promise<string>
   // Renames this thread (never another one) and returns the saved title.
   rename: (title: string) => Promise<string>
+  // Adds a folder as a project (add_project), creating it first if asked. check runs on the
+  // real folder before it's saved and throws to refuse. added: false when it already was one.
+  addProject: (
+    path: string,
+    options: { create: boolean; check: (path: string) => void },
+  ) => Promise<{ project: ProjectSummary; added: boolean }>
   // Helper threads this thread started (orchestration tools in threads.ts).
   threads: ThreadControl
   // Sub-agents working for this thread (delegate.ts).

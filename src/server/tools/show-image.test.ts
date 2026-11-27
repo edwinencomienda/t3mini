@@ -41,6 +41,7 @@ beforeEach(async () => {
     ask: vi.fn(),
     askSecret: vi.fn(),
     rename: vi.fn(),
+    addProject: vi.fn(),
   }
 })
 afterEach(() => rm(root, { recursive: true, force: true }))

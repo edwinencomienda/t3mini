@@ -22,6 +22,7 @@ const context = (rename: ToolContext['rename']): ToolContext => ({
   ask: vi.fn(),
   askSecret: vi.fn(),
   rename,
+  addProject: vi.fn(),
 })
 
 it('renames the current thread', async () => {

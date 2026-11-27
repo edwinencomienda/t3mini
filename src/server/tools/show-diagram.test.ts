@@ -25,6 +25,7 @@ const context = () => {
     ask: vi.fn(),
     askSecret: vi.fn(),
     rename: vi.fn(),
+    addProject: vi.fn(),
   }
   return { attach, value }
 }

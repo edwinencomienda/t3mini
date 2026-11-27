@@ -17,6 +17,7 @@ const context = (ask: ToolContext['ask']): ToolContext => ({
   saveMedia: async () => ({ id: 'x.mp4' }),
   readThread: async () => '',
   rename: vi.fn(),
+  addProject: vi.fn(),
   setTodos: vi.fn(),
   showStatus: vi.fn(),
   ask,

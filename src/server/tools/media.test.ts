@@ -57,6 +57,7 @@ const setup = async () => {
     delegates: {} as never,
     browser: {} as never,
     rename: vi.fn(),
+    addProject: vi.fn(),
   }
   return { project, uploads, attach, context }
 }

@@ -17,6 +17,7 @@ const context = (showStatusCard: ToolContext['showStatus']): ToolContext => ({
   saveMedia: async () => ({ id: 'x.mp4' }),
   readThread: async () => '',
   rename: vi.fn(),
+  addProject: vi.fn(),
   setTodos: vi.fn(),
   ask: vi.fn(),
   askSecret: vi.fn(),

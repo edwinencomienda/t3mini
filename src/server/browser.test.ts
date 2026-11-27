@@ -233,6 +233,7 @@ describe.skipIf(!hasBrowser)('the agent’s browser', () => {
     threads: {} as never,
     delegates: {} as never,
     rename: vi.fn(),
+    addProject: vi.fn(),
     browser: {
       page: () => browsers.page(thread),
       openPage: () => browsers.openPage(thread),

@@ -228,6 +228,40 @@ it('lets the agent rename only its own thread through the rename tool', async ()
   expect(saved.find((item: { id: string }) => item.id === created.id).title).toBe('Login bug')
   await settle(created.id, () => finish())
 })
+it('lets the agent add a project through the add_project tool, checked before saving', async () => {
+  const { realpath } = await import('node:fs/promises')
+  const created = await thread()
+  await service.send(created.id, { text: 'Add a project' })
+  await started
+  const home = await realpath(directory)
+  vi.stubEnv('HOME', home)
+  try {
+    const target = join(home, 'tool-made')
+    // A refusing check: nothing is created-and-saved as a project.
+    const refuse = () => {
+      throw new Error('refused')
+    }
+    await expect(
+      context.tools.addProject(join(home, 'refused'), { create: true, check: refuse }),
+    ).rejects.toThrow('refused')
+    expect(service.projects().some((project) => project.path.endsWith('refused'))).toBe(false)
+    const first = await context.tools.addProject(target, { create: true, check: () => {} })
+    expect(first).toMatchObject({ added: true, project: { path: target } })
+    expect(service.projects().some((project) => project.path === target)).toBe(true)
+    const again = await context.tools.addProject(target, { create: false, check: () => {} })
+    expect(again.added).toBe(false)
+    // The service's own errors reach the agent as a readable ToolError.
+    await expect(
+      context.tools.addProject(join(home, 'missing'), { create: false, check: () => {} }),
+    ).rejects.toMatchObject({
+      name: 'ToolError',
+      message: expect.stringContaining('does not exist'),
+    })
+  } finally {
+    vi.unstubAllEnvs()
+  }
+  await settle(created.id, () => finish())
+})
 it('takes dictation vocabulary from the last two agent replies only', async () => {
   const created = await thread()
   created.messages.push(

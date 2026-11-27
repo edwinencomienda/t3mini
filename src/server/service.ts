@@ -444,10 +444,20 @@ export class AgentService {
     return this.ui.settings
   }
   async addProject(input: unknown) {
-    const { path: requested, create } = addProjectSchema.parse(input)
+    return (await this.addProjectAt(addProjectSchema.parse(input))).project
+  }
+  // check (agents' add_project) runs on the real folder before anything is saved.
+  private async addProjectAt(input: {
+    path: string
+    create?: boolean
+    check?: (path: string) => void
+  }) {
+    const { path: requested, create, check } = input
     if (create) await createFolder(requested)
     const path = await resolveFolder(requested)
-    if (!this.projectStore.projects.has(path)) {
+    check?.(path)
+    const added = !this.projectStore.projects.has(path)
+    if (added) {
       this.projectStore.projects.set(path, { path, addedAt: new Date().toISOString() })
       try {
         await this.projectStore.save()
@@ -457,7 +467,7 @@ export class AgentService {
       }
       this.notify()
     }
-    return this.projects().find((project) => project.path === path)!
+    return { project: this.projects().find((project) => project.path === path)!, added }
   }
   // Threads whose messages mention the query (case-insensitive), newest first, one match per
   // thread, with a short excerpt around it. For the command palette's "In messages" results.
@@ -1332,6 +1342,15 @@ export class AgentService {
         },
         saveMedia: (file, kind) => this.uploads.saveMedia(file, kind),
         rename: async (title) => (await this.rename(thread.id, { title })).title,
+        addProject: async (path, { create, check }) => {
+          try {
+            return await this.addProjectAt({ path, create, check })
+          } catch (error) {
+            // HttpErrors (folder missing, couldn't create or save) as messages the agent reads.
+            if (error instanceof HttpError) throw new ToolError(error.message)
+            throw error
+          }
+        },
         readThread: async (reference, before) => this.readSharedThread(thread, reference, before),
         threads: this.threadControl(thread),
         delegates: this.delegateControl(thread, run, attach),

@@ -6,6 +6,7 @@ import { showVideo } from './show-video'
 import { playAudio } from './play-audio'
 import { processTools } from './processes'
 import { renameThread } from './rename-thread'
+import { addProject } from './add-project'
 import { updateChecklist } from './update-checklist'
 import { showStatus } from './show-status'
 import { askUser } from './ask-user'
@@ -29,6 +30,7 @@ export const tools: ToolDefinition<any>[] = [
   askUser,
   requestSecret,
   renameThread,
+  addProject,
   readThread,
   ...threadTools,
   ...delegateTools,

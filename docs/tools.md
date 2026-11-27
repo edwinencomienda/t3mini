@@ -16,6 +16,7 @@ src/server/tools/
   show-video.ts  the show_video tool
   play-audio.ts  the play_audio tool
   rename-thread.ts  the rename_thread tool
+  add-project.ts the add_project tool (adds or creates a project folder)
   update-checklist.ts  the update_checklist tool (the to-do checklist card)
   show-status.ts the show_status tool (live status cards; updates in ../status-cards.ts)
   read-thread.ts the read_thread tool (formatting in ../shared-thread.ts)
@@ -82,6 +83,14 @@ Lets an agent ask you for a credential (an API key, token, password, connection 
 - **File rules:** only env files by name (`.env`, `.env.local`, `.env.development.local`, `.dev.vars`…), inside the project after resolving links, never through a symlink, never a file git already tracks (it would be committed). A git project gets the file added to its `.gitignore` when git doesn't already ignore it. Written atomically, owner-only (0600). Values are one line (no line breaks or control characters), up to 16 KB.
 - **Phones:** only over HTTPS (Tailscale phone access). The gateway marks each request with how it came (`x-t3-transport`: `https` over Tailscale, `http` on the local network; a phone can't set it), and the route refuses a secret over plain HTTP, where it would cross the Wi-Fi unencrypted.
 - **Limits:** the agent can still read the file with its own shell tools if it decides to; the tool's description and the instructions tell it not to (load it from the environment instead), and keeping the value out of the conversation means it isn't in the AI provider's logs unless the agent reads it. Codex threads started before this tool existed don't have it.
+
+## add_project
+
+- Input: `{ path, create? }`. `path` is absolute, starts with `~/`, or is relative to the thread's folder; `create: true` makes the folder (and missing parents) first. Without it, a missing folder is refused with a note that `create: true` would make it.
+- **Where:** only inside the home folder, never the home folder itself, and never in a hidden folder (any part of the path starting with a dot: `~/.ssh`, `~/.config`, `~/.t3-mini`, `~/code/app/.git`…). Symlinks are resolved first, also for a folder that doesn't exist yet (its nearest existing parent is resolved, `realFolder()`), so a link inside home can't lead outside it. The rule (`projectFolderProblem()`) is checked before anything is touched, and again by the service on the real folder right before it's saved (`context.addProject`'s `check`).
+- **Safety:** `approval` (Allow once / Decline, with the path on the card), since it changes the project list and can create folders. Threads with full access skip the card, which is why the folder rule above applies either way.
+- **Effect:** the same `addProject` the sidebar's **Add project** uses (`AgentService.addProjectAt`): saved to `projects.json`, a live update so the sidebar shows it at once. Adding a folder that is already a project changes nothing and says so. It doesn't start a thread there or set the folder up (`git init`, scaffolding).
+- Service errors (folder missing, couldn't create or save) reach the agent as readable `ToolError`s. Codex threads created before this tool existed don't have it; Claude threads get it on their next turn.
 
 ## rename_thread
 
